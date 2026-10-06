@@ -5,28 +5,26 @@
 
 ```
 study-companion/
-├── backend/                       FastAPI · Python 3.11+
-│   ├── app/
-│   │   ├── main.py                composition root: builds services, mounts routers
-│   │   ├── config.py              .env → typed Settings (LLM / embeddings / Firecrawl / RAG / BKT)
-│   │   ├── llm.py                 OpenAI-SDK clients with dynamic BASE_URL + API_KEY, local-embedding fallback
-│   │   ├── ingestion/
-│   │   │   ├── parsers.py         Firecrawl /v2/parse (per-page markdown) ⇄ PyMuPDF fallback
-│   │   │   ├── chunker.py         page-aware chunks (a chunk never crosses a page ⇒ exact citations)
-│   │   │   ├── topics.py          knowledge components: 1 LLM call + nearest-centroid assignment
-│   │   │   └── pipeline.py        parse → chunk → embed → topics → ChromaDB
-│   │   ├── vectorstore.py         ChromaDB (persistent, cosine)
-│   │   ├── rag.py                 strict grounded answers: retrieval gate · prompt contract · citation audit
-│   │   ├── learner/
-│   │   │   ├── bkt.py             Bayesian Knowledge Tracing (4 params, 20 lines)
-│   │   │   └── quiz.py            weakest-topic MCQ generation + server-side grading
-│   │   ├── db.py                  SQLite: documents · mastery · quizzes
-│   │   ├── schemas.py             Pydantic API contract (mirrored in frontend/src/lib/types.ts)
-│   │   ├── deps.py                FastAPI dependency accessors
-│   │   └── routers/               documents.py (/upload) · chat.py (/chat) · quiz.py (/quiz, /learner)
-│   ├── scripts/                   mock_llm.py · make_sample_pdf.py · smoke_test.py
-│   ├── requirements.txt
-│   └── .env.example
+├── app/
+│   ├── main.py                composition root: builds services, mounts routers
+│   ├── config.py              .env → typed Settings (LLM / embeddings / Firecrawl / RAG / BKT)
+│   ├── llm.py                 OpenAI-SDK clients with dynamic BASE_URL + API_KEY, local-embedding fallback
+│   ├── ingestion/
+│   │   ├── parsers.py         Firecrawl /v2/parse (per-page markdown) ⇄ pdf-inspector/anydoc fallback
+│   │   ├── chunker.py         page-aware chunks (a chunk never crosses a page ⇒ exact citations)
+│   │   ├── topics.py          knowledge components: 1 LLM call + nearest-centroid assignment
+│   │   └── pipeline.py        parse → chunk → embed → topics → ChromaDB
+│   ├── vectorstore.py         ChromaDB (persistent, cosine)
+│   ├── rag.py                 strict grounded answers: retrieval gate · prompt contract · citation audit
+│   ├── learner/
+│   │   ├── bkt.py             Bayesian Knowledge Tracing (4 params, 20 lines)
+│   │   └── quiz.py            weakest-topic MCQ generation + server-side grading
+│   ├── db.py                  SQLite: documents · mastery · quizzes
+│   ├── schemas.py             Pydantic API contract (mirrored in frontend/src/lib/types.ts)
+│   ├── deps.py                FastAPI dependency accessors
+│   └── routers/               documents.py (/upload) · chat.py (/chat) · quiz.py (/quiz, /learner)
+├── scripts/                   mock_llm.py · make_sample_pdf.py · smoke_test.py
+├── .env.example
 └── frontend/                      Vite · React 19 · TypeScript · Tailwind v4
     ├── src/
     │   ├── App.tsx                split-screen shell + citation bridge
@@ -52,12 +50,9 @@ study-companion/
 ### 1 · Backend
 
 ```powershell
-cd backend
-py -3.12 -m venv .venv            # 3.11 or 3.12 recommended (prebuilt ChromaDB wheels)
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-Copy-Item .env.example .env       # then edit: pick ONE provider block
-uvicorn app.main:app --reload --port 8000
+uv sync                         # creates .venv, installs from uv.lock
+Copy-Item .env.example .env     # then edit: pick ONE provider block
+uv run uvicorn app.main:app --reload --port 8000
 ```
 
 Open <http://localhost:8000/docs> for the interactive API.
@@ -70,7 +65,7 @@ npm install
 npm run dev                       # http://localhost:5173
 ```
 
-### 3 · Provider presets (`backend/.env`)
+### 3 · Provider presets (`.env`)
 
 | Provider | LLM_BASE_URL | Embeddings |
 |---|---|---|
@@ -78,18 +73,18 @@ npm run dev                       # http://localhost:5173
 | **Groq** (fast cloud Llama) | `https://api.groq.com/openai/v1` · key `gsk_…` | `EMBEDDING_PROVIDER=local` — Groq has no embeddings API; MiniLM runs on CPU (~80 MB one-time download) |
 | **OpenAI** | `https://api.openai.com/v1` · key `sk-…` | `EMBEDDING_PROVIDER=openai`, `EMBEDDING_MODEL=text-embedding-3-small` |
 
-Set `FIRECRAWL_API_KEY=fc-…` to parse PDFs with Firecrawl (`/v2/parse`, per-page markdown, OCR for scanned slides). Leave it empty and the local PyMuPDF parser is used — same page-exact citations, fully offline.
+Set `FIRECRAWL_API_KEY=fc-…` to parse PDFs with Firecrawl (`/v2/parse`, per-page markdown, OCR for scanned slides). Leave it empty and the local pdf-inspector/anydoc parser is used — same page-exact citations, fully offline.
 
 ### 4 · Rehearse with zero API keys
 
 ```powershell
 # terminal 1 — fake OpenAI-compatible server
-cd backend; .\.venv\Scripts\Activate.ps1; python scripts\mock_llm.py
+uv run python scripts\mock_llm.py
 # terminal 2 — backend pointed at the mock
 $env:LLM_BASE_URL="http://127.0.0.1:9999/v1"; $env:LLM_API_KEY="x"; $env:EMBEDDING_PROVIDER="openai"; $env:EMBEDDING_MODEL="mock"
-uvicorn app.main:app --port 8000
+uv run uvicorn app.main:app --port 8000
 # terminal 3 — end-to-end check (upload → cited answer → refusal → quiz → mastery update)
-python scripts\smoke_test.py
+uv run python scripts\smoke_test.py
 ```
 
 ---
@@ -97,7 +92,7 @@ python scripts\smoke_test.py
 ## How the three hard parts work
 
 ### Exact page citations
-1. **Firecrawl `/v2/parse`** is called with `parsers: [{type: "pdf", pages: true}]`, so the response carries `pages[] = {pageNumber, markdown}` — markdown per *physical* page. (Fallback: PyMuPDF `page_chunks=True`.)
+1. **Firecrawl `/v2/parse`** is called with `parsers: [{type: "pdf", pages: true}]`, so the response carries `pages[] = {pageNumber, markdown}` — markdown per *physical* page. (Fallback: local pdf-inspector per-page markdown (anydoc fallback).)
 2. **The chunker never crosses a page boundary.** Every chunk is stored in ChromaDB with `page` metadata that is exact by construction.
 3. **Context is labelled** `[Page N]` per excerpt; the system prompt allows citing *only* those labels.
 4. **Citation audit** after generation: any `[Page N]` not in the retrieved set is stripped (a model cannot cite what it did not see); an answer with zero valid citations triggers one corrective retry.
@@ -140,8 +135,9 @@ python scripts\smoke_test.py
 5. Swap `.env` from LM Studio to Groq live: nothing else changes.
 
 ## Troubleshooting
-- **`chroma-hnswlib` build error on Windows** → use Python 3.11/3.12 (`py -3.12 -m venv .venv`).
+- **`chroma-hnswlib` build error on Windows** → use Python 3.11/3.12 (`uv python pin 3.12`).
 - **LM Studio `/embeddings` 404** → load an embedding model (e.g. *nomic-embed-text*) in LM Studio, or set `EMBEDDING_PROVIDER=local`.
 - **Refuses too often / too rarely** → tune `MAX_DISTANCE` (higher = more permissive). Set `2.0` to disable the gate and rely on the prompt alone.
 - **Scanned PDF, no text** → set `FIRECRAWL_API_KEY`; Firecrawl's `mode: auto` applies OCR.
 - **CORS error in the browser** → add your frontend origin to `CORS_ORIGINS`.
+

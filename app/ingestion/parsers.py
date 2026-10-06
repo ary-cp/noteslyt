@@ -9,8 +9,10 @@ Two interchangeable parsers behind one tiny interface:
                      us clean, structured markdown (tables, headings, OCR for
                      scanned slides) AND exact page attribution for citations.
 
-  LocalParser      — PyMuPDF via `pymupdf4llm` with `page_chunks=True`.
-                     Offline, free, no API key. Slightly rougher markdown.
+  LocalParser      — pdf-inspector (`extract_pages_markdown`, per-page
+                     Markdown + classification). anydoc (`to_markdown`)
+                     is the automatic fallback if pdf-inspector fails.
+                     Both are offline, free, no API key.
 
 `parse_pdf()` picks one according to `PARSER` in .env and falls back to the
 local parser if Firecrawl is unreachable, so an ingestion never dies on a
@@ -126,32 +128,57 @@ class FirecrawlParser:
 
 
 # =============================================================================
-#  Local (PyMuPDF)
+#  Local (pdf-inspector / anydoc)
 # =============================================================================
 class LocalParser:
     name = "local"
 
     def parse(self, pdf_path: Path) -> ParsedDocument:
-        import pymupdf  # PyMuPDF
-        import pymupdf4llm
+        try:
+            return self._parse_with_pdf_inspector(pdf_path)
+        except Exception as exc:  # noqa: BLE001 — fall back to anydoc
+            log.warning("pdf-inspector failed (%s); falling back to anydoc", exc)
+            return self._parse_with_anydoc(pdf_path)
 
-        with pymupdf.open(pdf_path) as doc:
-            total_pages = doc.page_count
-            title = (doc.metadata or {}).get("title") or None
-            # page_chunks=True -> one dict per page with markdown text + metadata
-            chunks = pymupdf4llm.to_markdown(doc, page_chunks=True, show_progress=False)
+    def _parse_with_pdf_inspector(self, pdf_path: Path) -> ParsedDocument:
+        import pdf_inspector
 
-        pages: list[ParsedPage] = []
-        for i, chunk in enumerate(chunks):
-            meta = chunk.get("metadata", {}) or {}
-            # pymupdf4llm reports a 1-based `page`; fall back to position if missing.
-            page_number = int(meta.get("page") or (i + 1))
-            pages.append(ParsedPage(page_number=page_number, markdown=chunk.get("text", "") or ""))
-
-        warnings = []
+        result = pdf_inspector.extract_pages_markdown(str(pdf_path))
+        pages = [
+            ParsedPage(page_number=int(getattr(p, "page", i)) + 1, markdown=p.markdown or "")
+            for i, p in enumerate(result.pages)
+        ]
+        warnings: list[str] = []
+        if result.pages_needing_ocr:
+            warnings.append(
+                "Pages needing OCR skipped by local parser: "
+                + ", ".join(map(str, result.pages_needing_ocr))
+                + ". Set FIRECRAWL_API_KEY for OCR."
+            )
         if not pages or all(not p.markdown.strip() for p in pages):
             warnings.append("No extractable text found — scanned PDF? Firecrawl's OCR mode would handle this.")
-        return ParsedDocument(pages=pages, total_pages=total_pages, parser=self.name, title=title, warnings=warnings)
+        return ParsedDocument(
+            pages=pages,
+            total_pages=len(result.pages),
+            parser=self.name,
+            title=None,
+            warnings=warnings,
+        )
+
+    def _parse_with_anydoc(self, pdf_path: Path) -> ParsedDocument:
+        import anydoc
+
+        markdown = anydoc.to_markdown(str(pdf_path))
+        warnings = ["Parsed with anydoc fallback; page attribution is approximate (everything on page 1)."]
+        if not markdown.strip():
+            warnings.append("No extractable text found — scanned PDF? Firecrawl's OCR mode would handle this.")
+        return ParsedDocument(
+            pages=[ParsedPage(page_number=1, markdown=markdown or "")],
+            total_pages=1,
+            parser=self.name,
+            title=None,
+            warnings=warnings,
+        )
 
 
 # =============================================================================

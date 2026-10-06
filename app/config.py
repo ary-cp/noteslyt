@@ -1,5 +1,5 @@
 """
-Central configuration — every tunable lives here and is read from `backend/.env`.
+Central configuration — every tunable lives here and is read from `.env`.
 
 Why pydantic-settings?
     Types are validated at boot, so a typo in `.env` fails loudly at startup
@@ -56,9 +56,9 @@ class Settings(BaseSettings):
     firecrawl_api_key: str | None = None
     firecrawl_api_url: str = "https://api.firecrawl.dev"
     firecrawl_max_pages: int = 100          # Firecrawl bills 1 credit / page
-    # "auto"      -> Firecrawl when a key is set, else local PyMuPDF
+    # "auto"      -> Firecrawl when a key is set, else local pdf-inspector/anydoc
     # "firecrawl" -> Firecrawl only (fails loudly if unavailable)
-    # "local"     -> PyMuPDF only (fully offline)
+    # "local"     -> pdf-inspector/anydoc only (fully offline)
     parser: Literal["auto", "firecrawl", "local"] = "auto"
 
     # --------------------------------------------------------------- Storage

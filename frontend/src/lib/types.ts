@@ -1,5 +1,5 @@
 /**
- * API contract — mirrors `backend/app/schemas.py` one-to-one.
+ * API contract — mirrors `app/schemas.py` one-to-one.
  * Keep the two files in sync; nothing else in the frontend knows about HTTP.
  */
 

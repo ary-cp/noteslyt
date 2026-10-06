@@ -7,7 +7,7 @@ Architecture at a glance (one module per responsibility):
 
     config.py              .env -> typed Settings (LLM/embeddings/Firecrawl/RAG/BKT)
     llm.py                 OpenAI-SDK clients with dynamic base_url + api_key
-    ingestion/parsers.py   Firecrawl /v2/parse (per-page markdown) | PyMuPDF fallback
+    ingestion/parsers.py   Firecrawl /v2/parse (per-page markdown) | pdf-inspector/anydoc fallback
     ingestion/chunker.py   page-aware chunks -> exact `page` metadata
     ingestion/topics.py    knowledge components for the learner model
     ingestion/pipeline.py  parse -> chunk -> embed -> topics -> ChromaDB
@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
 
     log.info("LLM        : %s @ %s", settings.llm_model, settings.llm_base_url)
     log.info("Embeddings : %s", embedder.name)
-    log.info("Parser     : %s%s", settings.parser, "" if settings.firecrawl_api_key else " (no FIRECRAWL_API_KEY -> local PyMuPDF)")
+    log.info("Parser     : %s%s", settings.parser, "" if settings.firecrawl_api_key else " (no FIRECRAWL_API_KEY -> local pdf-inspector/anydoc)")
     log.info("Data dir   : %s", settings.data_dir.resolve())
     yield
 

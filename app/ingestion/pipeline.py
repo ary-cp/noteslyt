@@ -1,7 +1,7 @@
 """
 Ingestion pipeline:  PDF  ->  pages  ->  chunks  ->  vectors  ->  ChromaDB
 
-    parse_pdf()        Firecrawl /v2/parse (per-page markdown) or local PyMuPDF
+    parse_pdf()        Firecrawl /v2/parse (per-page markdown) or local pdf-inspector/anydoc
     chunk_pages()      page-aware chunks, each tagged with its exact page
     embedder.embed()   one batched call for all chunks
     extract_topics()   one LLM call -> knowledge components for the learner model
