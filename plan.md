@@ -10,11 +10,11 @@ Existing (root, uv-managed):
 - FastAPI backend at `app/` (`app/main.py` composition root).
 - PDF ingestion: Firecrawl `/v2/parse` (per-page markdown) when `FIRECRAWL_API_KEY` is set,
   else local **pdf-inspector** with **anydoc** fallback (`app/ingestion/parsers.py`).
-- Page-aware chunking (a chunk never crosses a page boundary) → ChromaDB (`app/ingestion/chunker.py`, `app/vectorstore.py`).
+- Page-aware chunking (a chunk never crosses a page boundary) → vector store (`app/ingestion/chunker.py`, `app/vectorstore.py`).
 - RAG chat with strict grounding: retrieval gate, prompt contract, citation audit that strips
   `[Page N]` labels not in the retrieved set (`app/rag.py`).
 - Bayesian Knowledge Tracing per (user, topic) + adaptive MCQs + grading (`app/learner/`).
-- SQLite registry (documents, mastery, quizzes) + `app/config.py` env-driven settings.
+- SQLite registry (documents, mastery, quizzes) + `app/config.py` env-driven settings (migrating to Supabase — see Phase 0).
 - React/Vite/TS frontend in `frontend/`: PDF viewer with page-jump on citation chips,
   chat, quiz panel. `frontend/src/lib/types.ts` mirrors `app/schemas.py`.
 - `scripts/smoke_test.py` + `scripts/mock_llm.py` give a zero-key end-to-end check.
@@ -35,6 +35,47 @@ Missing vs. challenge requirements:
 - `frontend/src/lib/types.ts` changes land in the same commit as `app/schemas.py`.
 - `PARSER=auto|firecrawl|local` stays the parser switch; Firecrawl only activates with a key.
 - Zero-key smoke test must keep passing via `scripts/mock_llm.py`.
+- All persistence goes through Supabase Postgres (+ pgvector); no SQLite/ChromaDB in the target setup.
+- External capabilities (LLM, embeddings, transcription, parsing) stay behind provider env config so each can be swapped without code changes.
+
+## Phase 0 — Supabase migration (do this first)
+
+Rationale: the app is meant to be hosted; SQLite/ChromaDB under `./data/` don't survive ephemeral
+filesystems and don't give us remote auth/storage. Everything moves to Supabase.
+
+1. **Supabase client**: add `supabase` (supabase-py) to `pyproject.toml`; new config block:
+   `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` (server-side only; never expose to the frontend),
+   `SUPABASE_STORAGE_BUCKET=uploads`. Default `.env.example` documents a free-tier project.
+2. **Schema** (SQL migration in `supabase/migrations/0001_init.sql`):
+   - `documents` (id, title, source_type, parser, total_pages, created_at)
+   - `chunks` (id, document_id, topic_ids[], page, slide, start_ts, end_ts, text) with a
+     `vector(1536)` embedding column + ivfflat/hnsw index (pgvector)
+   - `topics`, `topic_edges` (topic_id, prereq_id)
+   - `mastery` (user_id, topic_id, p_mastery, updated_at)
+   - `quizzes`, `questions` (topic_id, source location, difficulty, type, stem_embedding, novelty hash)
+   - `assessments` for reports
+3. **Replace `app/db.py`**: swap SQLite calls for the supabase-py client (same method signatures where
+   possible so routers barely change). Keep a thin repository layer — routers never touch supabase directly.
+4. **Replace `app/vectorstore.py`**: ChromaDB → pgvector queries (`match_chunks` RPC or SQL `<=>`).
+   Keep the same interface (`upsert`, `query(top_k, document_id)` → chunks with location metadata).
+5. **File storage**: uploaded PDFs/videos go to Supabase Storage instead of `./data/uploads`;
+   `/documents/{id}/file` streams from Storage.
+6. **Local/dev fallback**: document `supabase start` (local Supabase CLI) in README; smoke test gains
+   a fake in-memory repository when `SUPABASE_URL` is unset, so the zero-key path still works.
+   Note: `EMBEDDING_PROVIDER=local` (MiniLM via Chroma's ONNX) goes away with chromadb — use a
+   local OpenAI-compatible embedding endpoint instead.
+
+## API-first external services (target setup)
+
+Everything callable is an API; local options exist only as config switches:
+
+| Capability | Default (API) | Optional local/self-hosted via env |
+|---|---|---|
+| Chat LLM | OpenAI-compatible `LLM_BASE_URL` (OpenAI/Groq/LM Studio) | LM Studio on localhost |
+| Embeddings | OpenAI-compatible `EMBEDDING_*` | same endpoint served locally (LM Studio/Ollama) |
+| Transcription | Groq `whisper-large-v3-turbo` (free) | faster-whisper-server / whisper.cpp `server` |
+| PDF/doc parsing | Firecrawl `/v2/parse` | `PARSER=local` → pdf-inspector/anydoc |
+| DB/vector/files | Supabase (Postgres + pgvector + Storage) | local Supabase CLI stack |
 
 ## Phase 1 — Multimodal knowledge base
 
@@ -61,7 +102,7 @@ Missing vs. challenge requirements:
    (OpenAI-compatible vision endpoint via configured `LLM_*` base URL, or local) → caption stored as
    chunk text linked to the figure's page/slide/timestamp.
 6. **Topics, subtopics, prerequisites**: extend `app/ingestion/topics.py` — one LLM call per document
-   produces topics with subtopics and prerequisite edges; stored in new SQLite tables `topics`/`topic_edges`;
+   produces topics with subtopics and prerequisite edges; stored in Supabase tables `topics`/`topic_edges`;
    every chunk tagged with topic ids. New endpoints: `GET /documents/{id}/topics`, `GET /topics/{id}`.
 
 ## Phase 2 — Grounding & citations
