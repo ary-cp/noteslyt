@@ -5,17 +5,17 @@ Study Companion API — composition root.
 
 Architecture at a glance (one module per responsibility):
 
-    config.py              .env -> typed Settings (LLM/embeddings/Firecrawl/RAG/BKT)
+    config.py              .env -> typed Settings (LLM/embeddings/Firecrawl/RAG/BKT/memory)
     llm.py                 OpenAI-SDK clients with dynamic base_url + api_key
     ingestion/parsers.py   Firecrawl /v2/parse (per-page markdown) | pdf-inspector/anydoc fallback
-    ingestion/chunker.py   page-aware chunks -> exact `page` metadata
-    ingestion/topics.py    knowledge components for the learner model
-    ingestion/pipeline.py  parse -> chunk -> embed -> topics -> ChromaDB
-    vectorstore.py         ChromaDB (persistent, cosine)
-    rag.py                 strict source-grounded answers with [Page N] citations
+    ingestion/chunker.py   locator-aware chunks (never cross a locator => exact citations)
+    ingestion/topics.py    project-level topics, merged by slug
+    ingestion/pipeline.py  parse -> chunk -> embed -> topics -> pgvector
+    vectorstore.py         pgvector, project-scoped (match_chunks requires project_id)
+    citations.py           generalized labels + strip-if-not-retrieved audit
+    chat.py                project-scoped chat over the three memory tiers
     learner/bkt.py         Bayesian Knowledge Tracing
-    learner/quiz.py        weak-topic MCQ generation + grading
-    routers/*.py           HTTP surface: /upload /documents /chat /quiz /learner
+    routers/*.py           HTTP surface: /auth /profile /projects /sources /chats
 
 Everything stateful is created once in `lifespan()` and shared via app.state.
 """
@@ -23,23 +23,41 @@ Everything stateful is created once in `lifespan()` and shared via app.state.
 from __future__ import annotations
 
 import logging
+import asyncio
+from contextlib import suppress
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .config import get_settings
-from .db import Database
+from .config import Settings, get_settings
+from .chat import ChatService
+from .db import REEMBED_HINT, Database, describe_embedding_drift
 from .ingestion import IngestionPipeline
-from .learner import QuizService
 from .llm import LLMClient, build_embedder
-from .rag import RAGService
-from .routers import chat, documents, quiz
-from .schemas import HealthResponse
+from .quiz import QuizService
+from .repo import ChatRepo, ProjectMemoryRepo, ProjectRepo, QuizRepo, SourceRepo, StudioRepo, TopicRepo, UserRepo
+from .repo.profile import ProfileRepo
+from .routers import auth, chats, profile, projects, quizzes, sources
+from .schemas import DatabaseOut, EndpointOut, HealthResponse, StorageOut
+from .storage import FileStorage
+from .transcription import build_transcriber
 from .vectorstore import VectorStore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("study-companion")
+
+
+async def _studio_failure_cleanup(studio: StudioRepo) -> None:
+    """Prune failed assessment-generation rows hourly; ready artifacts are retained."""
+    while True:
+        try:
+            deleted = await asyncio.to_thread(studio.delete_expired_failures, 24)
+            if deleted:
+                log.info("Removed %d expired failed Studio generation(s)", deleted)
+        except Exception:
+            log.exception("Failed to prune expired Studio generations")
+        await asyncio.sleep(60 * 60)
 
 
 @asynccontextmanager
@@ -48,25 +66,97 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     settings.ensure_dirs()
 
+    # Auth problems stop the boot: a server that accepts no logins but looks
+    # healthy is worse than one that refuses to start.
+    auth_errors = settings.auth_startup_errors()
+    if auth_errors:
+        raise RuntimeError(
+            "Authentication is not configured:\n"
+            + "\n".join(f"  - {e}" for e in auth_errors)
+        )
+
+    # Fail fast and loudly: an unreachable DB or a missing pgvector extension
+    # should stop the boot, not surface as a 500 on the first request.
+    db = Database(settings)
+
+    # Same for embedding widths: a model swap (e.g. 1536-d OpenAI -> 768-d
+    # nomic/EmbeddingGemma) without re-embedding fails every ingest at the
+    # Postgres insert. Refuse to boot with the fix instead.
+    drift = describe_embedding_drift(
+        {
+            "EMBEDDING_DIM": settings.embedding_dim,
+            "chunks.embedding": db.embedding_dim(),
+            "questions.stem_embedding": db.vector_width("questions", "stem_embedding"),
+        }
+    )
+    if drift:
+        raise RuntimeError("\n".join(drift) + "\n" + REEMBED_HINT)
+    store = VectorStore(db)
+
     llm = LLMClient(settings)                       # chat completions
-    embedder = build_embedder(settings)             # vectors (API or local ONNX)
-    store = VectorStore(settings.chroma_dir, settings.collection_name)
-    db = Database(settings.sqlite_path)
+    embedder = build_embedder(settings)             # vectors (OpenAI-compatible)
+    transcriber = build_transcriber(settings)       # speech-to-text
+    storage = FileStorage(settings.uploads_dir)     # local disk
 
     app.state.settings = settings
+    app.state.db = db
+    app.state.store = store
     app.state.llm = llm
     app.state.embedder = embedder
-    app.state.store = store
-    app.state.db = db
-    app.state.pipeline = IngestionPipeline(settings, llm, embedder, store, db)
-    app.state.rag = RAGService(settings, llm, embedder, store)
-    app.state.quiz = QuizService(settings, llm, embedder, store, db)
+    app.state.transcriber = transcriber
+    app.state.storage = storage
+    # Repositories — the only place SQL lives (plan.md section 4).
+    app.state.users = UserRepo(db)
+    app.state.projects = ProjectRepo(db)
+    app.state.sources = SourceRepo(db)
+    app.state.topics = TopicRepo(db)
+    app.state.profiles = ProfileRepo(db)
+    app.state.pipeline = IngestionPipeline(
+        settings, llm, embedder, store, app.state.sources, app.state.topics
+    )
+    # Media parsers only receive (path, settings), so the transcriber built
+    # above is handed to them here (Phase D.18). Scripts that ingest without
+    # a lifespan get a readable "not configured" failure instead.
+    from .ingestion.parsers_media import set_transcriber
 
-    log.info("LLM        : %s @ %s", settings.llm_model, settings.llm_base_url)
-    log.info("Embeddings : %s", embedder.name)
+    set_transcriber(transcriber)
+    # Phase E: server-side chat over the three memory tiers.
+    app.state.chats = ChatRepo(db)
+    app.state.memory = ProjectMemoryRepo(db, p_init=settings.bkt_p_init)
+    app.state.chat = ChatService(
+        settings, llm, embedder, store,
+        app.state.chats, app.state.memory, app.state.topics, app.state.profiles,
+        app.state.sources, storage,
+    )
+    app.state.quizzes = QuizRepo(db)
+    app.state.studio = StudioRepo(db)
+    app.state.quiz = QuizService(
+        settings, llm, embedder, store, app.state.quizzes,
+        app.state.memory, app.state.topics, app.state.sources, app.state.profiles,
+    )
+
+    for capability in ("llm", "embedding", "transcription"):
+        ep = settings.endpoint(capability)  # type: ignore[arg-type]
+        log.info("%-13s: %s @ %s", capability, ep["model"], ep["base_url"])
+    for warning in settings.provider_warnings():
+        log.warning("Provider config: %s", warning)
+
+    health = db.health()
+    log.info("Database   : %s (%s)", health["target"], health["server"])
+    if health["migrations_pending"]:
+        log.warning("Database   : %d unapplied migration(s): %s",
+                    len(health["migrations_pending"]), ", ".join(health["migrations_pending"]))
     log.info("Parser     : %s%s", settings.parser, "" if settings.firecrawl_api_key else " (no FIRECRAWL_API_KEY -> local pdf-inspector/anydoc)")
-    log.info("Data dir   : %s", settings.data_dir.resolve())
-    yield
+    log.info("Storage    : local disk (%s)", settings.uploads_dir.resolve())
+
+    studio_cleanup = asyncio.create_task(_studio_failure_cleanup(app.state.studio))
+    try:
+        yield
+    finally:
+        studio_cleanup.cancel()
+        with suppress(asyncio.CancelledError):
+            await studio_cleanup
+        db.close()
 
 
 app = FastAPI(
@@ -85,19 +175,89 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(documents.router)   # POST /upload, GET /documents, GET /documents/{id}/file
-app.include_router(chat.router)        # POST /chat
-app.include_router(quiz.router)        # POST /quiz, POST /quiz/answer, GET /learner/{user}/{doc}
+app.include_router(auth.router)        # /auth/signup, /auth/login, /auth/me, /auth/onboarding
+app.include_router(profile.router)     # GET|PATCH /profile, /profile/levels
+app.include_router(projects.router)    # /projects CRUD + /projects/{id}/memory
+app.include_router(sources.router)     # upload / list / topics / status / delete / file / content
+app.include_router(chats.router)       # /projects/{id}/chats, /chats/{id}, /chats/{id}/messages
+app.include_router(quizzes.router)     # /projects/{id}/quiz, /quizzes/{id}/answer, /learner, /reports
+
+
+def _mount_frontend(application: FastAPI) -> str:
+    """Serve the built frontend on this same port when it exists.
+
+    Mounted AFTER every API route, so `/health`, `/projects`, … always reach
+    the API first. Only one SPA path collides with the API (`GET /projects`
+    lists projects) — the client therefore uses `/` as its dashboard route
+    and navigates to `/projects` client-side only; `/`, `/login`, `/signup`,
+    `/project/...` and `/console` have no API counterpart and serve index.html
+    directly, including on hard refresh.
+    """
+    directory = get_settings().resolved_frontend_dir
+    if directory is None:
+        return ""
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    # Keep API routes registered before frontend routes. Mounting StaticFiles
+    # at '/' returns its own 404 for nested React routes, so mount assets only
+    # and let the final catch-all return index.html for browser navigation.
+    application.mount(
+        "/assets", StaticFiles(directory=str(directory / "assets")), name="frontend-assets"
+    )
+
+    @application.get("/", include_in_schema=False)
+    async def frontend_index():
+        return FileResponse(directory / "index.html")
+
+    @application.get("/{frontend_path:path}", include_in_schema=False)
+    async def frontend_fallback(frontend_path: str):
+        api_prefixes = (
+            "auth/", "profile", "projects", "sources/", "chats/", "quizzes/",
+            "learner/", "assessments/", "health", "openapi.json", "docs", "redoc",
+        )
+        if frontend_path.startswith(api_prefixes):
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Not Found")
+        asset = directory / frontend_path
+        if asset.is_file() and directory in asset.resolve().parents:
+            return FileResponse(asset)
+        return FileResponse(directory / "index.html")
+
+    log.info("Frontend   : serving %s on this port (same origin as the API)", directory)
+    return str(directory)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["meta"])
 def health() -> HealthResponse:
-    s = app.state.settings
+    s: Settings = app.state.settings
+    embedding = s.endpoint("embedding")
+    transcription = s.endpoint("transcription")
+    db_health = app.state.db.health()
+    pending = db_health["migrations_pending"]
     return HealthResponse(
-        status="ok",
+        status="degraded" if pending else "ok",
         llm_base_url=s.llm_base_url,
         llm_model=s.llm_model,
         embeddings=app.state.embedder.name,
+        transcription=EndpointOut(base_url=transcription["base_url"], model=transcription["model"]),
+        embedding_endpoint=EndpointOut(base_url=embedding["base_url"], model=embedding["model"]),
+        database=DatabaseOut(
+            target=db_health["target"],
+            server=db_health["server"],
+            migrations_pending=pending,
+        ),
         parser=s.parser if s.firecrawl_api_key or s.parser == "local" else "local (no Firecrawl key)",
-        documents=len(app.state.db.list_documents()),
+        storage=StorageOut(
+            backend="local",
+            path=str(s.uploads_dir.resolve()),
+        ),
+        projects=app.state.db.count("projects"),
+        frontend=FRONTEND_DIR,
     )
+
+
+FRONTEND_DIR = _mount_frontend(app)
+if not FRONTEND_DIR:
+    log.info("Frontend   : no build found (frontend/dist or frontend/build) — API-only; use Vite dev on 5173")

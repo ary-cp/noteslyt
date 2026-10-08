@@ -1,5 +1,28 @@
-"""PDF -> per-page markdown -> page-tagged chunks -> vectors (see pipeline.py)."""
+"""
+Ingestion: any source file -> locator-tagged units -> chunks -> vectors.
 
-from .pipeline import IngestionError, IngestionPipeline
+The unit of work is a `SourceUnit`, which knows where it came from (page, slide,
+timestamp, sheet). Every downstream stage works in terms of that locator, which
+is what makes citations exact.
+"""
 
-__all__ = ["IngestionError", "IngestionPipeline"]
+from .chunker import Chunk, chunk_pages, chunk_units
+from .pipeline import IngestionError, IngestionPipeline, IngestResult
+from .registry import ParsedSource, ParserError, parse_source, register, supported_types
+from .units import SourceUnit, format_timestamp
+
+__all__ = [
+    "Chunk",
+    "IngestResult",
+    "IngestionError",
+    "IngestionPipeline",
+    "ParsedSource",
+    "ParserError",
+    "SourceUnit",
+    "chunk_pages",
+    "chunk_units",
+    "format_timestamp",
+    "parse_source",
+    "register",
+    "supported_types",
+]

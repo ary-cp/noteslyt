@@ -1,161 +1,189 @@
 """
-SQLite persistence (stdlib `sqlite3`, zero extra dependencies).
+Postgres connection pool and transaction helpers.
 
-Three small tables:
-    documents : registry of uploaded PDFs + their extracted topics
-    mastery   : the Learner Model — one BKT belief per (user, document, topic)
-    quizzes   : generated question sets, kept server-side so answer keys are
-                never shipped to the browser before the student answers
+One local Postgres instance, reached over a DSN:
 
-All public methods are thread-safe (FastAPI runs sync endpoints in a pool).
+    postgresql://postgres:YOUR_PASSWORD@localhost:5432/StudyCompanion
+
+We speak to Postgres directly over psycopg3. That is what makes pgvector
+available locally, and it keeps all the SQL in one place — including
+`match_chunks`, the function that carries the project-scoping guarantee.
+
+The previous implementation reached Postgres through a PostgREST-style client
+plus a hand-duplicated in-memory twin. Those two branches had already drifted,
+so one code path with real transactions is simpler and safer (plan.md D2).
+
+`prepare_threshold=None` disables psycopg's prepared statements. We do not need
+them, and turning them off keeps the code working behind any transaction-mode
+proxy with no behavioural change for this workload.
 """
 
 from __future__ import annotations
 
-import json
-import sqlite3
-import threading
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
+import logging
+import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Any
+
+import psycopg
+from pgvector.psycopg import register_vector
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
+
+from .config import Settings
+
+log = logging.getLogger(__name__)
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+def _configure(conn: psycopg.Connection) -> None:
+    """Runs on every new pooled connection.
+
+    Teaches psycopg how to adapt `pgvector.Vector` objects, returns dict rows so
+    repositories read columns by name, and turns off prepared statements.
+    """
+    conn.row_factory = dict_row
+    conn.prepare_threshold = None
+    register_vector(conn)
 
 
-@dataclass
-class DocumentRecord:
-    id: str
-    filename: str
-    total_pages: int
-    parser: str
-    chunk_count: int
-    topics: list[dict]                      # [{id, name, description, pages}]
-    created_at: str = field(default_factory=_now)
-    warnings: list[str] = field(default_factory=list)
+class DatabaseError(RuntimeError):
+    """Raised when Postgres is unreachable or the schema is not usable."""
 
 
-@dataclass
-class MasteryRecord:
-    user_id: str
-    document_id: str
-    topic_id: str
-    p_mastery: float
-    attempts: int = 0
-    correct: int = 0
-    updated_at: str = field(default_factory=_now)
+REEMBED_HINT = (
+    "Vectors from different embedding models are incomparable, so swapping "
+    "models means re-embedding the whole corpus (padding/truncating would "
+    "silently corrupt retrieval):\n"
+    "  1. Set EMBEDDING_DIM to your model's output width "
+    "(1536 OpenAI text-embedding-3-small, 768 nomic/EmbeddingGemma, "
+    "3072 OpenAI text-embedding-3-large).\n"
+    "  2. Run:  uv run python scripts/re_embed.py\n"
+    "     (`--check` only reports; the default run alters the column, wipes "
+    "the old vectors, and re-ingests every stored file. Stop the API first.)"
+)
+
+
+def describe_embedding_drift(dims: dict[str, int | None]) -> list[str]:
+    """Compare every known vector width; empty list means everything agrees.
+
+    `None` means "not present yet" (fresh DB, missing function) and is
+    skipped rather than treated as drift.
+    """
+    known = {name: width for name, width in dims.items() if width is not None}
+    if len(set(known.values())) <= 1:
+        return []
+    detail = ", ".join(f"{name}={width}" for name, width in known.items())
+    return [f"Embedding width drift: {detail}."]
 
 
 class Database:
-    def __init__(self, path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(path), check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
-        self._migrate()
+    """Thin pool wrapper. Repositories in `app/repo/` own all the SQL."""
 
-    def _migrate(self) -> None:
-        with self._lock, self._conn:
-            self._conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS documents (
-                    id          TEXT PRIMARY KEY,
-                    filename    TEXT NOT NULL,
-                    total_pages INTEGER NOT NULL,
-                    parser      TEXT NOT NULL,
-                    chunk_count INTEGER NOT NULL,
-                    topics_json TEXT NOT NULL,
-                    warnings_json TEXT NOT NULL DEFAULT '[]',
-                    created_at  TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS mastery (
-                    user_id     TEXT NOT NULL,
-                    document_id TEXT NOT NULL,
-                    topic_id    TEXT NOT NULL,
-                    p_mastery   REAL NOT NULL,
-                    attempts    INTEGER NOT NULL DEFAULT 0,
-                    correct     INTEGER NOT NULL DEFAULT 0,
-                    updated_at  TEXT NOT NULL,
-                    PRIMARY KEY (user_id, document_id, topic_id)
-                );
-                CREATE TABLE IF NOT EXISTS quizzes (
-                    id             TEXT PRIMARY KEY,
-                    user_id        TEXT NOT NULL,
-                    document_id    TEXT NOT NULL,
-                    topic_id       TEXT NOT NULL,
-                    questions_json TEXT NOT NULL,
-                    created_at     TEXT NOT NULL
-                );
-                """
+    def __init__(self, settings: Settings):
+        self._settings = settings
+        url = settings.database_url
+        if not url:
+            raise DatabaseError(
+                "DATABASE_URL is not set. Add it to .env, e.g.\n"
+                "  DATABASE_URL=postgresql://postgres:postgres@localhost:5432/StudyCompanion"
             )
-
-    # ------------------------------------------------------------ documents
-    def save_document(self, doc: DocumentRecord) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                "INSERT OR REPLACE INTO documents VALUES (?,?,?,?,?,?,?,?)",
-                (doc.id, doc.filename, doc.total_pages, doc.parser, doc.chunk_count,
-                 json.dumps(doc.topics), json.dumps(doc.warnings), doc.created_at),
+        try:
+            self._pool = ConnectionPool(
+                conninfo=url,
+                min_size=settings.db_pool_min,
+                max_size=settings.db_pool_max,
+                configure=_configure,
+                open=False,
             )
+            self._pool.open(wait=True, timeout=settings.db_connect_timeout_s)
+        except psycopg.Error as exc:
+            raise DatabaseError(
+                f"Could not connect to {settings.db_target}: {exc}\n"
+                "Is Postgres running, and is the password in DATABASE_URL correct?"
+            ) from exc
+        self.check_ready()
 
-    def get_document(self, document_id: str) -> DocumentRecord | None:
-        with self._lock:
-            row = self._conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
-        return self._row_to_doc(row) if row else None
+    # ------------------------------------------------------------- lifecycle
+    @contextmanager
+    def connection(self) -> Iterator[psycopg.Connection]:
+        """Borrow a connection; commits on success, rolls back on error."""
+        with self._pool.connection() as conn:
+            yield conn
 
-    def list_documents(self) -> list[DocumentRecord]:
-        with self._lock:
-            rows = self._conn.execute("SELECT * FROM documents ORDER BY created_at DESC").fetchall()
-        return [self._row_to_doc(r) for r in rows]
+    @contextmanager
+    def transaction(self) -> Iterator[psycopg.Connection]:
+        """Run a unit of work atomically. Read-only callers should use `connection`."""
+        with self._pool.connection() as conn:
+            with conn.transaction():
+                yield conn
 
-    def delete_document(self, document_id: str) -> None:
-        with self._lock, self._conn:
-            self._conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
-            self._conn.execute("DELETE FROM mastery WHERE document_id = ?", (document_id,))
-            self._conn.execute("DELETE FROM quizzes WHERE document_id = ?", (document_id,))
+    def close(self) -> None:
+        self._pool.close()
 
-    @staticmethod
-    def _row_to_doc(row: sqlite3.Row) -> DocumentRecord:
-        return DocumentRecord(
-            id=row["id"], filename=row["filename"], total_pages=row["total_pages"], parser=row["parser"],
-            chunk_count=row["chunk_count"], topics=json.loads(row["topics_json"]),
-            warnings=json.loads(row["warnings_json"]), created_at=row["created_at"],
-        )
+    # ----------------------------------------------------------- diagnostics
+    def check_ready(self) -> None:
+        """
+        Verify the two things whose absence fails in deeply confusing ways later:
+        the pgvector extension, and applied migrations.
+        """
+        with self.connection() as conn:
+            try:
+                has_vector = conn.execute(
+                    "select 1 from pg_extension where extname = 'vector'"
+                ).fetchone()
+            except psycopg.Error as exc:
+                raise DatabaseError(f"Postgres health query failed: {exc}") from exc
+            if not has_vector:
+                raise DatabaseError(
+                    "The pgvector extension is not enabled on this database.\n"
+                    "Run: create extension vector;  (and install the extension files first "
+                    "if Postgres reports it is not available)."
+                )
+            self.pending_migrations = self._pending_migrations(conn)
 
-    # -------------------------------------------------------------- mastery
-    def get_mastery(self, user_id: str, document_id: str) -> dict[str, MasteryRecord]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM mastery WHERE user_id = ? AND document_id = ?", (user_id, document_id)
-            ).fetchall()
-        return {r["topic_id"]: MasteryRecord(**dict(r)) for r in rows}
+    def _pending_migrations(self, conn: psycopg.Connection) -> list[str]:
+        exists = conn.execute(
+            "select 1 from information_schema.tables "
+            "where table_schema = 'public' and table_name = 'schema_migrations'"
+        ).fetchone()
+        if not exists:
+            return list(self._settings.migrations_dir.glob("*.sql"))
+        done = {r["version"] for r in conn.execute("select version from schema_migrations")}
+        return [p.name for p in sorted(self._settings.migrations_dir.glob("*.sql")) if p.stem[:4] not in done]
 
-    def upsert_mastery(self, rec: MasteryRecord) -> None:
-        rec.updated_at = _now()
-        with self._lock, self._conn:
-            self._conn.execute(
-                """INSERT INTO mastery VALUES (?,?,?,?,?,?,?)
-                   ON CONFLICT(user_id, document_id, topic_id) DO UPDATE SET
-                   p_mastery=excluded.p_mastery, attempts=excluded.attempts,
-                   correct=excluded.correct, updated_at=excluded.updated_at""",
-                (rec.user_id, rec.document_id, rec.topic_id, rec.p_mastery, rec.attempts, rec.correct, rec.updated_at),
-            )
+    def health(self) -> dict[str, Any]:
+        with self.connection() as conn:
+            server = conn.execute("select version()").fetchone()["version"].split(",")[0]
+            pending = self._pending_migrations(conn)
+        return {
+            "target": self._settings.db_target,
+            "server": server,
+            "migrations_pending": pending,
+        }
 
-    # -------------------------------------------------------------- quizzes
-    def save_quiz(self, quiz_id: str, user_id: str, document_id: str, topic_id: str, questions: list[dict]) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                "INSERT INTO quizzes VALUES (?,?,?,?,?,?)",
-                (quiz_id, user_id, document_id, topic_id, json.dumps(questions), _now()),
-            )
+    def count(self, table: str) -> int:
+        """Row count for /health. `table` must be a hard-coded literal, never user input."""
+        with self.connection() as conn:
+            row = conn.execute(f"select count(*) as n from {table}").fetchone()
+        return int(row["n"])
 
-    def get_quiz(self, quiz_id: str) -> dict | None:
-        with self._lock:
-            row = self._conn.execute("SELECT * FROM quizzes WHERE id = ?", (quiz_id,)).fetchone()
+    def vector_width(self, table: str, column: str) -> int | None:
+        """Live width of a `vector(N)` column, or None before it exists."""
+        if (table, column) not in (("chunks", "embedding"), ("questions", "stem_embedding")):
+            raise ValueError(f"Not a tracked vector column: {table}.{column}")
+        with self.connection() as conn:
+            row = conn.execute(
+                "select format_type(a.atttypid, a.atttypmod) as typ "
+                "from pg_attribute a join pg_class c on c.oid = a.attrelid "
+                "where c.relname = %s and a.attname = %s and not a.attisdropped",
+                (table, column),
+            ).fetchone()
         if not row:
             return None
-        return {
-            "id": row["id"], "user_id": row["user_id"], "document_id": row["document_id"],
-            "topic_id": row["topic_id"], "questions": json.loads(row["questions_json"]),
-        }
+        match = re.match(r"vector\((\d+)\)", row["typ"] or "")
+        return int(match.group(1)) if match else None
+
+    def embedding_dim(self) -> int | None:
+        """Live width of `chunks.embedding`, or None before migrations run."""
+        return self.vector_width("chunks", "embedding")
