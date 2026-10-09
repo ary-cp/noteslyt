@@ -148,7 +148,7 @@ class Database:
             "where table_schema = 'public' and table_name = 'schema_migrations'"
         ).fetchone()
         if not exists:
-            return list(self._settings.migrations_dir.glob("*.sql"))
+            return [p.name for p in sorted(self._settings.migrations_dir.glob("*.sql"))]
         done = {r["version"] for r in conn.execute("select version from schema_migrations")}
         return [p.name for p in sorted(self._settings.migrations_dir.glob("*.sql")) if p.stem[:4] not in done]
 
