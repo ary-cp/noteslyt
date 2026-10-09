@@ -35,6 +35,7 @@ from .chat import ChatService
 from .db import REEMBED_HINT, Database, describe_embedding_drift
 from .ingestion import IngestionPipeline
 from .llm import LLMClient, build_embedder
+from .migrations import apply_pending_migrations
 from .quiz import QuizService
 from .repo import ChatRepo, ProjectMemoryRepo, ProjectRepo, QuizRepo, SourceRepo, StudioRepo, TopicRepo, UserRepo
 from .repo.profile import ProfileRepo
@@ -78,6 +79,10 @@ async def lifespan(app: FastAPI):
             "Authentication is not configured:\n"
             + "\n".join(f"  - {e}" for e in auth_errors)
         )
+
+    migrated = await asyncio.to_thread(apply_pending_migrations, settings)
+    if migrated:
+        log.info("Database   : applied %d pending migration(s): %s", len(migrated), ", ".join(migrated))
 
     # Fail fast and loudly: an unreachable DB or a missing pgvector extension
     # should stop the boot, not surface as a 500 on the first request.
