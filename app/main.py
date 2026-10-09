@@ -48,13 +48,17 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger("study-companion")
 
 
-async def _studio_failure_cleanup(studio: StudioRepo) -> None:
+async def _studio_failure_cleanup(studio: StudioRepo, db: Database) -> None:
     """Prune failed assessment-generation rows hourly; ready artifacts are retained."""
     while True:
         try:
-            deleted = await asyncio.to_thread(studio.delete_expired_failures, 24)
-            if deleted:
-                log.info("Removed %d expired failed Studio generation(s)", deleted)
+            health = await asyncio.to_thread(db.health)
+            if "0005" in {name[:4] for name in health["migrations_pending"]}:
+                log.debug("Skipping Studio cleanup while migration 0005 is pending")
+            else:
+                deleted = await asyncio.to_thread(studio.delete_expired_failures, 24)
+                if deleted:
+                    log.info("Removed %d expired failed Studio generation(s)", deleted)
         except Exception:
             log.exception("Failed to prune expired Studio generations")
         await asyncio.sleep(60 * 60)
@@ -149,7 +153,7 @@ async def lifespan(app: FastAPI):
     log.info("Parser     : %s%s", settings.parser, "" if settings.firecrawl_api_key else " (no FIRECRAWL_API_KEY -> local pdf-inspector/anydoc)")
     log.info("Storage    : local disk (%s)", settings.uploads_dir.resolve())
 
-    studio_cleanup = asyncio.create_task(_studio_failure_cleanup(app.state.studio))
+    studio_cleanup = asyncio.create_task(_studio_failure_cleanup(app.state.studio, db))
     try:
         yield
     finally:
