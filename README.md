@@ -1,31 +1,59 @@
 # Study Companion — source-cited AI tutor + adaptive assessment
 
 > **Track D · Personalized Tutoring & Adaptive Learning**
-> Upload lecture slides → ask anything → every answer cites the exact page and the PDF jumps there → an adaptive quiz (Bayesian Knowledge Tracing) targets what you haven't mastered.
+> A learner creates **projects** ("books"), each with its own corpus of sources —
+> lecture videos, textbooks, slide decks, spreadsheets — its own topics, its own chats,
+> and its own memory. Every answer cites the exact page, slide or timestamp it came from,
+> and an adaptive quiz (Bayesian Knowledge Tracing) targets what you haven't mastered.
+
+Runs entirely on your machine: local Postgres + pgvector for the database and vectors,
+local disk for uploads. No cloud account, no hosted service.
+
+## Status
+
+The backend is being rebuilt around multi-project tenancy. See `plan.md` for the full
+roadmap; `AGENTS.md` documents how to run and verify it.
+
+| Area | State |
+|---|---|
+| Postgres + pgvector data layer, migrations | done |
+| Auth (argon2 + JWT), per-user project CRUD, tenancy enforcement | done |
+| Local file storage for every source type | done |
+| Multimodal ingestion + async status polling | PDF only; docx/pptx/xlsx/video in Phase D |
+| Project-level topics merged across sources | done |
+| Project-scoped chat, 3 memory tiers | Phase E |
+| Adaptive assessment, RAGAS evaluation | Phase F–G |
+| `frontend/` | frozen legacy; a test console drives the current API |
+
+## Layout
 
 ```
 study-companion/
 ├── app/
 │   ├── main.py                composition root: builds services, mounts routers
-│   ├── config.py              .env → typed Settings (LLM / embeddings / Firecrawl / RAG / BKT)
-│   ├── llm.py                 OpenAI-SDK clients with dynamic BASE_URL + API_KEY, local-embedding fallback
+│   ├── config.py              .env → typed Settings (DB / providers / storage / RAG / BKT / auth)
+│   ├── db.py                  psycopg3 pool + transaction helpers against local Postgres
+│   ├── llm.py                 OpenAI-SDK clients with dynamic BASE_URL + API_KEY, OpenAI-compatible embeddings
+│   ├── vectorstore.py         pgvector, project-scoped retrieval (required project_id)
+│   ├── storage.py             local disk: DATA_DIR/uploads/{project_id}/{source_id}.{ext}
 │   ├── ingestion/
+│   │   ├── units.py           SourceUnit — the generalized "page" (page/slide/timestamp/sheet)
+│   │   ├── registry.py        file type → parser dispatch (Phase D adds the new types)
 │   │   ├── parsers.py         Firecrawl /v2/parse (per-page markdown) ⇄ pdf-inspector/anydoc fallback
-│   │   ├── chunker.py         page-aware chunks (a chunk never crosses a page ⇒ exact citations)
-│   │   ├── topics.py          knowledge components: 1 LLM call + nearest-centroid assignment
-│   │   └── pipeline.py        parse → chunk → embed → topics → ChromaDB
-│   ├── vectorstore.py         ChromaDB (persistent, cosine)
+│   │   ├── chunker.py         locator-aware chunks (never cross a locator ⇒ exact citations)
+│   │   ├── topics.py          project-level topics: 1 LLM call + nearest-centroid assignment
+│   │   └── pipeline.py        parse → chunk → embed → topics → pgvector, with status transitions
 │   ├── rag.py                 strict grounded answers: retrieval gate · prompt contract · citation audit
-│   ├── learner/
-│   │   ├── bkt.py             Bayesian Knowledge Tracing (4 params, 20 lines)
-│   │   └── quiz.py            weakest-topic MCQ generation + server-side grading
-│   ├── db.py                  SQLite: documents · mastery · quizzes
-│   ├── schemas.py             Pydantic API contract (mirrored in frontend/src/lib/types.ts)
-│   ├── deps.py                FastAPI dependency accessors
-│   └── routers/               documents.py (/upload) · chat.py (/chat) · quiz.py (/quiz, /learner)
-├── scripts/                   mock_llm.py · make_sample_pdf.py · smoke_test.py
+│   ├── learner/bkt.py         Bayesian Knowledge Tracing (4 params, 20 lines)
+│   ├── repo/                  all SQL lives here (users · projects · sources · topics · chunks · profile)
+│   ├── schemas.py             Pydantic API contract
+│   ├── deps.py                auth (JWT) + dependency accessors
+│   └── routers/               auth.py · profile.py · projects.py · sources.py
+├── migrations/                plain SQL, applied in order by scripts/migrate.py
+├── scripts/                   migrate.py · verify_data_layer.py · verify_auth.py ·
+│                              mock_llm.py · make_sample_pdf.py · smoke_test.py
 ├── .env.example
-└── frontend/                      Vite · React 19 · TypeScript · Tailwind v4
+└── frontend/                      Vite · React 19 · TypeScript · Tailwind v4 (legacy, frozen)
     ├── src/
     │   ├── App.tsx                split-screen shell + citation bridge
     │   ├── components/
@@ -47,17 +75,45 @@ study-companion/
 
 ## Quick start (Windows PowerShell)
 
-### 1 · Backend
+### 1 · Database (once)
+
+You need Postgres with the **pgvector** extension available. Easiest path is Docker:
 
 ```powershell
-uv sync                         # creates .venv, installs from uv.lock
-Copy-Item .env.example .env     # then edit: pick ONE provider block
+docker run -d --name study-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=StudyCompanion `
+  -p 5432:5432 pgvector/pgvector:pg17
+```
+
+If you already run Postgres locally, just create the database and enable the extension:
+
+```sql
+CREATE DATABASE StudyCompanion;
+\c StudyCompanion
+CREATE EXTENSION vector;
+```
+
+### 2 · Backend
+
+```powershell
+uv sync                                       # creates .venv, installs from uv.lock
+Copy-Item .env.example .env                   # set DATABASE_URL, AUTH_SECRET_KEY, providers
+uv run python scripts\migrate.py              # apply migrations/000*.sql
 uv run uvicorn app.main:app --reload --port 8000
 ```
 
+Generate an auth key first: `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+The server refuses to start without one.
+
 Open <http://localhost:8000/docs> for the interactive API.
 
-### 2 · Frontend
+### 3 · Verify it works
+
+```powershell
+uv run python scripts\verify_data_layer.py    # must print DATA LAYER VERIFIED
+uv run python scripts\verify_auth.py          # must print AUTH + TENANCY VERIFIED (needs the server)
+```
+
+### 4 · Frontend (test console)
 
 ```powershell
 cd frontend
@@ -65,15 +121,60 @@ npm install
 npm run dev                       # http://localhost:5173
 ```
 
-### 3 · Provider presets (`.env`)
+A manual console for the current API: health, auth, global memory, projects,
+**source upload with live ingestion progress**, project topics, and a one-click
+tenancy check. It is a harness for confirming the backend, not the product UI.
 
-| Provider | LLM_BASE_URL | Embeddings |
-|---|---|---|
-| **LM Studio** (local, free) | `http://localhost:1234/v1` · key `lm-studio` | `EMBEDDING_PROVIDER=openai`, `EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5` (load it in LM Studio) |
-| **Groq** (fast cloud Llama) | `https://api.groq.com/openai/v1` · key `gsk_…` | `EMBEDDING_PROVIDER=local` — Groq has no embeddings API; MiniLM runs on CPU (~80 MB one-time download) |
-| **OpenAI** | `https://api.openai.com/v1` · key `sk-…` | `EMBEDDING_PROVIDER=openai`, `EMBEDDING_MODEL=text-embedding-3-small` |
+### 5 · Providers (`.env`)
 
-Set `FIRECRAWL_API_KEY=fc-…` to parse PDFs with Firecrawl (`/v2/parse`, per-page markdown, OCR for scanned slides). Leave it empty and the local pdf-inspector/anydoc parser is used — same page-exact citations, fully offline.
+Every AI capability has its **own** base URL, API key and model, so you can mix
+providers freely — nothing is hard-coded and no code change is ever needed.
+
+| Capability | Base URL | API key | Model |
+|---|---|---|---|
+| chat (LLM) | `LLM_BASE_URL` | `LLM_API_KEY` | `LLM_MODEL` |
+| embeddings | `EMBEDDING_BASE_URL` | `EMBEDDING_API_KEY` | `EMBEDDING_MODEL` |
+| speech-to-text | `TRANSCRIPTION_BASE_URL` | `TRANSCRIPTION_API_KEY` | `TRANSCRIPTION_MODEL` |
+
+An unset `EMBEDDING_BASE_URL` / `TRANSCRIPTION_BASE_URL` (and its `_API_KEY`)
+inherits the `LLM_*` value, so a single local server only needs the three `LLM_*`
+lines. **Models never inherit** — model ids are provider-specific.
+
+Pointing the three at different providers is env-only, e.g. chat on one local
+server, embeddings on another, Whisper wherever is cheapest:
+
+```dotenv
+# any OpenAI-compatible server (LM Studio, llama.cpp, Ollama, vLLM, …)
+LLM_BASE_URL=http://localhost:1234/v1
+LLM_API_KEY=lm-studio
+LLM_MODEL=local-model
+
+# embeddings from a different server — Groq has no /embeddings endpoint
+EMBEDDING_BASE_URL=https://api.openai.com/v1
+EMBEDDING_API_KEY=sk-...
+EMBEDDING_MODEL=text-embedding-3-small
+
+# inherits LLM_BASE_URL / LLM_API_KEY when unset
+TRANSCRIPTION_MODEL=whisper-large-v3-turbo
+```
+
+Provider shortcuts: **LM Studio** `http://localhost:1234/v1` (key `lm-studio`) ·
+**Groq** `https://api.groq.com/openai/v1` (key `gsk_…`, chat + Whisper, **no**
+`/embeddings`) · **OpenAI** `https://api.openai.com/v1` (key `sk-…`, all three).
+
+If you point a `*_BASE_URL` at a different host and forget its `*_API_KEY`, the
+fallback would send the chat key there and fail with an opaque 401 — so the
+server logs a warning at boot, and `GET /health` reports the endpoint each
+capability actually resolved to (`llm_base_url`, `embedding_endpoint`,
+`transcription`). API keys are never logged or returned.
+
+**Zero-key run:** `scripts/mock_llm.py` fakes all three capabilities on
+`http://127.0.0.1:9999/v1`, so the whole app runs with no API keys and no GPU.
+
+Parsing has its own API URL too: `FIRECRAWL_API_URL`. Set `FIRECRAWL_API_KEY=fc-…`
+to parse PDFs with Firecrawl (`/v2/parse`, per-page markdown, OCR for scanned
+slides). Leave it empty and the local pdf-inspector/anydoc parser is used — same
+page-exact citations, fully offline.
 
 ### 4 · Rehearse with zero API keys
 
@@ -87,13 +188,32 @@ uv run uvicorn app.main:app --port 8000
 uv run python scripts\smoke_test.py
 ```
 
+To rehearse a **mixed** provider setup offline, run one mock per provider and
+point each capability at its own port:
+
+```powershell
+# terminal 1 — "Groq" (chat + whisper)
+uv run python scripts\mock_llm.py
+# terminal 2 — "OpenAI" (embeddings only)
+$env:MOCK_LLM_PORT=9998; uv run python scripts\mock_llm.py
+# terminal 3 — mixed wiring
+$env:LLM_BASE_URL="http://127.0.0.1:9999/v1"
+$env:LLM_API_KEY="chat-key"; $env:LLM_MODEL="mock-chat-model"
+$env:EMBEDDING_PROVIDER="openai"
+$env:EMBEDDING_BASE_URL="http://127.0.0.1:9998/v1"
+$env:EMBEDDING_API_KEY="embed-key"; $env:EMBEDDING_MODEL="mock-embed-model"
+$env:TRANSCRIPTION_BASE_URL="http://127.0.0.1:9999/v1"
+$env:TRANSCRIPTION_MODEL="mock-whisper-model"
+uv run uvicorn app.main:app --port 8000
+```
+
 ---
 
 ## How the three hard parts work
 
 ### Exact page citations
 1. **Firecrawl `/v2/parse`** is called with `parsers: [{type: "pdf", pages: true}]`, so the response carries `pages[] = {pageNumber, markdown}` — markdown per *physical* page. (Fallback: local pdf-inspector per-page markdown (anydoc fallback).)
-2. **The chunker never crosses a page boundary.** Every chunk is stored in ChromaDB with `page` metadata that is exact by construction.
+2. **The chunker never crosses a page boundary.** Every chunk is stored in pgvector with `page` metadata that is exact by construction.
 3. **Context is labelled** `[Page N]` per excerpt; the system prompt allows citing *only* those labels.
 4. **Citation audit** after generation: any `[Page N]` not in the retrieved set is stripped (a model cannot cite what it did not see); an answer with zero valid citations triggers one corrective retry.
 5. **Frontend bridge**: `[Page N]` → `[Page N](#page=N)` → rendered as a chip → `onCite(N)` → `PdfViewer` scrolls to page N and flashes it.
@@ -123,7 +243,7 @@ uv run python scripts\smoke_test.py
 | `POST` | `/quiz` | `{user_id, document_id, topic_id?}` → MCQs for the weakest topic |
 | `POST` | `/quiz/answer` | grade + BKT update → `{correct, explanation, page, p_before, p_after, mastery[]}` |
 | `GET` | `/learner/{user}/{doc}` | mastery snapshot |
-| `GET` | `/health` | active provider / model / parser |
+| `GET` | `/health` | resolved chat / embeddings / transcription endpoints, models, parser |
 
 ---
 
@@ -136,8 +256,11 @@ uv run python scripts\smoke_test.py
 
 ## Troubleshooting
 - **`chroma-hnswlib` build error on Windows** → use Python 3.11/3.12 (`uv python pin 3.12`).
-- **LM Studio `/embeddings` 404** → load an embedding model (e.g. *nomic-embed-text*) in LM Studio, or set `EMBEDDING_PROVIDER=local`.
+- **LM Studio `/embeddings` 404** → load an embedding model (e.g. *nomic-embed-text*) in LM Studio, or point `EMBEDDING_BASE_URL` at an OpenAI-compatible embedding server.
 - **Refuses too often / too rarely** → tune `MAX_DISTANCE` (higher = more permissive). Set `2.0` to disable the gate and rely on the prompt alone.
 - **Scanned PDF, no text** → set `FIRECRAWL_API_KEY`; Firecrawl's `mode: auto` applies OCR.
 - **CORS error in the browser** → add your frontend origin to `CORS_ORIGINS`.
+
+
+
 

@@ -1,28 +1,151 @@
 # AGENTS.md
 
-Study Companion: FastAPI backend at repo root (`app/`), Vite/React frontend in `frontend/`.
+Study Companion: FastAPI backend at repo root (`app/`) and production Vite/React
+frontend in `frontend/`. Treat both as active product code: keep API contracts
+typed in `frontend/src/lib/types.ts` and `api.ts`, and verify frontend changes
+with `npm run build`.
 
 ## Commands (use uv, never pip)
 
 - Install/sync backend env: `uv sync` (creates root `.venv`; `.python-version` pins 3.12)
+- Apply DB migrations: `uv run python scripts/migrate.py` (`--status`, `--reset`)
 - Run API: `uv run uvicorn app.main:app --reload --port 8000`
-- Frontend: `cd frontend; npm install; npm run dev` (typecheck: `npm run typecheck`, build: `npm run build`)
+- Frontend: `cd frontend; npm install; npm run dev` (typecheck: `npm run typecheck`)
 - There is no pytest/lint config in this repo; do not invent one.
 
-## Verification (the only real end-to-end check)
+## Verification
 
-`uv run python scripts/smoke_test.py` requires a running server. For a zero-key run:
+Data layer (no server needed, needs a running local Postgres):
 
-1. `uv run python scripts/mock_llm.py` (fakes chat/embeddings/Firecrawl on :9999)
-2. set `LLM_BASE_URL=http://127.0.0.1:9999/v1`, `LLM_API_KEY=x`, `EMBEDDING_PROVIDER=openai`, `EMBEDDING_MODEL=mock`
-3. `uv run uvicorn app.main:app --port 8000`
-4. `uv run python scripts/smoke_test.py` — must print SMOKE TEST PASSED
+    uv run python scripts/verify_data_layer.py    # must print DATA LAYER VERIFIED
+
+Auth + tenancy over HTTP (needs a running server, and `AUTH_SECRET_KEY` set):
+
+    uv run python scripts/verify_auth.py          # must print AUTH + TENANCY VERIFIED
+
+These two are the primary backend checks. Together they
+cover migrations, argon2 auth, token handling, ownership, project-scoped retrieval,
+the tenancy guarantee, cascade deletes and the retrieval gate.
+
+HTTP smoke test — `uv run python scripts/smoke_test.py`. For a zero-key run start
+`uv run python scripts/mock_llm.py` first and set
+`LLM_BASE_URL=http://127.0.0.1:9999/v1`, `LLM_API_KEY=x`, `EMBEDDING_MODEL=mock`.
+If your `EMBEDDING_DIM` is not 1536 (e.g. 768 for nomic/EmbeddingGemma), also set
+`MOCK_EMBEDDING_DIM` to the same value so the mock emits the right width.
+Covers upload → async ingestion → project topics → project-scoped retrieval →
+tenancy → cascade delete. Must print `SMOKE TEST PASSED`.
+
+Frontend — `frontend/` is the production UI. Run `npm run build` before shipping;
+the FastAPI app serves `frontend/dist` (or `frontend/build`) on the same port
+when present. `src/harness/TestConsole.tsx` remains a developer test console.
+`scripts/verify_console_flow.py` replays its HTTP sequence against a running server.
+
+Evaluation — `eval/` needs the same running server + mock as the smoke test:
+
+    uv run python eval/run_ragas.py        # must print EVAL PASSED
+    uv run python eval/simulate_students.py  # must print SIMULATION PASSED
+
+`run_ragas.py` scores `eval/testset.json` (faithfulness, relevancy, context
+precision/recall, refusal accuracy; gates are faithfulness ≥ 0.8 and refusal
+100%). It uses this repo's own LLM judge, falling back to deterministic
+keyword/citation checks when the endpoint cannot judge (the mock) — the method
+used is reported per item. `simulate_students.py` runs seeded synthetic
+profiles across separate projects and reports mastery gain, question repetition
+(< 5%) and cross-project isolation.
+
+## Auth
+
+- `AUTH_SECRET_KEY` is **required**; the app refuses to boot without it. Generate
+  with `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+- We issue our own HS256 JWTs (`app/deps.py`) instead of using an external identity
+  provider, so the same code runs on a plain local Postgres with nothing else
+  installed (plan.md D3).
+- Send `Authorization: Bearer <token>` on every route except `/health`,
+  `/auth/signup`, `/auth/login`, `/profile/levels`.
+- Ownership is checked with `require_project` / `require_source`, which raise **404**
+  (never 403) for another user's ids so they are not enumerable.
+- `PATCH /profile` uses `ProfileUpdate` (all fields `None` = unchanged). Do not reuse
+  `OnboardingRequest` there — its `"unknown"` defaults would overwrite a level the
+  learner already chose.
+
+## Database
+
+- **Local Postgres is the only database.** `DATABASE_URL` points at a Postgres
+  instance on this machine. This submission is not deployed, so there is no
+  hosted-database code path — one DSN, one code path.
+- **pgvector is required.** If `create extension vector` fails, the extension files
+  aren't installed: use the `pgvector/pgvector:pg17` Docker image or the OS package.
+- `DATABASE_URL` is **required**; boot fails loudly without it. There is no in-memory
+  fallback (`plan.md` D2).
+- `EMBEDDING_DIM` must match the `vector(...)` width in `migrations/0001_core.sql`;
+  `scripts/migrate.py` refuses to run if they disagree.
+- Migrations are plain SQL in `migrations/NNNN_name.sql`, applied in filename order and
+  tracked in `schema_migrations`.
+
+## Files
+
+- Uploaded originals live on local disk at `DATA_DIR/uploads/{project_id}/{source_id}.{ext}`.
+  `data/` is gitignored — the demo corpus must be re-fetchable, not committed.
+- On-disk names derive from the **source id**, never the uploaded filename, so a
+  hostile name (`../../etc/passwd`) cannot escape the upload root. The original
+  filename is kept in the `sources` row.
+- `app/storage.py` owns extension→type→MIME mapping. Do not re-derive it elsewhere.
+
+## Architecture rules
+
+- **All SQL lives in `app/repo/`.** Routers and services never build queries.
+- **Retrieval always takes a `project_id`.** `match_chunks` requires it and there is
+  no "search everything" default. Never add one — it is the tenancy guarantee.
+- Ownership is checked in the repo layer: `get_owned` / `list_for_user` require a
+  `user_id`. Return 404 (not 403) for another user's ids so they are not enumerable.
+- Topics are **project-level**, not per-file (`topic_sources` links them to sources).
+  A topic's natural key is `(project_id, slug)`, so a second source covering the same
+  concept reuses the row and merges locators. Do not reintroduce per-source topics.
+- Everything downstream of parsing works in terms of a `SourceUnit` and its locator
+  (`app/ingestion/units.py`). Adding a file type means writing one parser and
+  registering it in `app/ingestion/registry.py` — not touching the chunker, schema,
+  pipeline or citation code.
+
+## Ingestion
+
+- `POST /projects/{id}/sources` returns **202** with a `queued` row per file; ingestion
+  runs on a `BackgroundTask`. Clients poll `GET /projects/{id}/ingest-status` (cheap)
+  or `GET /sources/{id}` (full row) until the status settles.
+- `sources.source_type` stores the **format id** (`pdf`, `docx`, `xlsx`, `audio`,
+  `video`, …) because the parser registry dispatches on it. Use `media_kind()` to
+  derive a viewer class — do not store the coarse kind.
+- Chunk ids are `uuid5(source_id, index)` so re-ingesting a source overwrites its
+  chunks instead of duplicating them.
+- `ingest_source()` never raises for an expected failure; it records the reason on
+  the row. Failures must always be readable by the learner.
+- `pdf` `docx` `pptx` `xlsx` `csv` `tsv` `md` `txt` `audio` `video` have parsers
+  (`app/ingestion/registry.py`); images are indexed with the configured
+  multimodal embedding endpoint without generating captions.
+  Unregistered types (doc/ppt/xls/zip/…) are refused at upload with a reason.
 
 ## Gotchas
 
-- `.env` lives at repo root (copy from `.env.example`); `app/config.py` reads it via pydantic-settings. Parser selection: `PARSER=auto|firecrawl|local`. Local parser is pdf-inspector with an anydoc fallback; Firecrawl is only used when `FIRECRAWL_API_KEY` is set. A "local (no Firecrawl key)" parser in `/health` is expected, not a bug.
-- `[Page N]` citations in answers are stripped server-side unless N was in the retrieved chunks — preserve this contract. `frontend/src/lib/types.ts` mirrors `app/schemas.py`; update both together.
-- Chunker never crosses a page boundary by design; keep it that way or citations break.
-- ChromaDB/SQLite/uploads persist under `./data/` (gitignored); delete `data/` to reset state.
-- PowerShell (Windows): no `&&`; use `;`. `curl` is an alias for Invoke-WebRequest — use `Invoke-WebRequest -UseBasicParsing`.
+- `.env` lives at repo root (copy from `.env.example`); `app/config.py` reads it via
+  pydantic-settings. Each capability has its own `*_BASE_URL`/`*_API_KEY`/`*_MODEL`
+  (`LLM_*`, `EMBEDDING_*`, `TRANSCRIPTION_*`, `FIRECRAWL_API_URL`) — mixing providers
+  (Groq chat + OpenAI embeddings + Groq Whisper) is env-only, no code changes. Unset
+  `*_BASE_URL`/`*_API_KEY` fall back to the `LLM_*` values; `Settings.provider_warnings()`
+  fires at boot when a `*_BASE_URL` points at a different host than its missing key.
+  A "local (no Firecrawl key)" parser in `/health` is expected, not a bug.
+- **`EMBEDDING_DIM` must equal the model's output width *and* the live column.**
+  `scripts/migrate.py` compares against the live `chunks.embedding` width when the
+  table exists (else the SQL text), and the server refuses to boot on drift.
+  After a model swap (e.g. 1536-d OpenAI → 768-d nomic/EmbeddingGemma): set the new
+  width, then `uv run python scripts/re_embed.py` (`--check` first) — it resizes the
+  column + `match_chunks` and re-ingests every stored file. The mock emits
+  `MOCK_EMBEDDING_DIM` (default 1536); ingestion catches model-vs-config drift and
+  puts the fix in `sources.status_detail`.
+- Citations are stripped server-side unless the locator was actually retrieved —
+  preserve this contract. Chunkers must never cross a locator boundary (page/slide/
+  segment/sheet) or citations break.
+- `frontend/src/lib/types.ts` mirrors the active API models in `app/schemas.py`.
+  Update the project-scoped types and `frontend/src/lib/api.ts` when backend
+  contracts change; legacy types may be removed when their consumers are migrated.
+- PowerShell (Windows): no `&&`; use `;`. `curl` is an alias for Invoke-WebRequest —
+  use `Invoke-WebRequest -UseBasicParsing`. Assigning `""` to an env var *deletes* it.
 - `frontend/` is a separate npm package, not an npm workspace of the root.
