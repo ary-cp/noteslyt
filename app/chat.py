@@ -37,11 +37,11 @@ log = logging.getLogger(__name__)
 
 REFUSAL = "I can't find this in your uploaded material."
 
-SYSTEM_PROMPT = f"""You are a precise study tutor. The student has uploaded lecture material, and retrieved excerpts are provided as CONTEXT. Each excerpt starts with a numbered reference such as [1], followed by its locator. Retrieved image sources may also be attached directly to the latest user message; match each attached image to its numbered CONTEXT entry.
+SYSTEM_PROMPT = f"""You are a precise study tutor. The student has uploaded lecture material, and retrieved excerpts are provided as CONTEXT. Each excerpt starts with a numbered reference such as [1], followed by its locator. Retrieved image sources may also be attached directly to the latest user message; match each attached image to its numbered CONTEXT entry. Retrieved lecture slices may likewise be attached as audio; match each attached clip to its numbered CONTEXT entry by its [m:ss] label.
 You also receive MEMORY: who the learner is, what they struggle with, and a summary of this conversation so far. Adapt your explanation depth to their capability level.
 
 Rules you must follow without exception:
-1. Answer ONLY from the CONTEXT. For an image source, the attached original image is part of the CONTEXT even if its text excerpt only says that its visual embedding was indexed. Do not use outside knowledge, even if you are confident.
+1. Answer ONLY from the CONTEXT. For an image source, the attached original image is part of the CONTEXT even if its text excerpt only says that its visual embedding was indexed. For an audio source, an attached clip is part of the CONTEXT alongside its transcript excerpt. Do not use outside knowledge, even if you are confident.
 2. After every factual statement, cite the matching CONTEXT number in square brackets, such as [1] or [2]. Use only numbers present in the CONTEXT. The app will render the matching source details below your answer; do not write filenames or locator labels directly.
 3. If the CONTEXT does not contain what is needed to answer, reply with exactly this sentence and nothing else:
 {REFUSAL}
@@ -166,6 +166,7 @@ class ChatService:
         context = format_context(chunks, numbered=True)[: self.settings.memory_context_chars]
         messages = self._prompt(global_block, project_block, chat.summary, prior, context, question)
         messages = self._attach_retrieved_images(messages, chunks)
+        messages = self._attach_retrieved_audio(messages, chunks)
         if response_style == "precise":
             messages.append({"role": "system", "content": "Response style: be precise and concise. Lead with the direct answer, include only necessary explanation, and retain citations."})
         elif response_style == "explanatory":
@@ -342,6 +343,58 @@ class ChatService:
             last = messages[-1]
             prompt_text = str(last.get("content", ""))
             last["content"] = [{"type": "text", "text": prompt_text}, *image_parts]
+        return messages
+
+    def _attach_retrieved_audio(self, messages: list[dict], chunks: list) -> list[dict]:
+        """Pass retrieved lecture slices to the audio-capable chat model.
+
+        Each `segment` chunk's `[start_ts, end_ts]` is cut from the stored
+        original and attached as an `input_audio` part, so the model hears the
+        exact cited timeframe. Failures degrade to text-only context — a turn
+        never 500s because an audio slice or a text-only chat model balked.
+        """
+        from .ingestion.parsers_media import slice_audio_wav
+
+        audio_parts: list[dict] = []
+        seen: set[str] = set()
+        for chunk in chunks:
+            if chunk.locator_kind != "segment":
+                continue
+            if chunk.start_ts is None or chunk.end_ts is None or chunk.end_ts <= chunk.start_ts:
+                continue
+            key = f"{chunk.source_id}:{chunk.locator_value}"
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                source = self.sources.get(chunk.source_id)
+                if source is None:
+                    continue
+                path = self.storage.open_for_read(source.project_id, source.id, source.filename)
+                if path is None:
+                    log.warning("Retrieved audio source %s is missing from storage", source.id)
+                    continue
+                wav = slice_audio_wav(path, chunk.start_ts, chunk.end_ts)
+                if len(wav) > 2_000_000:  # ~60 s at 16 kHz mono; skip giants
+                    log.info("Skipped audio attach for %s: slice too large (%d bytes)", key, len(wav))
+                    continue
+                audio_parts.extend([
+                    {"type": "text", "text": f"Retrieved audio context [{chunk.locator_value}]:"},
+                    {"type": "input_audio",
+                     "input_audio": {"data": base64.b64encode(wav).decode("ascii"), "format": "wav"}},
+                ])
+            except Exception as exc:  # noqa: BLE001 — text context still answers
+                log.warning("Skipped audio attach for %s: %s", key, exc)
+                continue
+            if len(audio_parts) >= 4:  # at most 2 clips per turn
+                break
+        if audio_parts and messages:
+            last = messages[-1]
+            existing = last.get("content", "")
+            if isinstance(existing, list):
+                last["content"] = [*existing, *audio_parts]
+            else:
+                last["content"] = [{"type": "text", "text": str(existing)}, *audio_parts]
         return messages
 
     def _after_turn(

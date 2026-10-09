@@ -70,8 +70,16 @@ class SourceUnit:
             return None
 
     def citation_label(self) -> str:
-        """Human label for this unit — the text a citation chip shows."""
+        """Human label for this unit — the section header in the parsed view.
+
+        Segments render as a VTT-style range (`00:00:29.760 --> 00:00:36.500`)
+        so the transcript shows both ends. Chat citations intentionally keep
+        the short `[m:ss]` start form (see `app/citations.py`) — that
+        contract is unchanged.
+        """
         if self.locator_kind == SEGMENT and self.start_ts is not None:
+            if self.end_ts is not None and self.end_ts > self.start_ts:
+                return format_timestamp_range(self.start_ts, self.end_ts)
             return format_timestamp(self.start_ts)
         if self.locator_kind == PAGE:
             return f"p.{self.locator_value}"
@@ -88,6 +96,20 @@ def format_timestamp(seconds: float) -> str:
     """`83.4` -> `1:23`. Matches the `[mm:ss]` citation format."""
     total = int(max(0.0, seconds))
     return f"{total // 60}:{total % 60:02d}"
+
+
+def format_timestamp_ms(seconds: float) -> str:
+    """`29.76` -> `00:00:29.760`. VTT-style, millisecond precision."""
+    total_ms = int(round(max(0.0, seconds) * 1000))
+    h, rem = divmod(total_ms, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms = divmod(rem, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+
+
+def format_timestamp_range(start: float, end: float) -> str:
+    """`29.76, 36.5` -> `00:00:29.760 --> 00:00:36.500`. VTT cue range."""
+    return f"{format_timestamp_ms(start)} --> {format_timestamp_ms(end)}"
 
 
 def units_from_pages(pages) -> list[SourceUnit]:

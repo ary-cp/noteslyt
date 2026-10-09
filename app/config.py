@@ -69,6 +69,21 @@ class Settings(BaseSettings):
     embedding_model: str = "embeddinggemma-2-GGUF"
     embedding_batch_size: int = 64
     embedding_dim: int = 768             # must match the model + pgvector column
+    # How audio/video sources are vectorized:
+    #   "transcript" — embed the Whisper/transcript text (default; works with any
+    #                   text embedding model, including EmbeddingGemma).
+    #   "native"     — embed the raw audio bytes of each ~20 s segment via
+    #                   `Embedder.embed_audio` (data-URI POST, same pattern as
+    #                   images). Needs a joint audio-text embedding model whose
+    #                   audio and text vectors share one space — a text-only
+    #                   server may 200 the request while embedding the URI text,
+    #                   which silently destroys retrieval. Probes on 2026-10-09
+    #                   showed EmbeddingGemma behaves exactly that way (two
+    #                   different blobs: cosine 0.96), so keep "transcript"
+    #                   unless your endpoint truly encodes audio.
+    # Switching modes changes the vector space: re-ingest the corpus
+    # (`uv run python scripts/re_embed.py --force`) after switching.
+    audio_embed_mode: Literal["transcript", "native"] = "transcript"
 
     # --------------------------------------------------------- Transcription
     # Speech-to-text for lecture videos. Any OpenAI-compatible
@@ -77,6 +92,11 @@ class Settings(BaseSettings):
     transcription_base_url: str | None = None   # falls back to llm_base_url
     transcription_api_key: str | None = None    # falls back to llm_api_key
     transcription_model: str = "whisper-large-v3-turbo"
+    # BCP-47 language hint for /audio/transcriptions (e.g. "en"). Unset means
+    # auto-detect. Some self-hosted STT engines (whisper.cpp-style) reject
+    # `verbose_json` without an explicit language — see app/transcription.py,
+    # which falls back to `json` in that case.
+    transcription_language: str | None = None
 
     # ------------------------------------------------------------- Firecrawl
     # POST /v2/parse accepts a raw PDF upload and, with `pages: true`, returns
