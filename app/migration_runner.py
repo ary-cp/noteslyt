@@ -81,7 +81,13 @@ def live_vector_widths(conn: psycopg.Connection) -> dict[str, int | None]:
     return out
 
 
-def check_embedding_dim(conn: psycopg.Connection, dim: int, files: list[tuple[str, Path]]) -> None:
+def check_embedding_dim(
+    conn: psycopg.Connection,
+    dim: int,
+    files: list[tuple[str, Path]],
+    *,
+    validate_migration_sql: bool = True,
+) -> None:
     """
     EMBEDDING_DIM must agree with the vectors Postgres actually holds.
 
@@ -104,6 +110,9 @@ def check_embedding_dim(conn: psycopg.Connection, dim: int, files: list[tuple[st
             )
         print(f"embedding dim : {dim} (matches {', '.join(present)})")
         return
+    if not validate_migration_sql:
+        return
+
     found: set[int] = set()
     for _, path in files:
         found.update(int(w) for w in VECTOR_WIDTH_RE.findall(path.read_text(encoding="utf-8")))
@@ -155,7 +164,12 @@ def apply_pending_migrations(settings: Settings) -> list[str]:
         # Validate the live schema when it exists. On a fresh database, only
         # pending SQL can determine the vector width; historical applied SQL
         # may legitimately contain the pre-re-embed width.
-        check_embedding_dim(conn, settings.embedding_dim, pending)
+        check_embedding_dim(
+            conn,
+            settings.embedding_dim,
+            pending,
+            validate_migration_sql=not done,
+        )
         for version, path in pending:
             with conn.transaction():
                 conn.execute(path.read_text(encoding="utf-8"))
