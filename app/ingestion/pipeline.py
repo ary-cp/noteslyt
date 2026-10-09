@@ -193,6 +193,14 @@ class IngestionPipeline:
                         f"Image embedding width {len(embeddings[0])} does not match "
                         f"EMBEDDING_DIM={self.settings.embedding_dim}."
                     )
+            elif (
+                source.source_type in ("audio", "video")
+                and self.settings.audio_embed_mode == "native"
+            ):
+                # Direct audio vectors: one embedding per segment slice. Chunk
+                # texts stay transcript text (viewer, topics, chat grounding);
+                # only the vector space is acoustic.
+                embeddings = self._embed_audio_native(path, chunks, source)
             else:
                 embeddings = self._embed_with_batches([c.text for c in chunks], source)
 
@@ -302,6 +310,48 @@ class IngestionPipeline:
             if topic.slug in by_slug:
                 continue
         return out
+
+    def _embed_audio_native(
+        self, path: Path, chunks: list, source: SourceRecord
+    ) -> list[list[float]]:
+        """
+        One audio-slice vector per chunk, cut to the chunk's `[start_ts, end_ts]`.
+
+        Chunks without timestamps fall back to a text embedding so the vector
+        list always aligns with the chunk list. Width is verified exactly like
+        the text path, because an audio-capable model swap has the same
+        re-embed consequences.
+        """
+        from .parsers_media import slice_audio_wav
+
+        embed_audio = getattr(self.embedder, "embed_audio", None)
+        if embed_audio is None:
+            raise IngestionError(
+                "The configured embedding provider does not support audio inputs. "
+                "Use a joint audio-text embedding model, or keep AUDIO_EMBED_MODE=transcript."
+            )
+        vectors: list[list[float]] = []
+        for c in chunks:
+            label = f"{c.locator_kind} {c.locator_value}"
+            try:
+                if c.start_ts is not None and c.end_ts is not None and c.end_ts > c.start_ts:
+                    wav = slice_audio_wav(path, c.start_ts, c.end_ts)
+                    vectors.append(embed_audio(wav, "audio/wav"))
+                else:
+                    vectors.append(self.embedder.embed([c.text])[0])
+            except (ParserError, IngestionError):
+                raise
+            except Exception as exc:
+                raise IngestionError(f"Audio embedding failed at {label}: {exc}") from exc
+        expected = self.settings.embedding_dim
+        wrong = {len(v) for v in vectors}
+        if wrong and wrong != {expected}:
+            raise IngestionError(
+                f"Audio embedding width {sorted(wrong)} does not match EMBEDDING_DIM={expected}. "
+                f"Set EMBEDDING_DIM to your model's output width, then re-embed the "
+                f"corpus with uv run python scripts/re_embed.py (use --check first)."
+            )
+        return vectors
 
     def _embed_with_batches(self, texts: list[str], source: SourceRecord) -> list[list[float]]:
         """

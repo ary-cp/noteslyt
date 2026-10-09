@@ -200,6 +200,8 @@ class Embedder(Protocol):
 
     def embed_image(self, image: bytes, mime: str) -> list[float]: ...
 
+    def embed_audio(self, audio: bytes, mime: str) -> list[float]: ...
+
 
 class OpenAICompatibleEmbedder:
     """Calls an OpenAI-style /embeddings endpoint (OpenAI, LM Studio, vLLM, ...)."""
@@ -241,6 +243,28 @@ class OpenAICompatibleEmbedder:
         data = response.json().get("data") or []
         if not data or not data[0].get("embedding"):
             raise ValueError("Embedding endpoint returned no vector for the image")
+        return data[0]["embedding"]
+
+    def embed_audio(self, audio: bytes, mime: str) -> list[float]:
+        """Send one audio slice as a data URI to an audio-aware embedding endpoint.
+
+        Same provider-extension pattern as `embed_image`: the selected
+        server/model must decode the data URI as audio *into the same vector
+        space as text*. A text-only server may 200 while embedding the URI
+        text — vectors then look valid but retrieval is meaningless. Use
+        `AUDIO_EMBED_MODE=native` only with a joint audio-text model.
+        """
+        data_url = f"data:{mime};base64," + base64.b64encode(audio).decode("ascii")
+        response = httpx.post(
+            f"{self.base_url}/embeddings",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={"model": self.model, "input": data_url},
+            timeout=180.0,
+        )
+        response.raise_for_status()
+        data = response.json().get("data") or []
+        if not data or not data[0].get("embedding"):
+            raise ValueError("Embedding endpoint returned no vector for the audio")
         return data[0]["embedding"]
 
 

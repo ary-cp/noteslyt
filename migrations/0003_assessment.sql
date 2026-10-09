@@ -27,7 +27,7 @@ create table if not exists questions (
     locator_kind  text not null default 'page',
     locator_value text not null default '',
     difficulty    real not null default 0.5,
-    stem_embedding vector(1536)
+    stem_embedding vector(768)
 );
 create index if not exists questions_quiz_idx  on questions (quiz_id, seq);
 create index if not exists questions_topic_idx on questions (topic_id);

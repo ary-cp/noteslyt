@@ -16,7 +16,8 @@ Video needs audio first: `ffmpeg` extracts 16 kHz mono WAV, split into
 
 Grouping: raw Whisper segments are a few seconds each — one unit per segment
 would mean hundreds of embedding calls for a lecture. Segments are merged
-until ~60 s or ~800 chars, whichever comes first. The merged unit keeps the
+until ~20 s or ~350 chars, whichever comes first, so citations read like
+VTT cues. The merged unit keeps the
 first segment's start as its locator (`segment` value = `[m:ss]`), so the
 chunker invariant (one locator per chunk) still holds and citations stay
 exact.
@@ -41,9 +42,10 @@ if TYPE_CHECKING:  # only for typing — avoids importing openai at module load
 
 log = logging.getLogger(__name__)
 
-# Merge targets for transcript segments → units.
-_SEGMENT_TARGET_S = 60.0
-_SEGMENT_TARGET_CHARS = 800
+# Merge targets for transcript segments → units (~15-20 s, so citations
+# read like VTT cues instead of minute-long blobs).
+_SEGMENT_TARGET_S = 15.0
+_SEGMENT_TARGET_CHARS = 400
 # One transcription call per chunk of extracted audio (provider upload limits).
 _AUDIO_CHUNK_S = 600
 _WAV_RATE = 16000
@@ -77,6 +79,33 @@ def _ffmpeg() -> str:
     return exe
 
 
+def slice_audio_wav(source: Path, start_s: float, end_s: float) -> bytes:
+    """Cut `[start_s, end_s]` from an audio/video file as 16 kHz mono WAV bytes.
+
+    Used by native audio embedding (`AUDIO_EMBED_MODE=native`) and by chat's
+    audio-clip attachment — one slice per retrieved segment, so the vector and
+    the model's ears cover exactly the cited timeframe.
+    """
+    exe = _ffmpeg()
+    span = max(end_s - start_s, 0.5)
+    try:
+        proc = subprocess.run(
+            [exe, "-y", "-v", "error", "-ss", f"{max(start_s, 0.0):.2f}",
+             "-i", str(source), "-t", f"{span:.2f}",
+             "-vn", "-ac", "1", "-ar", str(_WAV_RATE),
+             "-f", "wav", "pipe:1"],
+            check=True, timeout=300, capture_output=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        tail = (exc.stderr or b"").decode(errors="replace")[-400:]
+        raise ParserError(f"Could not slice audio from {source.name}: {tail or exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ParserError(f"Audio slicing of {source.name} timed out.") from exc
+    if not proc.stdout:
+        raise ParserError(f"Audio slice of {source.name} came back empty.")
+    return proc.stdout
+
+
 def _extract_wav_chunks(video: Path, workdir: Path) -> list[Path]:
     """
     Video → 16 kHz mono WAV pieces of at most `_AUDIO_CHUNK_S` seconds.
@@ -102,7 +131,7 @@ def _extract_wav_chunks(video: Path, workdir: Path) -> list[Path]:
 
 
 def group_segments(segments: list[Segment]) -> list[SourceUnit]:
-    """Merge whisper-fine segments into ~minute-long `segment` units."""
+    """Merge whisper-fine segments into ~15-20 s `segment` units."""
     spoken = [s for s in segments if s.text and s.text.strip()]
     if not spoken:
         raise ParserError("Transcription returned no speech — silent file, or the wrong language model?")
