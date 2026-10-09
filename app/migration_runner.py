@@ -152,7 +152,10 @@ def apply_pending_migrations(settings: Settings) -> list[str]:
         if not pending:
             return applied_now
 
-        check_embedding_dim(conn, settings.embedding_dim, files)
+        # Validate the live schema when it exists. On a fresh database, only
+        # pending SQL can determine the vector width; historical applied SQL
+        # may legitimately contain the pre-re-embed width.
+        check_embedding_dim(conn, settings.embedding_dim, pending)
         for version, path in pending:
             with conn.transaction():
                 conn.execute(path.read_text(encoding="utf-8"))
