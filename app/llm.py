@@ -214,49 +214,115 @@ class OpenAICompatibleEmbedder:
             vectors.extend(item.embedding for item in sorted(response.data, key=lambda d: d.index))
         return vectors
 
-    def embed_image(self, image: bytes, mime: str) -> list[float]:
-        """Send one image as a data URI to an image-aware embedding endpoint.
+    def _post_media(self, content: list[dict], timeout: float, what: str) -> list[float]:
+        """POST one multimodal embedding request in llama.cpp's nested shape.
 
-        This is a provider extension, not part of the OpenAI embeddings
-        contract. The selected server/model must decode the data URI as an
-        image; a text-only server may accept it while embedding the URI text.
+        Per ggml-org/llama.cpp#30082, media parts must nest one level deeper
+        than OpenAI's chat format: each `input` item is `{"content": [...]}`.
+        A flat data-URI string is tokenized as text (61k tokens for 2 s of
+        audio) and a bare parts array is a 400 — both verified live. Anything
+        without a flat float vector raises instead of returning garbage.
         """
-        data_url = f"data:{mime};base64," + base64.b64encode(image).decode("ascii")
-        # Keep the data URI as input; several OpenAI-compatible servers reject
-        # llama.cpp's non-standard multimodal content-array payload.
         response = httpx.post(
             f"{self.base_url}/embeddings",
             headers={"Authorization": f"Bearer {self.api_key}"},
-            json={"model": self.model, "input": data_url},
-            timeout=120.0,
+            json={"model": self.model, "input": [{"content": content}]},
+            timeout=timeout,
         )
         response.raise_for_status()
         data = response.json().get("data") or []
-        if not data or not data[0].get("embedding"):
-            raise ValueError("Embedding endpoint returned no vector for the image")
-        return data[0]["embedding"]
+        emb = data[0].get("embedding") if data else None
+        if not isinstance(emb, list) or not emb or not isinstance(emb[0], (int, float)):
+            raise ValueError(f"Embedding endpoint returned no usable vector for the {what}")
+        return [float(x) for x in emb]
+
+    def embed_image(self, image: bytes, mime: str) -> list[float]:
+        """Send one image for encoding into the shared space (verified 0.88 red-vs-blue)."""
+        data_url = f"data:{mime};base64," + base64.b64encode(image).decode("ascii")
+        return self._post_media(
+            [{"type": "image_url", "image_url": {"url": data_url}}], 120.0, "image"
+        )
 
     def embed_audio(self, audio: bytes, mime: str) -> list[float]:
-        """Send one audio slice as a data URI to an audio-aware embedding endpoint.
+        """Send one audio slice for encoding into the shared space.
 
-        Same provider-extension pattern as `embed_image`: the selected
-        server/model must decode the data URI as audio *into the same vector
-        space as text*. A text-only server may 200 while embedding the URI
-        text — vectors then look valid but retrieval is meaningless. Use
-        `AUDIO_EMBED_MODE=native` only with a joint audio-text model.
+        Verified live: determinism 1.0, sine-vs-noise 0.83, noise-vs-chord
+        0.80. Pure tones cluster (~0.95) — the encoder hears content, and
+        content-free sines have little to separate. Requires a joint model
+        served with its projector (e.g. embeddinggemma-2-GGUF + mmproj under
+        llama-server); anything else fails loudly here or at boot.
         """
-        data_url = f"data:{mime};base64," + base64.b64encode(audio).decode("ascii")
-        response = httpx.post(
-            f"{self.base_url}/embeddings",
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            json={"model": self.model, "input": data_url},
-            timeout=180.0,
+        fmt = mime.split("/")[-1].lower() or "wav"
+        data_b64 = base64.b64encode(audio).decode("ascii")
+        return self._post_media(
+            [{"type": "input_audio", "input_audio": {"data": data_b64, "format": fmt}}],
+            180.0,
+            "audio",
         )
-        response.raise_for_status()
-        data = response.json().get("data") or []
-        if not data or not data[0].get("embedding"):
-            raise ValueError("Embedding endpoint returned no vector for the audio")
-        return data[0]["embedding"]
+
+
+def verify_native_support(embedder: Embedder) -> None:
+    """Boot guard for native audio/video embedding modes.
+
+    Embeds two maximally different blobs and refuses to boot when they come
+    back near-identical — the signature of an engine that tokenizes the
+    data URI as text instead of encoding bytes (LM Studio's text-only
+    /embeddings endpoint scores ~0.97). Silent corruption is worse than a
+    loud boot error; run `scripts/probe_multimodal.py` for the full report.
+    """
+    import math
+    import struct
+    import wave as _wave
+    import io as _io
+
+    def sine_wav(freq: float) -> bytes:
+        buf = _io.BytesIO()
+        with _wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            n = 16000 * 2
+            w.writeframes(b"".join(
+                struct.pack("<h", int(9000 * math.sin(2 * math.pi * freq * i / 16000)))
+                for i in range(n)
+            ))
+        return buf.getvalue()
+
+    if not hasattr(embedder, "embed_audio"):
+        raise RuntimeError(
+            "Native embedding modes need an embedder with byte inputs; "
+            "the configured backend only embeds text."
+        )
+    a = embedder.embed_audio(sine_wav(440.0), "audio/wav")
+    # A fixed pseudo-noise buffer: maximally different bytes, no dependency.
+    rng_state = 12345
+
+    def noise() -> bytes:
+        nonlocal rng_state
+        out = bytearray()
+        for _ in range(16000 * 2):
+            rng_state = (1103515245 * rng_state + 12345) & 0x7FFFFFFF
+            out += struct.pack("<h", (rng_state % 20001) - 10000)
+        buf = _io.BytesIO()
+        with _wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(bytes(out))
+        return buf.getvalue()
+
+    b = embedder.embed_audio(noise(), "audio/wav")
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a)) or 1.0
+    nb = math.sqrt(sum(x * x for x in b)) or 1.0
+    similarity = dot / (na * nb)
+    if similarity >= 0.90:
+        raise RuntimeError(
+            f"Native embedding modes are enabled but the embedding endpoint encodes "
+            f"bytes as text (two different audio blobs: cosine {similarity:.4f}). "
+            f"Set AUDIO_EMBED_MODE=transcript (and VIDEO_EMBED_MODE=transcript), or serve "
+            f"a joint model from llama.cpp and re-run scripts/probe_multimodal.py."
+        )
 
 
 def build_embedder(settings: Settings) -> Embedder:
@@ -267,6 +333,11 @@ def build_embedder(settings: Settings) -> Embedder:
     + OpenAI embeddings is the common pairing). Unset values inherit the LLM
     provider, which keeps a single-server setup a three-line .env.
     """
+    if settings.embedding_mode == "local":
+        from .llama_embed import ManagedEmbedder, get_embedding_manager
+
+        return ManagedEmbedder(get_embedding_manager(), settings.embedding_model,
+                               settings.embedding_batch_size)
     base_url = settings.resolved_embedding_base_url
     api_key = settings.resolved_embedding_api_key
     return OpenAICompatibleEmbedder(base_url, api_key, settings.embedding_model, settings.embedding_batch_size)

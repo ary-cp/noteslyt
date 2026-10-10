@@ -21,6 +21,7 @@ import type {
   IngestStatus,
   LearnerOut,
   LearnerResponse,
+  LlamaStatus,
   ParsedContent,
   ProfileLevels,
   ProfileOut,
@@ -33,6 +34,7 @@ import type {
   SourceUploadAccepted,
   StudioJob,
   TokenResponse,
+  TopicGraph,
   TopicSummary,
   UserOut,
 } from "./types";
@@ -173,6 +175,12 @@ export const updateProfile = (body: {
 
 export const getProfileLevels = (): Promise<ProfileLevels> => request("/profile/levels");
 
+// ----------------------------------------------------------------- system
+export const getLlamaStatus = (): Promise<LlamaStatus> => request("/system/llama");
+
+export const updateLlamaEngine = (): Promise<{ status: string; detail: string }> =>
+  request("/system/llama/update", { method: "POST" });
+
 // --------------------------------------------------------------- projects
 export const listProjects = (): Promise<ProjectListItem[]> => request("/projects");
 
@@ -211,6 +219,12 @@ export const deleteSource = (id: string): Promise<void> => request(`/sources/${i
 
 export const listTopics = (projectId: string): Promise<TopicSummary[]> =>
   request(`/projects/${projectId}/topics`);
+
+export const getTopicGraph = (projectId: string): Promise<TopicGraph> =>
+  request(`/projects/${projectId}/topic-graph`);
+
+export const refreshTopicGraph = (projectId: string): Promise<TopicGraph> =>
+  request(`/projects/${projectId}/topic-graph/refresh`, { method: "POST" });
 
 export const ingestStatus = (projectId: string): Promise<IngestStatus> =>
   request(`/projects/${projectId}/ingest-status`);

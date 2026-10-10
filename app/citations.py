@@ -56,6 +56,7 @@ class Citation:
     snippet: str = ""
     page: int | None = None          # set for page locators (back-compat)
     source_id: str | None = None
+    end_ts: float | None = None      # segment end: the citation plays [start, end]
 
 
 @dataclass
@@ -196,6 +197,7 @@ def audit_citations(answer: str, chunks: list) -> AuditResult:
                 snippet=" ".join(getattr(chunk, "text", "").split())[:180],
                 page=page,
                 source_id=getattr(chunk, "source_id", None),
+                end_ts=getattr(chunk, "end_ts", None),
             )
         )
     return AuditResult(answer=cleaned, citations=citations)

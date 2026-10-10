@@ -111,7 +111,7 @@ class QuizRepo(Repo):
     # ------------------------------------------------------------ answers
     def find_answer(self, quiz_id: str, question_id: str, user_id: str) -> AnswerRecord | None:
         row = self._fetch_one(
-            "select id, quiz_id, question_id, user_id, given, correct, p_before, p_after, feedback, created_at "
+            "select id, quiz_id, question_id, user_id, given, correct, p_before, p_after, feedback, missed, matched, created_at "
             "from answers where quiz_id = %s and question_id = %s and user_id = %s",
             (quiz_id, question_id, user_id),
         )
@@ -120,12 +120,14 @@ class QuizRepo(Repo):
     def record_answer(
         self, quiz_id: str, question_id: str, user_id: str,
         given: str, correct: bool, p_before: float, p_after: float, feedback: str = "",
+        missed: list | None = None, matched: list | None = None,
     ) -> AnswerRecord:
         row = self._fetch_one(
-            "insert into answers (id, quiz_id, question_id, user_id, given, correct, p_before, p_after, feedback) "
-            "values (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
-            "returning id, quiz_id, question_id, user_id, given, correct, p_before, p_after, feedback, created_at",
-            (str(uuid.uuid4()), quiz_id, question_id, user_id, given, correct, p_before, p_after, feedback),
+            "insert into answers (id, quiz_id, question_id, user_id, given, correct, p_before, p_after, feedback, missed, matched) "
+            "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "returning id, quiz_id, question_id, user_id, given, correct, p_before, p_after, feedback, missed, matched, created_at",
+            (str(uuid.uuid4()), quiz_id, question_id, user_id, given, correct, p_before, p_after, feedback,
+             Json(missed or []), Json(matched or [])),
         )
         return to_record(AnswerRecord, row)  # type: ignore[return-value]
 
@@ -140,7 +142,7 @@ class QuizRepo(Repo):
 
     def answers_for_quiz(self, quiz_id: str, user_id: str) -> list[AnswerRecord]:
         rows = self._fetch_all(
-            "select id, quiz_id, question_id, user_id, given, correct, p_before, p_after, feedback, created_at "
+            "select id, quiz_id, question_id, user_id, given, correct, p_before, p_after, feedback, missed, matched, created_at "
             "from answers where quiz_id = %s and user_id = %s order by created_at",
             (quiz_id, user_id),
         )

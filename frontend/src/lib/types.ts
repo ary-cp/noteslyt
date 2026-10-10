@@ -103,6 +103,23 @@ export interface ProfileLevels {
   thinking_levels: string[];
 }
 
+/** `GET /system/llama` — vendored embedding engine status (local mode). */
+export interface LlamaStatus {
+  mode: "local" | "cloud";
+  initialized?: boolean;
+  detail?: string;
+  installed?: boolean;
+  build_tag?: string;
+  binary?: string;
+  running?: boolean;
+  url?: string;
+  model_present?: boolean;
+  model_path?: string;
+  mmproj_present?: boolean;
+  update_state?: string;
+  update_message?: string;
+}
+
 /** `app/schemas.py: SourceOut` */
 export interface SourceOut {
   id: string;
@@ -137,6 +154,12 @@ export interface TopicSummary {
     filename: string;
     locators: { kind: string; value: string }[];
   }[];
+}
+
+/** `app/schemas.py: TopicGraphOut` — prerequisite graph over project topics. */
+export interface TopicGraph {
+  nodes: { id: string; slug: string; name: string }[];
+  edges: { topic_slug: string; prereq_slug: string }[];
 }
 
 /** `GET /projects/{id}/ingest-status` */
@@ -175,6 +198,7 @@ export interface ChatCitation {
   source_id: string | null;
   heading: string;
   snippet: string;
+  end_ts: number | null;
 }
 
 /** `app/schemas.py: ChatOut` */
@@ -196,6 +220,24 @@ export interface ChatMessageOut {
   citations: ChatCitation[];
   grounded: boolean | null;
   created_at: string;
+}
+
+/** UI-only viewer target: a source plus the cited locator to jump to.
+ * `nonce` bumps on every open so re-clicking the same citation re-seeks.
+ * For segments, `end` bounds playback to the cited clip [start, end]. */
+export interface ViewerTarget {
+  sourceId: string;
+  kind?: string;
+  value?: string;
+  end?: number | null;
+  nonce: number;
+}
+
+/** Locator passed from a citation chip to the viewer. */
+export interface CitationLocator {
+  kind: string;
+  value: string;
+  end?: number | null;
 }
 
 /** `app/schemas.py: ChatDetailOut` */
@@ -336,8 +378,10 @@ export interface AssessmentReportOut {
       correct: boolean;
       citation: string;
     }[];
-    mastery_delta?: { slug: string; p_before: number | null; p_after: number | null }[];
+    mastery_delta?: { slug: string; name?: string; p_before: number | null; p_after: number | null }[];
+    misconceptions?: { slug: string; name?: string; points: string[] }[];
     next_up?: string | null;
+    next_up_name?: string | null;
   };
   created_at: string;
 }

@@ -29,7 +29,9 @@ the tenancy guarantee, cascade deletes and the retrieval gate.
 
 HTTP smoke test — `uv run python scripts/smoke_test.py`. For a zero-key run start
 `uv run python scripts/mock_llm.py` first and set
-`LLM_BASE_URL=http://127.0.0.1:9999/v1`, `LLM_API_KEY=x`, `EMBEDDING_MODEL=mock`.
+`LLM_BASE_URL=http://127.0.0.1:9999/v1`, `LLM_API_KEY=x`, `EMBEDDING_MODEL=mock`,
+`EMBEDDING_MODE=cloud` (mock runs must stay cloud — local mode would download
+the vendored engine instead of using the mock).
 If your `EMBEDDING_DIM` is not 1536 (e.g. 768 for nomic/EmbeddingGemma), also set
 `MOCK_EMBEDDING_DIM` to the same value so the mock emits the right width.
 Covers upload → async ingestion → project topics → project-scoped retrieval →

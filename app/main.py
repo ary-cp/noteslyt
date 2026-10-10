@@ -34,12 +34,12 @@ from .config import Settings, get_settings
 from .chat import ChatService
 from .db import REEMBED_HINT, Database, describe_embedding_drift
 from .ingestion import IngestionPipeline
-from .llm import LLMClient, build_embedder
+from .llm import LLMClient, build_embedder, verify_native_support
 from .migrations import apply_pending_migrations
 from .quiz import QuizService
 from .repo import ChatRepo, ProjectMemoryRepo, ProjectRepo, QuizRepo, SourceRepo, StudioRepo, TopicRepo, UserRepo
 from .repo.profile import ProfileRepo
-from .routers import auth, chats, profile, projects, quizzes, sources
+from .routers import auth, chats, profile, projects, quizzes, sources, system
 from .schemas import DatabaseOut, EndpointOut, HealthResponse, StorageOut
 from .storage import FileStorage
 from .transcription import build_transcriber
@@ -101,11 +101,23 @@ async def lifespan(app: FastAPI):
     if drift:
         raise RuntimeError("\n".join(drift) + "\n" + REEMBED_HINT)
     store = VectorStore(db)
-
     llm = LLMClient(settings)                       # chat completions
+    if settings.embedding_mode == "local":
+        # Vendored llama-server backend: downloads the engine + weights on
+        # first boot (loudly logged). The server itself starts lazily on the
+        # first embedding call and unloads after idle (wake-on-API).
+        from .llama_embed import init_embedding_server
+
+        init_embedding_server(settings)
     embedder = build_embedder(settings)             # vectors (OpenAI-compatible)
     transcriber = build_transcriber(settings)       # speech-to-text
     storage = FileStorage(settings.uploads_dir)     # local disk
+
+    # Native audio/video vectors are meaningless when the endpoint tokenizes
+    # the data URI as text. Refuse to boot instead of corrupting retrieval —
+    # same philosophy as the embedding-width drift check above.
+    if settings.audio_embed_mode == "native" or settings.video_embed_mode == "native":
+        verify_native_support(embedder)
 
     app.state.settings = settings
     app.state.db = db
@@ -165,6 +177,13 @@ async def lifespan(app: FastAPI):
         studio_cleanup.cancel()
         with suppress(asyncio.CancelledError):
             await studio_cleanup
+        if settings.embedding_mode == "local":
+            try:
+                from .llama_embed import get_embedding_manager
+
+                get_embedding_manager().stop()
+            except Exception:
+                log.exception("Failed to stop the local embedding server")
         db.close()
 
 
@@ -190,6 +209,7 @@ app.include_router(projects.router)    # /projects CRUD + /projects/{id}/memory
 app.include_router(sources.router)     # upload / list / topics / status / delete / file / content
 app.include_router(chats.router)       # /projects/{id}/chats, /chats/{id}, /chats/{id}/messages
 app.include_router(quizzes.router)     # /projects/{id}/quiz, /quizzes/{id}/answer, /learner, /reports
+app.include_router(system.router)       # /system/llama operator endpoints
 
 
 def _mount_frontend(application: FastAPI) -> str:
@@ -222,7 +242,7 @@ def _mount_frontend(application: FastAPI) -> str:
     async def frontend_fallback(frontend_path: str):
         api_prefixes = (
             "auth/", "profile", "projects", "sources/", "chats/", "quizzes/",
-            "learner/", "assessments/", "health", "openapi.json", "docs", "redoc",
+            "learner/", "assessments/", "system/", "health", "openapi.json", "docs", "redoc",
         )
         if frontend_path.startswith(api_prefixes):
             from fastapi import HTTPException

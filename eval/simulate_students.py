@@ -95,7 +95,19 @@ def main() -> int:
     results: dict[str, dict] = {}
     for s in students:
         h, pid = s["headers"], s["project_id"]
-        quiz = c.post(f"/projects/{pid}/quiz", json={"n_questions": 3}, headers=h).json()
+        queued = c.post(f"/projects/{pid}/quiz", json={"n_questions": 3}, headers=h)
+        assert queued.status_code == 202, queued.text
+        job_id = queued.json()["id"]
+        deadline = time.monotonic() + TIMEOUT_S
+        while True:
+            jobs = c.get(f"/projects/{pid}/studio-jobs", headers=h).json()
+            job = next(row for row in jobs if row["id"] == job_id)
+            if job["status"] in {"ready", "failed"}:
+                break
+            assert time.monotonic() < deadline, "quiz job did not finish"
+            time.sleep(0.5)
+        assert job["status"] == "ready", job.get("error")
+        quiz = job["payload"]
         stems = [q["stem"] for q in quiz["questions"]]
         deltas, correct = [], 0
         for q in quiz["questions"]:

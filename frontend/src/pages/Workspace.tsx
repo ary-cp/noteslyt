@@ -24,7 +24,7 @@ import {
   renameChat,
   uploadSources,
 } from "../lib/api";
-import type { ChatOut, ProjectListItem, ProjectOut, SourceOut } from "../lib/types";
+import type { ChatOut, CitationLocator, ProjectListItem, ProjectOut, SourceOut, ViewerTarget } from "../lib/types";
 import { useToast } from "../lib/toast";
 import { useTheme } from "../lib/theme";
 import { useDebounced, useMediaQuery } from "../lib/utils";
@@ -77,7 +77,9 @@ export default function Workspace({
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const [mobileTab, setMobileTab] = useState<"sources" | "chat" | "studio">("chat");
-  const [viewerId, setViewerId] = useState<string | null>(initialSourceId ?? null);
+  const [viewer, setViewer] = useState<ViewerTarget | null>(
+    initialSourceId ? { sourceId: initialSourceId, nonce: 0 } : null,
+  );
   const [ctx, setCtx] = useState<{ x: number; y: number; items: CtxItem[] } | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [palette, setPalette] = useState(false);
@@ -217,6 +219,15 @@ export default function Workspace({
       });
     },
     [navigate, projectId, refreshChats, push],
+  );
+
+  const openSource = useCallback(
+    (id: string | null, locator?: CitationLocator) => {
+      if (!id) return;
+      setViewer({ sourceId: id, kind: locator?.kind, value: locator?.value, end: locator?.end, nonce: Date.now() });
+      navigate(`/project/${projectId}/source/${id}`);
+    },
+    [navigate, projectId],
   );
 
   const removeChat = useCallback(async (chat: ChatOut) => {
@@ -373,8 +384,7 @@ export default function Workspace({
                 setSelectedIds(new Set());
               }}
               onOpenSource={(id) => {
-                setViewerId(id);
-                navigate(`/project/${projectId}/source/${id}`);
+                openSource(id);
               }}
               onRemoveSource={(id) => void removeSource(id)}
               onFiles={(f) => void onFiles(f)}
@@ -418,9 +428,8 @@ export default function Workspace({
                 void refreshChats();
                 navigate(`/project/${projectId}/chat/${id}`, { replace: true });
               }}
-              onOpenSource={(id) => {
-                setViewerId(id);
-                navigate(`/project/${projectId}/source/${id}`);
+              onOpenSource={(id, locator) => {
+                openSource(id, locator);
               }}
               onNeedSources={() => (isMobile ? setMobileTab("sources") : setLeftOpen(true))}
             />
@@ -480,10 +489,10 @@ export default function Workspace({
       {ctx && <ContextMenu x={ctx.x} y={ctx.y} items={ctx.items} onClose={() => setCtx(null)} />}
 
       <SourceViewerDrawer
-        sourceId={viewerId}
+        target={viewer}
         sources={sources}
         onClose={() => {
-          setViewerId(null);
+          setViewer(null);
           navigate(`/project/${projectId}${activeChatId ? `/chat/${activeChatId}` : ""}`, { replace: true });
         }}
         onRemove={(id) => void removeSource(id)}

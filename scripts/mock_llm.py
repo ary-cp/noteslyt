@@ -146,8 +146,11 @@ class Handler(BaseHTTPRequestHandler):
         req = json.loads(raw or b"{}")
         if self.path.endswith("/embeddings"):
             inputs = req["input"] if isinstance(req["input"], list) else [req["input"]]
+            # Nested multimodal parts (llama.cpp shape) have no text to hash —
+            # stringify deterministically so native-mode tests get stable vectors.
+            flat = [t if isinstance(t, str) else json.dumps(t, sort_keys=True) for t in inputs]
             return self._json(200, {"object": "list", "model": req.get("model"), "usage": {},
-                                    "data": [{"object": "embedding", "index": i, "embedding": embed(t)} for i, t in enumerate(inputs)]})
+                                    "data": [{"object": "embedding", "index": i, "embedding": embed(t)} for i, t in enumerate(flat)]})
 
         if self.path.endswith("/chat/completions"):
             msgs = req["messages"]

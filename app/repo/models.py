@@ -138,6 +138,8 @@ class AnswerRecord:
     p_before: float = 0.30
     p_after: float = 0.30
     feedback: str = ""
+    missed: list = field(default_factory=list)
+    matched: list = field(default_factory=list)
     created_at: datetime | None = None
 
 

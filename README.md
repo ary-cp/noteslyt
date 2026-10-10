@@ -16,7 +16,12 @@ server-side memory, multimodal ingestion, quizzes, exams and flashcards. Images
 use direct multimodal embeddings; image chat, quizzes and flashcards send original pixels
 to the configured vision-capable chat model. Topic extraction saves a project-level
 concept list from the image without creating OCR text or caption embeddings.
-Older indexed images get topics when a quiz is generated.
+Older indexed images get topics when a quiz is generated. Lecture videos keep
+their transcript segments and additionally caption one keyframe per few
+segments with the vision model (`VIDEO_*` in `.env`) — slide and diagram
+content becomes searchable, cited `[Visual M:SS]` text on the same timestamp;
+a text-only chat model degrades to transcript-only with a warning. Segment
+citations carry their end time, so the viewer replays the cited clip range.
 
 The dashboard lives at `/`; `/projects` is the authenticated JSON API. The
 `/console` route is a developer harness. Studio summaries, guides and mind maps
@@ -43,6 +48,7 @@ study-companion/
 │   │   ├── parsers.py         Firecrawl /v2/parse (per-page markdown) ⇄ pdf-inspector/anydoc fallback
 │   │   ├── chunker.py         locator-aware chunks (never cross a locator ⇒ exact citations)
 │   │   ├── topics.py          project-level topics: 1 LLM call + nearest-centroid assignment
+│   │   ├── video_frames.py    lecture keyframes → vision captions (visual track as citable text)
 │   │   └── pipeline.py        parse → chunk → embed → topics → pgvector, with status transitions
 │   ├── rag.py                 strict grounded answers: retrieval gate · prompt contract · citation audit
 │   ├── learner/bkt.py         Bayesian Knowledge Tracing (4 params, 20 lines)
@@ -250,6 +256,9 @@ All project, source, chat and assessment routes require a bearer token.
 | GET | `/projects/{id}/studio-jobs` | Generation state, results and errors |
 | POST | `/quizzes/{id}/answer` | Atomic, idempotent grading and mastery update |
 | GET | `/projects/{id}/learner` | Mastery and assessment history |
+| GET | `/assessments/{id}/report` | Frozen post-quiz report: score, per-topic deltas, misconceptions, next-up |
+| GET | `/projects/{id}/topic-graph` | Prerequisite nodes + edges for the flow map |
+| POST | `/projects/{id}/topic-graph/refresh` | Re-infer prerequisite edges (one LLM call) |
 | GET | `/health` | Service configuration and database status |
 
 Additional regression checks: `uv run python scripts/verify_regressions.py`.
@@ -258,6 +267,26 @@ checkpoints, concurrent grading, rollback, MCQ validation, saved image topics,
 profile evidence and image-based quizzes/flashcards without AI
 provider calls. This check and `verify_data_layer.py` remove only their own
 randomized test accounts, including on failure; existing user data is retained.
+
+## Evaluation results (2026-10-10, zero-key run)
+
+Environment: `scripts/mock_llm.py` + `EMBEDDING_MODEL=mock` (768-d), local
+Postgres, backend on HTTP. The mock judges by deterministic keyword/citation
+checks, so treat absolute numbers as smoke signals — the gates are the claim.
+
+- `scripts/smoke_test.py` → **SMOKE TEST PASSED**: pdf/docx/xlsx/mp3 upload →
+  ready → project topics → project-scoped retrieval → tenancy → chats, memory,
+  nudges, refusal → quiz grading + mastery update → cascade delete.
+- `eval/run_ragas.py` → **EVAL PASSED**: faithfulness **1.000** (gate ≥ 0.8),
+  refusal accuracy **100%**, answer relevancy 0.388, context precision/recall
+  0.50/1.00 on `eval/testset.json`.
+- `eval/simulate_students.py` → **SIMULATION PASSED** (seeded, 3 profiles):
+  Adv 3/3 correct, mean mastery gain **+0.3657**; Mid 1/3, **+0.0525**;
+  Nov 1/3, **+0.0525**. Question repetition **0/9 (0.0%)** vs the < 5% target.
+  Isolation: same probe retrieves disjoint chunk sets (6/6/6), and cross-learner
+  quiz answers + learner reads are 404.
+- Re-runs on real providers will shift the RAGAS numbers; re-run all three
+  before quoting metrics anywhere else.
 
 ## Demo flow
 1. Create a project and upload a lecture PDF → "Parsing → chunking → embedding → mapping topics" → split screen appears.
@@ -278,8 +307,15 @@ randomized test accounts, including on failure; existing user data is retained.
 
 Quiz questions are prompted to include the full scenario instead of referring to
 unseen examples. Studio renders LaTeX in questions, options, explanations and cards.
-The learning profile shows per-topic evidence after each answer; Settings summarizes
-saved quiz attempts across projects. Regenerate older quizzes to apply new question-writing rules.
+The learning profile shows overall mastery as a single percentage; the
+post-quiz assessment report is the one place weak topics are named, with
+likely misconceptions and what to study next. Citation chips open the source
+viewer jumped to the exact page or media timestamp. Mind maps render a topics
+star or, when prerequisite links exist, a dependency flow built from the
+project's topic graph. Studio also offers slide decks and a heuristic study
+schedule (weakest-first, expanding revisits) alongside summaries and guides.
+Settings summarizes saved quiz attempts across projects. Regenerate older quizzes
+to apply new question-writing rules.
 
 
 ## Review notes (2026-10-10)

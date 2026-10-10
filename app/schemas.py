@@ -146,6 +146,24 @@ class TopicSummary(BaseModel):
     sources: list[dict] = []       # [{source_id, filename, locators: [...]}]
 
 
+class TopicGraphNode(BaseModel):
+    id: str
+    slug: str
+    name: str
+
+
+class TopicGraphEdge(BaseModel):
+    topic_slug: str
+    prereq_slug: str
+
+
+class TopicGraphOut(BaseModel):
+    """Prerequisite graph over a project's topics (slugs, for the flow map)."""
+
+    nodes: list[TopicGraphNode] = []
+    edges: list[TopicGraphEdge] = []
+
+
 # ------------------------------------------------------------------ documents
 class TopicOut(BaseModel):
     id: str
@@ -187,6 +205,7 @@ class CitationOut(BaseModel):
     source_id: str | None = None
     heading: str = ""
     snippet: str = ""
+    end_ts: float | None = None       # segment end: cited clip plays [start, end]
 
 
 # ------------------------------------------------------------------ chats
