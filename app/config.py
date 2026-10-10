@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     embedding_local_dir: Path = Path("./data/llama")
     embedding_local_host: str = "127.0.0.1"
     embedding_local_port: int = 8899
-    embedding_local_ctx: int = 4096
+    embedding_local_ctx: int = 8192
     embedding_local_repo: str = "ggml-org/embeddinggemma-2-GGUF"
     embedding_local_model_file: str = "embeddinggemma-2-Q8_0.gguf"
     embedding_local_mmproj_file: str = "mmproj-embeddinggemma-2-Q8_0.gguf"

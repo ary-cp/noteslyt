@@ -151,6 +151,10 @@ class Transcriber:
         self.base_url = base_url
         self.language = language
         self.name = f"openai-compatible:{model}"
+        # Remembered server quirk (see transcribe): once verbose_json without
+        # a language fails, skip it on every later call instead of replaying
+        # a doomed request (+ the SDK's own retries) per audio piece.
+        self._needs_language = False
 
     def _create(self, audio_path: Path, response_format: str, language: str | None):
         with audio_path.open("rb") as fh:
@@ -165,6 +169,14 @@ class Transcriber:
 
     def transcribe(self, audio_path: Path) -> list[Segment]:
         fallback_lang = self.language or "en"
+        if self._needs_language:
+            # Known quirk of this endpoint: verbose_json requires a language.
+            # Go straight to the working params — no wasted round trips.
+            try:
+                result = self._create(audio_path, "verbose_json", fallback_lang)
+            except Exception:
+                result = self._transcribe_with_timestamps(audio_path, fallback_lang)
+            return self._to_segments(result, audio_path)
         try:
             result = self._create(audio_path, "verbose_json", self.language)
         except Exception as exc:
@@ -184,6 +196,7 @@ class Transcriber:
             )
             if not retryable:
                 raise
+            self._needs_language = True
             try:
                 result = self._create(audio_path, "verbose_json", fallback_lang)
             except Exception:
