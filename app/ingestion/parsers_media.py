@@ -79,6 +79,25 @@ def _ffmpeg() -> str:
     return exe
 
 
+def _wav_sample_bytes(wav: bytes) -> int:
+    """Usable PCM payload size of a WAV buffer.
+
+    Returns 0 for header-only/truncated output. ffmpeg can write a data-chunk
+    header declaring N bytes and then deliver fewer (seeking past EOF, or a
+    fast-seek overshoot of a few samples), so the declared size alone is not
+    trusted. Anything under a second of audio is unusable for an embedding —
+    and far below what any real segment slice contains.
+    """
+    idx = wav.find(b"data")
+    if idx < 0 or idx + 8 > len(wav):
+        return 0
+    declared = int.from_bytes(wav[idx + 4:idx + 8], "little")
+    actual = len(wav) - (idx + 8)
+    if declared <= 0 or actual < min(declared, 32000):
+        return 0
+    return actual
+
+
 def slice_audio_wav(source: Path, start_s: float, end_s: float) -> bytes:
     """Cut `[start_s, end_s]` from an audio/video file as 16 kHz mono WAV bytes.
 
@@ -103,6 +122,11 @@ def slice_audio_wav(source: Path, start_s: float, end_s: float) -> bytes:
         raise ParserError(f"Audio slicing of {source.name} timed out.") from exc
     if not proc.stdout:
         raise ParserError(f"Audio slice of {source.name} came back empty.")
+    if _wav_sample_bytes(proc.stdout) <= 0:
+        raise ParserError(
+            f"Audio slice [{start_s:.1f}s–{end_s:.1f}s] of {source.name} holds no samples "
+            "(segment timestamps run past the file duration?)."
+        )
     return proc.stdout
 
 

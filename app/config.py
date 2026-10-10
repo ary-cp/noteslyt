@@ -69,21 +69,58 @@ class Settings(BaseSettings):
     embedding_model: str = "embeddinggemma-2-GGUF"
     embedding_batch_size: int = 64
     embedding_dim: int = 768             # must match the model + pgvector column
+    # Where vectors come from:
+    #   "local" — the default. A vendored llama-server (downloaded to
+    #             EMBEDDING_LOCAL_DIR on first boot) serves the joint model
+    #             below, with wake-on-API and idle unload. No provider
+    #             endpoint needed; EMBEDDING_*_URL/KEY are ignored.
+    #   "cloud" — classic behaviour: EMBEDDING_BASE_URL/API_KEY/MODEL win.
+    # Scripts without an app lifespan (eval, mocks) must use cloud.
+    embedding_mode: Literal["local", "cloud"] = "local"
+    # Vendored engine + weights layout (override the model paths to use your
+    # own files instead of the managed download):
+    #   <dir>/engine/   llama-server build + BUILD_TAG
+    #   <dir>/models/   weights + mmproj projector
+    #   <dir>/logs/     llama-server.log
+    embedding_local_dir: Path = Path("./data/llama")
+    embedding_local_host: str = "127.0.0.1"
+    embedding_local_port: int = 8899
+    embedding_local_ctx: int = 4096
+    embedding_local_repo: str = "ggml-org/embeddinggemma-2-GGUF"
+    embedding_local_model_file: str = "embeddinggemma-2-Q8_0.gguf"
+    embedding_local_mmproj_file: str = "mmproj-embeddinggemma-2-Q8_0.gguf"
+    embedding_local_model_path: Path | None = None
+    embedding_local_mmproj_path: Path | None = None
+    embedding_idle_unload_s: int = 600   # 0 = keep the server up forever
+    llama_github_repo: str = "ggml-org/llama.cpp"
     # How audio/video sources are vectorized:
     #   "transcript" — embed the Whisper/transcript text (default; works with any
     #                   text embedding model, including EmbeddingGemma).
     #   "native"     — embed the raw audio bytes of each ~20 s segment via
-    #                   `Embedder.embed_audio` (data-URI POST, same pattern as
-    #                   images). Needs a joint audio-text embedding model whose
-    #                   audio and text vectors share one space — a text-only
-    #                   server may 200 the request while embedding the URI text,
-    #                   which silently destroys retrieval. Probes on 2026-10-09
-    #                   showed EmbeddingGemma behaves exactly that way (two
-    #                   different blobs: cosine 0.96), so keep "transcript"
-    #                   unless your endpoint truly encodes audio.
+    #                   `Embedder.embed_audio` (nested input_audio parts, per
+    #                   ggml-org/llama.cpp#30082). Needs a joint audio-text
+    #                   audio and text vectors share one space, served by an
+    #                   engine that really encodes bytes: LM Studio's embedding
+    #                   endpoint is text-only and tokenizes the data URI as text
+    #                   (verified 2026-10-10: sine-vs-noise cosine 0.97, two
+    #                   different images 0.996 — the vectors look valid but
+    #                   retrieval is meaningless). Use llama.cpp with a joint
+    #                   model (e.g. embeddinggemma-2-GGUF + mmproj) and confirm
+    #                   with `uv run python scripts/probe_multimodal.py` first.
     # Switching modes changes the vector space: re-ingest the corpus
     # (`uv run python scripts/re_embed.py --force`) after switching.
     audio_embed_mode: Literal["transcript", "native"] = "transcript"
+
+    # How lecture-video segments are vectorized:
+    #   "transcript" — embed the transcript (+ vision captions when enabled).
+    #   "native"     — embed the segment's midpoint keyframe via
+    #                   `Embedder.embed_image`, so retrieval matches what is
+    #                   *shown*, not just what is said. Same precondition as
+    #                   audio native: joint model + byte-encoding engine, proven
+    #                   by `scripts/probe_multimodal.py`, then re-ingest.
+    # (With AUDIO_EMBED_MODE=native, video falls back to soundtrack vectors;
+    # VIDEO_EMBED_MODE=native takes precedence for video and uses frames.)
+    video_embed_mode: Literal["transcript", "native"] = "transcript"
 
     # --------------------------------------------------------- Transcription
     # Speech-to-text for lecture videos. Any OpenAI-compatible
@@ -97,6 +134,20 @@ class Settings(BaseSettings):
     # `verbose_json` without an explicit language — see app/transcription.py,
     # which falls back to `json` in that case.
     transcription_language: str | None = None
+
+    # ------------------------------------------------------- Video keyframes
+    # Lecture videos carry a visual track the transcript misses (slides,
+    # equations, diagrams). One frame per Nth segment unit is captioned by the
+    # vision chat model and the caption joins the unit text — same locator,
+    # same chunk, so captions are searchable and citable with any text
+    # embedder. Near-duplicate frames (static slides) are skipped by hash.
+    # A text-only chat model cannot caption: the first vision failure stops
+    # captioning for that ingest with a readable warning, transcript intact.
+    video_captions: bool = True
+    video_frame_every_n: int = 3        # caption every Nth segment unit
+    video_frame_width: int = 640        # px; aspect preserved
+    video_frame_hamming: int = 6        # below this distance a frame is a dup
+    video_max_frames: int = 120         # per-source caption budget
 
     # ------------------------------------------------------------- Firecrawl
     # POST /v2/parse accepts a raw PDF upload and, with `pages: true`, returns
@@ -212,11 +263,19 @@ class Settings(BaseSettings):
     # Callers must use these resolved_* properties, never the raw fields, or
     # they will silently fall back to the LLM provider.
     @property
+    def embedding_local_base_url(self) -> str:
+        return f"http://{self.embedding_local_host}:{self.embedding_local_port}/v1"
+
+    @property
     def resolved_embedding_base_url(self) -> str:
+        if self.embedding_mode == "local":
+            return self.embedding_local_base_url
         return self.embedding_base_url or self.llm_base_url
 
     @property
     def resolved_embedding_api_key(self) -> str:
+        if self.embedding_mode == "local":
+            return "local"
         return self.embedding_api_key or self.llm_api_key
 
     @property
@@ -254,6 +313,12 @@ class Settings(BaseSettings):
         (e.g. a Groq `gsk_...` posted to api.openai.com -> opaque 401).
         """
         warnings: list[str] = []
+        if self.embedding_mode == "local" and self.embedding_base_url:
+            warnings.append(
+                "EMBEDDING_MODE=local ignores EMBEDDING_BASE_URL/API_KEY/MODEL — "
+                "vectors come from the vendored server. Unset them or switch "
+                "to EMBEDDING_MODE=cloud to avoid confusion."
+            )
         for capability in ("embedding", "transcription"):
             own_base_url = getattr(self, f"{capability}_base_url")
             own_key = getattr(self, f"{capability}_api_key")

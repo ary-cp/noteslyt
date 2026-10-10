@@ -419,7 +419,7 @@ class QuizService:
             return replay(prior)
         # Provider calls stay outside the lock. Recheck after acquiring it:
         # another request may already have committed this answer.
-        correct, expected, feedback = self._grade(question, answer)
+        correct, expected, feedback, missed = self._grade(question, answer)
         with self.quizzes.learner_write(user_id, quiz.project_id):
             prior = self.quizzes.find_answer(quiz.id, question.id, user_id)
             if prior is not None:
@@ -431,7 +431,7 @@ class QuizService:
             if question.topic_id:
                 updated = self.memory.apply_result(user_id, quiz.project_id, question.topic_id, correct, self.bkt)
                 p_after = float(updated["p_mastery"])
-            self.quizzes.record_answer(quiz.id, question.id, user_id, _given_text(answer), correct, p_before, p_after, feedback=feedback)
+            self.quizzes.record_answer(quiz.id, question.id, user_id, _given_text(answer), correct, p_before, p_after, feedback=feedback, missed=missed)
             topic = self._topic_memory(user_id, quiz.project_id, question.topic_id)
             payload = self._answer_payload(quiz, question, topic, correct, _given_text(answer), p_before, p_after)
             payload["feedback"] = feedback
@@ -616,7 +616,12 @@ class QuizService:
         return out
 
     # ---------------------------------------------------------- grading
-    def _grade(self, question, answer: int | float | str) -> tuple[bool, object, str]:
+    def _grade(self, question, answer: int | float | str) -> tuple[bool, object, str, list[str]]:
+        """Grade an answer. Returns (correct, expected, feedback, missed_points).
+
+        `missed_points` feeds the post-assessment misconception report: rubric
+        misses for short answers, a chose-vs-correct note for MCQ/numerical.
+        """
         if question.qtype == "mcq":
             if isinstance(answer, bool) or not isinstance(answer, int):
                 raise QuizError("MCQ answers must be an option index (integer).")
@@ -625,10 +630,12 @@ class QuizService:
             if not 0 <= answer < len(options):
                 raise QuizError(f"Option index out of range (0–{len(options) - 1}).")
             correct = answer == key
-            return correct, options[key] if key is not None and key < len(options) else None, (
+            expected = options[key] if key is not None and key < len(options) else None
+            missed = [] if correct else [f"Chose '{options[answer]}' — correct answer: '{expected}'"]
+            return correct, expected, (
                 f"Correct. {question.explanation}" if correct
                 else f"Not quite — the answer is {options[key] if key is not None else '?'}. {question.explanation}"
-            ).strip()
+            ).strip(), missed
         if question.qtype == "short_answer":
             if not isinstance(answer, str) or not answer.strip():
                 raise QuizError("Short answers must be non-empty text.")
@@ -643,14 +650,15 @@ class QuizService:
             unit = str(key.get("unit", ""))
             correct = abs(value - target) <= tol
             ukey = f" {unit}" if unit else ""
+            missed = [] if correct else [f"Answered {value}{ukey} — correct value: {target}{ukey} (±{tol})"]
             return correct, f"{target}{ukey}", (
                 f"Correct: {value}{ukey} is within ±{tol} of {target}{ukey}. {question.explanation}"
                 if correct else
                 f"You answered {value}{ukey}; the value is {target}{ukey} (±{tol}). {question.explanation}"
-            ).strip()
+            ).strip(), missed
         raise QuizError(f"Unknown question type '{question.qtype}'.")
 
-    def _grade_short(self, question, answer: str) -> tuple[bool, object, str]:
+    def _grade_short(self, question, answer: str) -> tuple[bool, object, str, list[str]]:
         key = question.answer_key or {}
         try:
             data = self.llm.complete_json(
@@ -667,9 +675,10 @@ class QuizService:
         correct = data["correct"]
         sample = str(key.get("sample_answer", ""))
         feedback = str(data.get("feedback", "")).strip()
+        missed = [str(m).strip() for m in (data.get("missed") or []) if str(m).strip()][:8]
         return correct, sample, (
             f"{feedback} {question.explanation}".strip() if feedback else question.explanation
-        )
+        ), missed
 
     # ---------------------------------------------------------- payloads
     def _topic_memory(self, user_id: str, project_id: str, topic_id: str | None) -> dict | None:
@@ -719,12 +728,15 @@ class QuizService:
             return existing.id
         detail = []
         deltas: dict[str, dict] = {}
+        points: dict[str, list[str]] = {}
         for q in questions:
             a = answers[q.id]
             tm = self._topic_memory(user_id, quiz.project_id, q.topic_id)
-            d = deltas.setdefault(q.topic_id or "", {"slug": "", "before": [], "after": []})
+            tid = q.topic_id or ""
+            d = deltas.setdefault(tid, {"slug": "", "name": "", "before": [], "after": []})
             if tm:
                 d["slug"] = tm["slug"]
+                d["name"] = tm["name"]
             d["before"].append(a.p_before)
             d["after"].append(a.p_after)
             detail.append({
@@ -732,20 +744,40 @@ class QuizService:
                 "given": a.given, "correct": a.correct,
                 "citation": citation_label(q.locator_kind, q.locator_value),
             })
+            bucket = points.setdefault(tid, [])
+            for point in list(getattr(a, "missed", None) or [])[:4]:
+                text = str(point).strip()[:280]
+                if text and text not in bucket and len(bucket) < 3:
+                    bucket.append(text)
         correct = sum(1 for q in questions if answers[q.id].correct)
         mem = self.memory.list_for_project(user_id, quiz.project_id)
         weakest = min(mem, key=lambda r: (float(r.p_mastery), r.name)) if mem else None
         label = f"Quiz — {correct}/{len(questions)} correct"
+
+        def _avg(vals: list[float]) -> float | None:
+            return round(sum(vals) / len(vals), 4) if vals else None
+
+        mastery_delta = [
+            {"slug": v["slug"] or "(untagged)",
+             "name": v["name"] or v["slug"] or "(untagged)",
+             "p_before": _avg(v["before"]), "p_after": _avg(v["after"])}
+            for v in deltas.values()
+        ]
+        after_of = {d["slug"]: (d["p_after"] if d["p_after"] is not None else 1.0) for d in mastery_delta}
+        misconceptions = [
+            {"slug": deltas[tid]["slug"] or "(untagged)",
+             "name": deltas[tid]["name"] or deltas[tid]["slug"] or "(untagged)",
+             "points": pts}
+            for tid, pts in points.items() if pts
+        ]
+        misconceptions.sort(key=lambda m: after_of.get(m["slug"], 1.0))
         report = {
             "score": {"correct": correct, "total": len(questions)},
             "questions": detail,
-            "mastery_delta": [
-                {"slug": v["slug"] or "(untagged)",
-                 "p_before": round(sum(v["before"]) / len(v["before"]), 4) if v["before"] else None,
-                 "p_after": round(sum(v["after"]) / len(v["after"]), 4) if v["after"] else None}
-                for v in deltas.values()
-            ],
+            "mastery_delta": mastery_delta,
+            "misconceptions": misconceptions,
             "next_up": weakest.slug if weakest else None,
+            "next_up_name": weakest.name if weakest else None,
         }
         row = self.quizzes.create_assessment(quiz.project_id, user_id, label, [quiz.id], report)
         try:

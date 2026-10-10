@@ -45,7 +45,7 @@ from ..ingestion.registry import parse_source
 from ..repo.projects import ProjectRepo
 from ..repo.sources import SourceRepo
 from ..repo.topics import TopicRepo
-from ..schemas import ParsedContentOut, SourceOut, SourceUploadAccepted, TopicSummary
+from ..schemas import ParsedContentOut, SourceOut, SourceUploadAccepted, TopicGraphOut, TopicSummary
 from ..storage import (
     FileStorage,
     content_type_for,
@@ -227,6 +227,33 @@ def list_topics(
             )
         )
     return out
+
+
+@router.get("/projects/{project_id}/topic-graph", response_model=TopicGraphOut)
+def get_topic_graph(
+    project_id: str,
+    user: CurrentUser,
+    projects: Annotated[ProjectRepo, Depends(get_projects)],
+    pipeline: Annotated[IngestionPipeline, Depends(get_pipeline)],
+) -> TopicGraphOut:
+    """Prerequisite graph over the project's topics, for the flow map."""
+    require_project(projects, project_id, user.id)
+    return TopicGraphOut(**pipeline.topic_graph(project_id))
+
+
+@router.post("/projects/{project_id}/topic-graph/refresh", response_model=TopicGraphOut)
+def refresh_topic_graph(
+    project_id: str,
+    user: CurrentUser,
+    projects: Annotated[ProjectRepo, Depends(get_projects)],
+    pipeline: Annotated[IngestionPipeline, Depends(get_pipeline)],
+) -> TopicGraphOut:
+    """Re-infer prerequisite edges from the project's current topics (one LLM call)."""
+    require_project(projects, project_id, user.id)
+    try:
+        return TopicGraphOut(**pipeline.refresh_prereq_edges(project_id))
+    except Exception as exc:  # noqa: BLE001 — readable error, never a bare 500
+        raise HTTPException(status_code=502, detail=f"Prerequisite inference failed: {exc}") from exc
 
 
 @router.get("/projects/{project_id}/ingest-status")

@@ -1,22 +1,24 @@
 import type * as React from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Brain,
+  CalendarDays,
   ClipboardList,
   FileText,
   GraduationCap,
-  Layers,
   Loader2,
-  Map,
+  PanelRight,
+  Presentation,
   // Mic,
-  // Presentation,
   Sparkles,
   // TableProperties,
 } from "lucide-react";
-import { createExam, createFlashcards, createQuiz, fetchLearner, getQuizAnswers, listStudioJobs, listTopics, saveStudioArtifact, submitAnswer } from "../../lib/api";
-import type { AnswerOut, LearnerOut, QuizOut, SourceOut, StudioJob, TopicSummary } from "../../lib/types";
+import { MdQuiz } from "react-icons/md";
+import { PiCardsThreeBold } from "react-icons/pi";
+import { RiMindMap } from "react-icons/ri";
+import { createExam, createFlashcards, createQuiz, fetchLearner, getQuizAnswers, getReport, getTopicGraph, listStudioJobs, listTopics, refreshTopicGraph, saveStudioArtifact, submitAnswer } from "../../lib/api";
+import type { AnswerOut, AssessmentReportOut, LearnerOut, QuizOut, SourceOut, StudioJob, TopicGraph, TopicSummary } from "../../lib/types";
 import { useToast } from "../../lib/toast";
-import { Button } from "../../components/ui/Button";
+import { Button, IconButton } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/Feedback";
 import { Modal } from "../../components/ui/Modal";
 import { Dropdown } from "../../components/ui/Menu";
@@ -24,17 +26,18 @@ import { Field, RadioGroup, Slider } from "../../components/ui/Controls";
 import { MarkdownBody } from "../chat/ChatPanel";
 import { timeAgo } from "../../lib/utils";
 
-export type StudioTool = "summary" | "flashcards" | "quiz" | "exam" | "guide" | "mindmap" | "podcast" | "slides" | "sheet";
+export type StudioTool = "summary" | "flashcards" | "quiz" | "exam" | "guide" | "mindmap" | "podcast" | "slides" | "sheet" | "schedule";
 
 const TOOLS: { id: StudioTool; title: string; desc: string; icon: React.ReactNode; ready: boolean }[] = [
   { id: "summary", title: "Summary", desc: "Key points from your sources", icon: <FileText size={16} />, ready: true },
-  { id: "quiz", title: "Quiz", desc: "Test yourself with feedback", icon: <Brain size={16} />, ready: true },
-  { id: "flashcards", title: "Flashcards", desc: "Review key concepts", icon: <Layers size={16} />, ready: true },
+  { id: "quiz", title: "Quiz", desc: "Test yourself with feedback", icon: <MdQuiz size={16} />, ready: true },
+  { id: "flashcards", title: "Flashcards", desc: "Review key concepts", icon: <PiCardsThreeBold size={16} />, ready: true },
   { id: "exam", title: "Mock exam", desc: "Timed, exam-style practice", icon: <GraduationCap size={16} />, ready: true },
   { id: "guide", title: "Study guide", desc: "Structured revision document", icon: <ClipboardList size={16} />, ready: true },
-  { id: "mindmap", title: "Mind map", desc: "See how ideas connect", icon: <Map size={16} />, ready: true },
+  { id: "mindmap", title: "Mind map", desc: "See how ideas connect", icon: <RiMindMap size={16} />, ready: true },
+  { id: "slides", title: "Slides", desc: "Present your sources", icon: <Presentation size={16} />, ready: true },
+  { id: "schedule", title: "Schedule", desc: "Revision plan to exam day", icon: <CalendarDays size={16} />, ready: true },
   // { id: "podcast", title: "Audio overview", desc: "Listen on the go", icon: <Mic size={16} />, ready: false },
-  // { id: "slides", title: "Presentation", desc: "Slides from sources", icon: <Presentation size={16} />, ready: false },
   // { id: "sheet", title: "Cheat sheet", desc: "One-page revision", icon: <TableProperties size={16} />, ready: false },
 ];
 
@@ -43,7 +46,7 @@ interface Artifact {
   kind: StudioTool;
   title: string;
   createdAt: string;
-  payload: QuizOut | { cards: { front: string; back: string }[] } | { markdown: string; toc: string[] } | { mermaid: string };
+  payload: QuizOut | { cards: { front: string; back: string }[] } | { markdown: string; toc: string[] } | { mermaid: string } | { slides: { title: string; bullets: string[] }[] };
 }
 
 function jobArtifact(job: StudioJob): Artifact {
@@ -55,21 +58,32 @@ export function StudioPanel({
   projectId,
   sources,
   selectedSources,
+  onHide,
 }: {
   projectId: string;
   sources: SourceOut[];
   selectedSources: SourceOut[];
+  onHide: () => void;
 }) {
   const { push } = useToast();
   const [topics, setTopics] = useState<TopicSummary[]>([]);
   const [learner, setLearner] = useState<LearnerOut | null>(null);
+  const [graph, setGraph] = useState<TopicGraph | null>(null);
   const [jobs, setJobs] = useState<StudioJob[]>([]);
   const [genTool, setGenTool] = useState<StudioTool | null>(null);
   const [busy, setBusy] = useState(false);
   const [count, setCount] = useState(10);
   const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("medium");
   const [topicId, setTopicId] = useState("");
+  const [mapStyle, setMapStyle] = useState<"star" | "flow">("star");
+  const [graphBusy, setGraphBusy] = useState(false);
   const [focus, setFocus] = useState("");
+  const [examDate, setExamDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 14);
+    return d.toISOString().slice(0, 10);
+  });
+  const [minsPerDay, setMinsPerDay] = useState(30);
   const [viewing, setViewing] = useState<Artifact | null>(null);
 
   useEffect(() => {
@@ -78,20 +92,22 @@ export function StudioPanel({
     listStudioJobs(projectId).then((rows) => { if (active) setJobs(rows); }).catch(() => undefined);
     listTopics(projectId).then((rows) => { if (active) setTopics(rows); }).catch(() => undefined);
     fetchLearner(projectId).then((row) => { if (active) setLearner(row); }).catch(() => undefined);
+    getTopicGraph(projectId).then((g) => { if (active) setGraph(g); }).catch(() => undefined);
     return () => { active = false; };
   }, [projectId]);
 
   const sourceRevision = sources.map((s) => `${s.id}:${s.status}`).join(',');
   useEffect(() => {
     let active = true;
-    Promise.all([listTopics(projectId), fetchLearner(projectId)]).then(([t, l]) => {
-      if (active) { setTopics(t); setLearner(l); }
+    Promise.all([listTopics(projectId), fetchLearner(projectId), getTopicGraph(projectId)]).then(([t, l, g]) => {
+      if (active) { setTopics(t); setLearner(l); setGraph(g); }
     }).catch(() => undefined);
     return () => { active = false; };
   }, [projectId, sourceRevision]);
   const refreshLearner = () => {
     void fetchLearner(projectId).then(setLearner).catch(() => push("Progress could not refresh", { tone: "error" }));
     void listTopics(projectId).then(setTopics).catch(() => undefined);
+    void getTopicGraph(projectId).then(setGraph).catch(() => undefined);
   };
 
   const hasPendingJobs = jobs.some((j) => j.status === "queued" || j.status === "generating");
@@ -138,6 +154,17 @@ export function StudioPanel({
     ? `${selectedSources.length} selected source${selectedSources.length > 1 ? "s" : ""}`
     : "no sources selected";
 
+  // "Learn X first" for study guides: the weakest in-scope topic's prerequisite,
+  // when the graph knows one. Names only — no mastery numbers leave this card.
+  const learnFirstLine = (): string[] => {
+    const weakInScope = (learner?.weakest ?? []).find((w) => scopedTopics.some((t) => t.id === w.topic_id));
+    if (!weakInScope || !graph) return [];
+    const prereq = graph.edges.find((e) => e.topic_slug === weakInScope.slug);
+    if (!prereq || !scopedTopics.some((t) => t.slug === prereq.prereq_slug)) return [];
+    const name = graph.nodes.find((n) => n.slug === prereq.prereq_slug)?.name ?? prereq.prereq_slug;
+    return [`Learn **${name}** first — it unlocks ${weakInScope.name}.`, ``];
+  };
+
   const generate = async () => {
     if (!genTool || busy) return;
     if (readySources.length === 0) {
@@ -156,7 +183,7 @@ export function StudioPanel({
         const job = await create(projectId, {
           topic_id: topicId || undefined,
           n_questions: n,
-          qtypes: ["mcq", "short_answer"],
+          qtypes: ["mcq", "short_answer", "numerical"],
           source_ids: selectedSources.map((source) => source.id),
         });
         setJobs((prev) => [job, ...prev.filter((j) => j.id !== job.id)]);
@@ -171,8 +198,6 @@ export function StudioPanel({
         push("Flashcard generation started", { tone: "success" });
       } else if (genTool === "summary" || genTool === "guide" || genTool === "sheet") {
         const names = selectedSources.map((s) => s.filename).join(", ");
-        const scopedTopicIds = new Set(scopedTopics.map((topic) => topic.id));
-        const weak = (learner?.weakest ?? []).filter((topic) => scopedTopicIds.has(topic.topic_id));
         const md = [
           `# ${genTool === "guide" ? "Study guide" : genTool === "sheet" ? "Cheat sheet" : "Summary"}`,
           ``,
@@ -181,14 +206,14 @@ export function StudioPanel({
           `## What this covers`,
           ``,
           `Sources: ${names || "—"}.`,
-          scopedTopics.length ? `Topics detected: ${scopedTopics.map((t) => t.name).join(", ")}.` : `Topics are extracted during indexing.`,
+          ...(scopedTopics.length === 0 ? [`Topics are still being extracted during indexing.`] : []),
           ``,
           `## Key points`,
           ``,
           ...(scopedTopics.slice(0, 8).map((t, i) => `${i + 1}. **${t.name}** — ${t.description || `covered in ${t.sources.filter((s) => selectedIdSet.has(s.source_id)).map((s) => s.filename).join(", ") || "your sources"}`}`)),
           ...(scopedTopics.length === 0 ? [`1. Upload completes → key points appear here, each linked to its source.`] : []),
           ``,
-          ...(weak.length ? [`## Topics to review`, ``, ...weak.slice(0, 5).map((w) => `- **${w.name}** — ${Math.round(w.p_mastery * 100)}% mastery${w.attempts ? ` (${w.attempts} attempts)` : " (not practiced yet)"}`), ``, `Generate a focused quiz to practice one of these topics.`, ``] : []),
+          ...learnFirstLine(),
           `## Next step`,
           ``,
           `Generate a quiz from the same scope to check recall, or ask the chat to explain any point above.`,
@@ -205,18 +230,73 @@ export function StudioPanel({
         push("Document ready", { tone: "success" });
       } else if (genTool === "mindmap") {
         const nodes = scopedTopics.slice(0, 10);
-        const edges = nodes.slice(1).map((t, i) => `  main --> ${sanitize(nodes[i % Math.max(1, nodes.length - 1)]?.name ?? "Topic")}_${i}[${t.name.slice(0, 24)}]`);
-        const mermaid = ["graph TD", `  main[${((selectedSources[0]?.filename ?? "Project").slice(0, 28))}]`, ...edges].join("\n");
+        const inScope = new Set(nodes.map((t) => t.slug));
+        const idBySlug = new Map(nodes.map((t, i) => [t.slug, `${mermaidId(t.name, "topic")}_${i}`] as const));
+        const flowEdges = (graph?.edges ?? []).filter((e) => inScope.has(e.topic_slug) && inScope.has(e.prereq_slug));
+        let mermaid: string;
+        let titleSuffix = "";
+        if (mapStyle === "flow" && flowEdges.length > 0) {
+          // Prerequisite flow: prereq --> topic, isolated topics still shown.
+          const lines = ["graph TD"];
+          nodes.forEach((t) => {
+            lines.push(`  ${idBySlug.get(t.slug)}[${mermaidLabel(t.name, 26)}]`);
+          });
+          flowEdges.forEach((e) => {
+            lines.push(`  ${idBySlug.get(e.prereq_slug)} --> ${idBySlug.get(e.topic_slug)}`);
+          });
+          mermaid = lines.join("\n");
+          titleSuffix = " flow";
+        } else {
+          const rootName = (selectedSources[0]?.filename ?? "Project").replace(/\.[^.]+$/, "");
+          const lines = ["graph TD", `  main[${mermaidLabel(rootName)}]`];
+          nodes.forEach((t, i) => {
+            lines.push(`  main --> ${mermaidId(t.name, "topic")}_${i}[${mermaidLabel(t.name, 26)}]`);
+          });
+          mermaid = lines.join("\n");
+        }
         const art: Artifact = {
           id: `mm-${Date.now()}`,
           kind: "mindmap",
-          title: `Mind map · ${new Date().toLocaleDateString()}`,
+          title: `Mind map${titleSuffix} · ${new Date().toLocaleDateString()}`,
           createdAt: new Date().toISOString(),
           payload: { mermaid },
         };
         await persist(art);
         setViewing(art);
         push("Mind map ready", { tone: "success" });
+      } else if (genTool === "slides") {
+        const deck = buildSlides(
+          selectedSources.length > 0 ? selectedSources[0].filename : "Project",
+          scopedTopics.slice(0, 8),
+          selectedIdSet,
+        );
+        const art: Artifact = {
+          id: `sl-${Date.now()}`,
+          kind: "slides",
+          title: `Slides · ${new Date().toLocaleDateString()}`,
+          createdAt: new Date().toISOString(),
+          payload: { slides: deck },
+        };
+        await persist(art);
+        setViewing(art);
+        push("Slides ready", { tone: "success" });
+      } else if (genTool === "schedule") {
+        const masteryById = new Map((learner?.topics ?? []).map((t) => [t.topic_id, t.p_mastery]));
+        const md = buildSchedule(
+          scopedTopics.map((t) => ({ name: t.name, p: masteryById.get(t.id) ?? 0.3 })),
+          examDate,
+          minsPerDay,
+        );
+        const art: Artifact = {
+          id: `sch-${Date.now()}`,
+          kind: "schedule",
+          title: `Study schedule · ${new Date().toLocaleDateString()}`,
+          createdAt: new Date().toISOString(),
+          payload: { markdown: md, toc: ["Plan"] },
+        };
+        await persist(art);
+        setViewing(art);
+        push("Schedule ready", { tone: "success" });
       }
     } catch (e) {
       push("Generation failed", { detail: e instanceof Error ? e.message : String(e), tone: "error" });
@@ -229,7 +309,12 @@ export function StudioPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 border-b border-[var(--border)] px-3.5 pt-3 pb-2.5">
-        <h2 className="text-[13px] font-semibold tracking-wide">Studio</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-[13px] font-semibold tracking-wide">Studio</h2>
+          <IconButton label="Hide studio" onClick={onHide}>
+            <PanelRight size={16} />
+          </IconButton>
+        </div>
         <p className="mt-0.5 text-xs text-[var(--text-secondary)]">Turn your sources into learning materials.</p>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
@@ -254,21 +339,10 @@ export function StudioPanel({
         </div>
 
         {learner && learner.topics.length > 0 && (
-          <div className="mt-4 rounded-[8px] border border-[var(--border)] bg-[var(--surface)] p-3">
-            <p className="text-xs font-medium text-[var(--text-muted)]">YOUR LEARNING PROFILE</p>
-            <p className="mt-1 text-xs text-[var(--text-muted)]">Saved topics · mastery updates after each quiz answer.</p>
-            <div className="mt-2 grid max-h-64 gap-3 overflow-y-auto">
-              {learner.topics.map((w) => (
-                <div key={w.topic_id} className="flex min-w-0 items-center gap-2 text-[13px]">
-                  <span className="min-w-0 flex-1"><span className="block">{w.name}</span><span className="block text-[11px] text-[var(--text-muted)]">{w.attempts ? `${w.correct}/${w.attempts} correct · ${w.coverage_status.replaceAll("_", " ")}` : "Take a quiz to assess this topic"}</span></span>
-                  {w.attempts > 0 ? <span className="shrink-0 font-mono text-xs text-[var(--text-muted)]">{Math.round(w.p_mastery * 100)}%</span> : <span className="shrink-0 text-[11px] text-[var(--text-muted)]">Not practiced</span>}
-                  <span className="h-1 w-16 shrink-0 overflow-hidden rounded-full bg-[var(--border)]">
-                    {w.attempts > 0 && <span className="block h-full max-w-full rounded-full bg-gradient-to-r from-amber-500 via-teal-500 to-sky-500" style={{ width: `${Math.max(0, Math.min(100, Math.round(w.p_mastery * 100)))}%` }} />}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
+          <LearningProfileCard
+            learner={learner}
+            onStartDiagnostic={() => setGenTool("quiz")}
+          />
         )}
 
         <div className="mt-4">
@@ -325,21 +399,62 @@ export function StudioPanel({
         }
       >
         <div className="grid gap-3.5">
-          <Field label="Topic">
-            <Dropdown
-              value={topicId}
-              onChange={setTopicId}
-              ariaLabel="Topic"
-              options={[{ value: "", label: genTool === "flashcards" ? "All selected sources" : "Mixed (weakest first)" }, ...scopedTopics.map((t) => ({ value: t.id, label: t.name }))]}
-            />
-          </Field>
+          {(genTool === "quiz" || genTool === "exam" || genTool === "flashcards") && (
+            <Field label="Topic" hint="Blank = automatic: a spread across your material for new learners, weakest areas first once you've practiced.">
+              <Dropdown
+                value={topicId}
+                onChange={setTopicId}
+                ariaLabel="Topic"
+                options={[{ value: "", label: genTool === "flashcards" ? "All selected sources" : "Mixed (weakest first)" }, ...scopedTopics.map((t) => ({ value: t.id, label: t.name }))]}
+              />
+            </Field>
+          )}
           {(genTool === "quiz" || genTool === "exam" || genTool === "flashcards") && (
             <Field label={genTool === "flashcards" ? `Flashcards · ${count}` : `${genTool === "exam" ? "Questions" : "Quiz questions"} · ${count}`} hint={`Choose from 5 to ${genTool === "exam" ? 30 : genTool === "flashcards" ? 20 : 10}.`}>
               <Slider value={count} min={5} max={genTool === "exam" ? 30 : genTool === "flashcards" ? 20 : 10} onChange={setCount} ariaLabel={genTool === "exam" ? "Number of exam questions" : genTool === "flashcards" ? "Number of flashcards" : "Number of quiz questions"} />
               <div className="mt-1 flex justify-between font-mono text-[11px] text-[var(--text-muted)]"><span>5</span><span>{genTool === "exam" ? 30 : genTool === "flashcards" ? 20 : 10}</span></div>
             </Field>
           )}
-          {genTool !== "quiz" && genTool !== "exam" && genTool !== "flashcards" && <><Field label="Difficulty">
+          {genTool === "mindmap" && (
+            <Field label="Map style">
+              <RadioGroup value={mapStyle} onChange={setMapStyle} ariaLabel="Map style" options={[
+                { value: "star", label: "Topics star" },
+                { value: "flow", label: "Prerequisite flow" },
+              ]} />
+            </Field>
+          )}
+          {genTool === "mindmap" && (
+            <div className="rounded-[7px] bg-[var(--surface-secondary)] px-2.5 py-2 text-[13px] text-[var(--text-secondary)]">
+              {(graph?.edges.length ?? 0) > 0 ? (
+                <>Prerequisite map ready ({graph?.edges.length} links). Pick “Prerequisite flow” above for a dependency map.</>
+              ) : (
+                <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span>No prerequisite links yet.</span>
+                  <button
+                    type="button"
+                    disabled={graphBusy}
+                    onClick={() => {
+                      setGraphBusy(true);
+                      refreshTopicGraph(projectId)
+                        .then((g) => {
+                          setGraph(g);
+                          push(g.edges.length ? "Prerequisite map ready" : "No prerequisites found", {
+                            detail: g.edges.length ? `${g.edges.length} dependency links.` : "Your topics look independent.",
+                            tone: g.edges.length ? "success" : "info",
+                          });
+                        })
+                        .catch((e: unknown) => push("Map build failed", { detail: e instanceof Error ? e.message : String(e), tone: "error" }))
+                        .finally(() => setGraphBusy(false));
+                    }}
+                    className="cursor-pointer font-medium text-[var(--accent)] hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {graphBusy ? "Building…" : "Build prerequisite map"}
+                  </button>
+                </span>
+              )}
+            </div>
+          )}
+          {genTool !== "quiz" && genTool !== "exam" && genTool !== "flashcards" && genTool !== "mindmap" && genTool !== "slides" && genTool !== "schedule" && <><Field label="Difficulty">
             <RadioGroup value={difficulty} onChange={setDifficulty} ariaLabel="Difficulty" options={[
               { value: "easy", label: "Easy" },
               { value: "medium", label: "Medium" },
@@ -355,6 +470,22 @@ export function StudioPanel({
             />
           </Field>
           </>}
+          {genTool === "schedule" && (
+            <>
+              <Field label="Exam date" hint="The plan runs from today to this date (max 30 days).">
+                <input
+                  type="date"
+                  value={examDate}
+                  onChange={(e) => setExamDate(e.target.value)}
+                  className="h-9 w-full rounded-[7px] border border-[var(--border)] bg-[var(--input)] px-2.5 text-sm outline-none focus:border-[var(--accent)]"
+                />
+              </Field>
+              <Field label={`Minutes per day · ${minsPerDay}`}>
+                <Slider value={minsPerDay} min={10} max={120} onChange={setMinsPerDay} ariaLabel="Minutes per day" />
+                <div className="mt-1 flex justify-between font-mono text-[11px] text-[var(--text-muted)]"><span>10</span><span>120</span></div>
+              </Field>
+            </>
+          )}
           {busy && <p className="text-[13px] text-[var(--text-secondary)]">Generating… this calls your project corpus.</p>}
         </div>
       </Modal>
@@ -364,8 +495,127 @@ export function StudioPanel({
   );
 }
 
-function sanitize(s: string) {
-  return s.replace(/[^a-zA-Z0-9 ]/g, "").slice(0, 24) || "Topic";
+/** Mermaid flowchart node id: letters and digits only (spaces break parsing). */
+function mermaidId(s: string, fallback: string): string {
+  return s.replace(/[^a-zA-Z0-9]/g, "").slice(0, 20) || fallback;
+}
+
+/** Mermaid flowchart label: quoted, with diagram-breaking characters stripped. */
+function mermaidLabel(s: string, max = 28): string {
+  const clean = s.replace(/["#<>`[\]{}()|\\]/g, "").replace(/\s+/g, " ").trim().slice(0, max) || "Topic";
+  return `"${clean}"`;
+}
+
+/** Slide deck from already-fetched topics — deterministic, no LLM call. */
+function buildSlides(
+  sourceName: string,
+  topics: TopicSummary[],
+  selectedIds: Set<string>,
+): { title: string; bullets: string[] }[] {
+  const slides: { title: string; bullets: string[] }[] = [
+    {
+      title: `Study deck · ${sourceName.replace(/\.[^.]+$/, "")}`,
+      bullets: topics.length ? [`${topics.length} key topics`, "Use ← → keys to present"] : ["Add sources to fill this deck"],
+    },
+  ];
+  topics.forEach((t) => {
+    const files = t.sources.filter((s) => selectedIds.has(s.source_id)).map((s) => s.filename);
+    slides.push({
+      title: t.name,
+      bullets: [
+        t.description || "Key concept from your sources",
+        ...(files.length ? [`Sources: ${files.slice(0, 3).join(", ")}`] : []),
+      ].filter(Boolean).slice(0, 4),
+    });
+  });
+  slides.push({ title: "Next step", bullets: ["Generate a quiz to check recall", "Ask the chat to explain any slide"] });
+  return slides;
+}
+
+/**
+ * Heuristic revision planner (frontend-only, labelled as such in the output):
+ * weakest topics first, revisits on expanding gaps, capped by minutes/day.
+ * This schedules practice — it never claims to measure forgetting curves.
+ */
+function buildSchedule(items: { name: string; p: number }[], examDateISO: string, mins: number): string {
+  if (!items.length) return `# Study schedule\n\n_Add sources first — topics appear here once indexing extracts them._`;
+  const ordered = [...items].sort((a, b) => a.p - b.p);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const end = new Date(`${examDateISO}T00:00:00`);
+  let days = Math.round((end.getTime() - today.getTime()) / 86400000) + 1;
+  if (!Number.isFinite(days) || days < 1) days = 1;
+  days = Math.min(days, 30);
+  const perDay = Math.max(1, Math.min(3, Math.round(mins / 30)));
+  const perTopic = Math.max(10, Math.round(mins / perDay));
+  const tasks = ["Learn", "Practice", "Revise"];
+  const queue = ordered.map((t, i) => ({ ...t, due: i < perDay ? 0 : 1, round: 0 }));
+  const lines = [
+    `# Study schedule`,
+    ``,
+    `_Heuristic plan to ${end.toLocaleDateString()} — weakest topics first, revisits on expanding gaps (${perTopic} min each, ${mins} min/day)._`,
+    ``,
+    `| Day | Date | Focus |`,
+    `| --- | --- | --- |`,
+  ];
+  for (let d = 0; d < days; d++) {
+    const date = new Date(today);
+    date.setDate(date.getDate() + d);
+    const dueNow = queue
+      .filter((q) => q.due <= d)
+      .sort((a, b) => a.p - b.p || a.round - b.round)
+      .slice(0, perDay);
+    const focus = d === days - 1 && days > 1
+      ? "Exam eve — light review only"
+      : dueNow.length
+        ? dueNow.map((q) => {
+            const task = tasks[Math.min(q.round, tasks.length - 1)];
+            q.round += 1;
+            q.due = d + (q.round === 1 ? 2 : 5);
+            q.p = Math.min(0.95, q.p + 0.15);
+            return `${task}: ${q.name}`;
+          }).join("; ")
+        : "Rest or catch up";
+    lines.push(`| ${d + 1} | ${date.toLocaleDateString()} | ${focus} |`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * The learner sees one number only: overall mastery across the project's
+ * topics. Per-topic names, attempt counts and coverage stay server-side —
+ * they drive adaptive quizzes but are never disclosed.
+ */
+function LearningProfileCard({ learner, onStartDiagnostic }: { learner: LearnerOut; onStartDiagnostic: () => void }) {
+  const overall = Math.round((learner.topics.reduce((sum, t) => sum + t.p_mastery, 0) / learner.topics.length) * 100);
+  const practiced = learner.topics.some((t) => t.attempts > 0);
+  return (
+    <div className="mt-4 rounded-[8px] border border-[var(--border)] bg-[var(--surface)] p-3">
+      <p className="text-xs font-medium text-[var(--text-muted)]">YOUR LEARNING PROFILE</p>
+      <div className="mt-2 flex items-center gap-3">
+        <p className="text-[28px] font-semibold leading-none">{overall}%</p>
+        <div className="min-w-0 flex-1">
+          <div className="h-1.5 overflow-hidden rounded-full bg-[var(--border)]">
+            <div className="h-full rounded-full bg-[var(--accent)]" style={{ width: `${overall}%` }} />
+          </div>
+          <p className="mt-1.5 text-xs text-[var(--text-muted)]">Overall mastery · updates after each quiz answer.</p>
+        </div>
+      </div>
+      {!practiced && (
+        <div className="mt-3 rounded-[7px] bg-[var(--surface-secondary)] p-2.5">
+          <p className="text-[13px] font-medium">New here? Start with a diagnostic.</p>
+          <p className="mt-0.5 text-xs text-[var(--text-muted)]">A short mixed quiz across your sources finds your level.</p>
+          <button
+            type="button"
+            onClick={onStartDiagnostic}
+            className="mt-2 inline-flex h-8 cursor-pointer items-center rounded-[7px] bg-[var(--accent)] px-3 text-[13px] font-medium text-white hover:bg-[var(--accent-hover)]"
+          >
+            Start diagnostic quiz
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /* ---------------- artifact viewer ---------------- */
@@ -380,6 +630,8 @@ function ArtifactViewer({ artifact, onClose, onAnswered }: { artifact: Artifact 
         <Flashcards cards={(artifact.payload as { cards: { front: string; back: string }[] }).cards ?? []} requested={(artifact.payload as { requested?: number }).requested} />
       ) : artifact.kind === "mindmap" ? (
         <MindMapView mermaid={(artifact.payload as { mermaid: string }).mermaid} />
+      ) : artifact.kind === "slides" ? (
+        <SlidesViewer slides={(artifact.payload as { slides: { title: string; bullets: string[] }[] }).slides ?? []} />
       ) : (
         <DocView markdown={(artifact.payload as { markdown: string }).markdown} toc={(artifact.payload as { toc: string[] }).toc} />
       )}
@@ -414,6 +666,58 @@ function MindMapView({ mermaid }: { mermaid: string }) {
   }, []);
   if (!M) return <p className="text-sm text-[var(--text-muted)]">Loading diagram…</p>;
   return <M code={mermaid} />;
+}
+
+/* ---------------- slide deck ---------------- */
+
+function SlidesViewer({ slides }: { slides: { title: string; bullets: string[] }[] }) {
+  const [idx, setIdx] = useState(0);
+  const n = Math.max(1, slides.length);
+  const go = (dir: number) => setIdx((v) => Math.min(n - 1, Math.max(0, v + dir)));
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "ArrowRight" || e.key === " ") {
+        e.preventDefault();
+        go(1);
+      } else if (e.key === "ArrowLeft") {
+        go(-1);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [n]);
+  const slide = slides[idx] ?? { title: "No slides", bullets: [] as string[] };
+  return (
+    <div>
+      <p className="mb-2 text-center font-mono text-xs text-[var(--text-muted)]">{Math.min(idx + 1, n)} / {n}</p>
+      <div className="min-h-[220px] rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-6">
+        <p className="text-lg font-semibold">{slide.title}</p>
+        <ul className="mt-3 grid gap-2">
+          {slide.bullets.map((b, i) => (
+            <li key={i} className="flex gap-2 text-[15px]">
+              <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
+              <span className="min-w-0 flex-1"><MarkdownBody text={b} /></span>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div className="mt-3 flex items-center justify-between">
+        <Button variant="ghost" onClick={() => go(-1)} disabled={idx === 0}>Back</Button>
+        <div className="flex gap-1">
+          {slides.map((_, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => setIdx(i)}
+              aria-label={`Go to slide ${i + 1}`}
+              className={`h-1.5 cursor-pointer rounded-full transition-colors ${i === idx ? "w-6 bg-[var(--accent)]" : "w-1.5 bg-[var(--border-strong)]"}`}
+            />
+          ))}
+        </div>
+        <Button variant="ghost" onClick={() => go(1)} disabled={idx >= n - 1}>Next</Button>
+      </div>
+    </div>
+  );
 }
 
 /* ---------------- flashcards ---------------- */
@@ -483,6 +787,84 @@ function Flashcards({ cards, requested }: { cards: { front: string; back: string
   );
 }
 
+/* ---------------- post-assessment report ---------------- */
+
+/**
+ * The one place weak topics are named (3c): score deltas per topic, likely
+ * misconceptions from persisted rubric misses, and what to study next.
+ * Old reports without the new keys render their score + review list only.
+ */
+function QuizReport({ assessmentId }: { assessmentId: string }) {
+  const [report, setReport] = useState<AssessmentReportOut | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    setFailed(false);
+    getReport(assessmentId)
+      .then((r) => { if (live) setReport(r); })
+      .catch(() => { if (live) setFailed(true); })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [assessmentId]);
+
+  if (loading) return <p className="mt-4 text-center text-[13px] text-[var(--text-muted)]">Building your report…</p>;
+  if (failed || !report) return null;
+
+  const deltas = [...(report.report.mastery_delta ?? [])]
+    .sort((a, b) => (a.p_after ?? 1) - (b.p_after ?? 1));
+  const misconceptions = report.report.misconceptions ?? [];
+  const nextName = report.report.next_up_name ?? report.report.next_up;
+  if (!deltas.length && !misconceptions.length && !nextName) return null;
+
+  return (
+    <div className="mt-4 rounded-[8px] border border-[var(--border)] bg-[var(--surface-secondary)]/50 p-3 text-left">
+      <p className="text-[13px] font-semibold">Assessment report</p>
+      {deltas.length > 0 && (
+        <div className="mt-2 grid gap-2">
+          {deltas.slice(0, 5).map((d) => (
+            <div key={d.slug} className="flex items-center gap-2 text-[13px]">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">{d.name || d.slug}</span>
+                <span className="block text-[11px] text-[var(--text-muted)]">
+                  mastery {d.p_before == null ? "—" : `${Math.round(d.p_before * 100)}%`} → {d.p_after == null ? "—" : `${Math.round(d.p_after * 100)}%`}
+                </span>
+              </span>
+              <span className="h-1 w-20 shrink-0 overflow-hidden rounded-full bg-[var(--border)]">
+                {d.p_after != null && <span className="block h-full rounded-full bg-[var(--accent)]" style={{ width: `${Math.max(0, Math.min(100, Math.round(d.p_after * 100)))}%` }} />}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {misconceptions.length > 0 && (
+        <div className="mt-3">
+          <p className="text-[12px] font-semibold text-[var(--text-secondary)]">Likely misconceptions</p>
+          <ul className="mt-1 grid gap-1">
+            {misconceptions.slice(0, 4).map((m) => (
+              <li key={m.slug} className="text-[13px]">
+                <span className="font-medium">{m.name || m.slug}</span>
+                <ul className="mt-0.5 grid gap-0.5">
+                  {m.points.slice(0, 3).map((p, i) => (
+                    <li key={i} className="text-[13px] text-[var(--text-secondary)]">· {p}</li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {nextName && (
+        <p className="mt-3 rounded-[7px] bg-[var(--accent-soft)]/50 px-2.5 py-2 text-[13px]">
+          Study next: <span className="font-medium">{nextName}</span> — generate another quiz to practice it.
+        </p>
+      )}
+    </div>
+  );
+}
+
 /* ---------------- quiz / exam ---------------- */
 
 function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; onAnswered: () => void }) {
@@ -539,11 +921,13 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
 
   if (done) {
     const pct = Math.round((correct / quiz.questions.length) * 100);
+    const assessmentId = Object.values(answers).find((a) => a.assessment_id)?.assessment_id ?? null;
     return (
       <div className="text-center">
         <p className="text-[13px] text-[var(--text-muted)]">Score</p>
         <p className="mt-1 text-[32px] font-semibold">{correct} / {quiz.questions.length}</p>
         <p className="text-[15px] text-[var(--text-secondary)]">{pct}%</p>
+        {assessmentId && <QuizReport assessmentId={assessmentId} />}
         <div className="mt-4 grid gap-1.5 text-left">
           {quiz.questions.map((qq, idx) => (
             <div key={qq.id} className="flex items-center gap-2 rounded-[7px] border border-[var(--border)] px-2.5 py-2 text-[13px]">
@@ -577,7 +961,6 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
           </button>
         )}
       </div>
-      <p className="mb-2 text-xs text-[var(--text-muted)]">{q.topic_slug.replaceAll("-", " ")}</p>
       <MarkdownBody text={q.stem} />
       {q.qtype === "mcq" ? (
         <div className="mt-3 grid gap-2">
@@ -615,7 +998,6 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
           <p className="mb-2 font-semibold">{answers[q.id].correct ? "Correct" : "Not quite"}</p>
           {!answers[q.id].correct && <MarkdownBody text={`**Expected answer:** ${answers[q.id].expected ?? "See explanation"}`} />}
           <MarkdownBody text={[answers[q.id].feedback, answers[q.id].feedback.includes(answers[q.id].explanation) ? "" : answers[q.id].explanation].filter(Boolean).join("\n\n")} />
-          {answers[q.id].topic && <p className="mt-2 text-xs">{answers[q.id].topic?.name} · mastery {Math.round(answers[q.id].p_before * 100)}% → {Math.round(answers[q.id].p_after * 100)}%</p>}
           <p className="mt-2 text-xs text-[var(--text-muted)]">{answers[q.id].citation.source} · {answers[q.id].citation.label}</p>
         </div>
       )}

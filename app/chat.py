@@ -485,6 +485,7 @@ class ChatService:
             "source_id": c.source_id,
             "heading": c.heading,
             "snippet": c.snippet,
+            "end_ts": c.end_ts,
         }
 
     @staticmethod

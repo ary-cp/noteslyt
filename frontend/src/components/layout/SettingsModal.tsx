@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { getProfile, getProfileLevels, updateProfile } from "../../lib/api";
-import type { ProfileLevels, ProfileOut } from "../../lib/types";
+import { getLlamaStatus, getProfile, getProfileLevels, updateLlamaEngine, updateProfile } from "../../lib/api";
+import type { LlamaStatus, ProfileLevels, ProfileOut } from "../../lib/types";
 import { useToast } from "../../lib/toast";
 import { useTheme, type ThemeMode } from "../../lib/theme";
 import { Modal } from "../ui/Modal";
@@ -30,6 +30,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [goals, setGoals] = useState("");
   const [autoIndex, setAutoIndex] = useState(true);
   const [defaultModel, setDefaultModel] = useState("default");
+  const [engine, setEngine] = useState<LlamaStatus | null>(null);
+  const [engineBusy, setEngineBusy] = useState(false);
+
+  const refreshEngine = () => {
+    getLlamaStatus().then(setEngine).catch(() => setEngine(null));
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -43,6 +49,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       setGoals(p.goals);
     }).catch((e) => { if (active) setLoadError(e instanceof Error ? e.message : "Could not load profile"); }).finally(() => { if (active) setLoading(false); });
     getProfileLevels().then(setLevels).catch(() => undefined);
+    refreshEngine();
     try {
       setAutoIndex(localStorage.getItem("studyspace:autoindex") !== "off");
       setDefaultModel(localStorage.getItem("studyspace:model") ?? "default");
@@ -126,10 +133,10 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <div className="grid gap-3">
               {profile.quiz_progress && <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3">
                 <p className="text-sm font-medium">Your quiz progress</p>
-                <p className="mt-1 text-sm">{profile.quiz_progress.correct} / {profile.quiz_progress.answered} answers correct · {profile.quiz_progress.topics_practiced} topics practiced</p>
-                <p className="mt-1 text-xs text-[var(--text-muted)]">{profile.quiz_progress.answered ? "Based on saved first attempts. Open a project's Studio to see mastery for each topic." : "Take your first quiz to build a learning profile from your answers."}</p>
+                <p className="mt-1 text-sm">{profile.quiz_progress.answered ? `${Math.round((profile.quiz_progress.correct / profile.quiz_progress.answered) * 100)}% correct overall` : "No quizzes taken yet"}</p>
+                <p className="mt-1 text-xs text-[var(--text-muted)]">{profile.quiz_progress.answered ? "Based on saved first attempts. Open a project's Studio to see your overall mastery." : "Take your first quiz to build a learning profile from your answers."}</p>
               </div>}
-              <p className="text-xs text-[var(--text-muted)]">Set your learning preferences below. Quiz performance is tracked separately for each topic.</p>
+              <p className="text-xs text-[var(--text-muted)]">Set your learning preferences below. Quiz performance quietly adapts what you practice next.</p>
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Capability">
                   <Dropdown
@@ -157,6 +164,61 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             </div>
           ) : (
             <p className="text-[13px] text-[var(--text-muted)]">Sign in to edit your learning profile.</p>
+          )}
+        </section>
+        <section>
+          <h3 className="mb-2 text-[13px] font-semibold">Embedding engine</h3>
+          {engine === null ? (
+            <p className="text-[13px] text-[var(--text-muted)]">Engine status unavailable.</p>
+          ) : engine.mode === "cloud" ? (
+            <p className="text-[13px] text-[var(--text-muted)]">
+              Using the cloud endpoint from <span className="font-mono">EMBEDDING_*</span> env vars.
+              Set <span className="font-mono">EMBEDDING_MODE=local</span> to use the vendored llama.cpp server.
+            </p>
+          ) : (
+            <div className="grid gap-2">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[13px] font-medium">
+                    Local llama.cpp {engine.build_tag ? `· ${engine.build_tag}` : ""}
+                  </p>
+                  <p className="text-xs text-[var(--text-muted)]">
+                    {engine.installed ? "Installed" : "Not downloaded yet"}
+                    {engine.model_present ? " · model ready" : " · model missing"}
+                    {engine.running ? " · server running" : " · server sleeps until needed"}
+                  </p>
+                  {(engine.update_state !== "idle" || engine.update_message) && (
+                    <p className="mt-1 text-xs text-[var(--text-muted)]">
+                      Update: {engine.update_state}{engine.update_message ? ` — ${engine.update_message}` : ""}
+                    </p>
+                  )}
+                </div>
+                <Button
+                  variant="secondary"
+                  loading={engineBusy}
+                  disabled={engineBusy}
+                  onClick={() => {
+                    setEngineBusy(true);
+                    updateLlamaEngine()
+                      .then(() => {
+                        push("Engine update started", { detail: "This downloads in the background.", tone: "success" });
+                        window.setTimeout(refreshEngine, 5000);
+                      })
+                      .catch((e: unknown) => push("Update failed to start", { detail: e instanceof Error ? e.message : String(e), tone: "error" }))
+                      .finally(() => setEngineBusy(false));
+                  }}
+                >
+                  Update engine
+                </Button>
+              </div>
+              <button
+                type="button"
+                onClick={refreshEngine}
+                className="cursor-pointer self-start text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              >
+                Refresh status
+              </button>
+            </div>
           )}
         </section>
         <section>

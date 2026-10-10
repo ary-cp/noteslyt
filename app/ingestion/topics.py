@@ -251,3 +251,47 @@ def merge_locators(existing: list[dict] | None, incoming: list[dict]) -> list[di
 
 def topics_to_json(topics: list[Topic]) -> str:  # pragma: no cover - debugging aid
     return json.dumps([t.to_dict() for t in topics], indent=2)
+
+
+PREREQ_SYSTEM_PROMPT = """You order course topics by learning dependency.
+Given the project's topics (slug, name, one-line description each), decide which
+topics a student must understand BEFORE each other topic. A prerequisite means
+"cannot be learned without first learning this" — not merely "related".
+Rules:
+- Use only the slugs listed below, exactly as written.
+- Never list a topic as its own prerequisite.
+- Keep the graph sparse: at most 2 prerequisites per topic, only confident links.
+- If the topics are independent, return an empty edges list.
+Output JSON of the form:
+{"edges": [{"topic": "<slug>", "prereq": "<slug>"}]}"""
+
+
+def infer_prereq_edges(
+    llm: LLMClient,
+    topics: list[Topic],
+) -> list[tuple[str, str]]:
+    """Infer (topic_slug, prereq_slug) pairs for a project's topics.
+
+    One LLM call over the whole list. Raises on LLM failure — callers that
+    must not fail (ingestion) catch it and keep the old graph.
+    """
+    known = {t.slug for t in topics}
+    if len(known) < 2:
+        return []
+    listing = "\n".join(f"- {t.slug}: {t.name} — {t.description[:120]}" for t in topics)
+    data = llm.complete_json(PREREQ_SYSTEM_PROMPT, f"Topics:\n{listing}")
+    edges: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    per_topic: dict[str, int] = {}
+    for raw in (data.get("edges") or [])[: 2 * len(topics)]:
+        if not isinstance(raw, dict):
+            continue
+        topic, prereq = str(raw.get("topic", "")), str(raw.get("prereq", ""))
+        if topic not in known or prereq not in known or topic == prereq:
+            continue
+        if (topic, prereq) in seen or per_topic.get(topic, 0) >= 2:
+            continue
+        seen.add((topic, prereq))
+        per_topic[topic] = per_topic.get(topic, 0) + 1
+        edges.append((topic, prereq))
+    return edges

@@ -42,7 +42,7 @@ from ..storage import content_type_for
 from ..vectorstore import VectorStore
 from .chunker import Chunk, chunk_units
 from .registry import ParserError, parse_source
-from .topics import Topic, assign_topics, extract_topics, merge_locators
+from .topics import Topic, assign_topics, extract_topics, infer_prereq_edges, merge_locators
 from .units import SourceUnit
 from psycopg.errors import DataException
 
@@ -137,6 +137,10 @@ class IngestionPipeline:
                     "No extractable text found (scanned images or an empty file?)."
                 )
 
+            # 1b. Video keyframes -> vision captions (same units, same locators)
+            if source.source_type == "video":
+                self._caption_video_frames(source, path, parsed.units, result)
+
             # 2. Chunk (never crosses a locator boundary) -------------------
             chunks = chunk_units(
                 parsed.units, self.settings.chunk_size, self.settings.chunk_overlap
@@ -179,7 +183,8 @@ class IngestionPipeline:
                 if embed_image is None:
                     raise IngestionError(
                         "The configured embedding provider does not support image inputs. "
-                        "Use a multimodal embedding endpoint such as LM Studio with EmbeddingGemma 2."
+                        "Serve a joint model (e.g. embeddinggemma-2-GGUF + mmproj) from "
+                        "llama.cpp — LM Studio's embedding endpoint is text-only."
                     )
                 try:
                     embeddings = [embed_image(path.read_bytes(), content_type_for(source.filename))]
@@ -191,13 +196,21 @@ class IngestionPipeline:
                         f"EMBEDDING_DIM={self.settings.embedding_dim}."
                     )
             elif (
+                source.source_type == "video"
+                and self.settings.video_embed_mode == "native"
+            ):
+                # Direct visual vectors: one keyframe embedding per segment.
+                # Chunk texts stay transcript+caption text (viewer, topics, chat
+                # grounding); only the vector space is visual.
+                embeddings = self._embed_video_native(path, chunks, source, result.warnings)
+            elif (
                 source.source_type in ("audio", "video")
                 and self.settings.audio_embed_mode == "native"
             ):
                 # Direct audio vectors: one embedding per segment slice. Chunk
                 # texts stay transcript text (viewer, topics, chat grounding);
                 # only the vector space is acoustic.
-                embeddings = self._embed_audio_native(path, chunks, source)
+                embeddings = self._embed_audio_native(path, chunks, source, result.warnings)
             else:
                 embeddings = self._embed_with_batches([c.text for c in chunks], source)
 
@@ -258,6 +271,13 @@ class IngestionPipeline:
             result.topics = [
                 {"slug": t.slug, "name": t.name, "locators": t.locators} for t in proposed
             ]
+            # 3b. Prerequisite graph (best-effort) -------------------------
+            # Topics just changed, so the dependency map may be stale. One LLM
+            # call; any failure keeps the previous graph and only logs.
+            try:
+                self.refresh_prereq_edges(source.project_id)
+            except Exception as exc:  # noqa: BLE001 — auxiliary, never fails ingest
+                log.warning("Prerequisite refresh skipped for project %s: %s", source.project_id, exc)
 
         except (ParserError, IngestionError) as exc:
             result.detail = str(exc)
@@ -278,6 +298,75 @@ class IngestionPipeline:
         return result
 
     # ================================================================ helpers
+    def _caption_video_frames(self, source, path: Path, units: list, result) -> None:
+        """Caption one frame per Nth video segment unit with the vision model.
+
+        Best-effort by design: transcript-only ingestion is the safe fallback,
+        so a text-only chat model, missing Pillow/ffmpeg, or a frame failure
+        records a warning and never fails the ingest. Captions join the unit
+        text as `[Visual M:SS] ...`, so they flow into chunks, topic outlines
+        and citations untouched.
+        """
+        if not self.settings.video_captions:
+            return
+        every = max(1, self.settings.video_frame_every_n)
+        candidates = [
+            u for i, u in enumerate(units)
+            if i % every == 0 and (u.end_ts or 0.0) > (u.start_ts or 0.0)
+        ]
+        if not candidates:
+            return
+        try:
+            from .video_frames import FRAME_CAPTION_SYSTEM, ahash, extract_frame, frame_distance
+        except ImportError as exc:
+            result.warnings.append(f"Video frame captions skipped: {exc}.")
+            return
+        kept = 0
+        prev_hash: int | None = None
+        for u in candidates:
+            if kept >= self.settings.video_max_frames:
+                result.warnings.append(
+                    f"Caption budget reached ({self.settings.video_max_frames} frames); "
+                    "remaining segments are transcript-only."
+                )
+                break
+            mid = ((u.start_ts or 0.0) + (u.end_ts or 0.0)) / 2.0
+            try:
+                frame = extract_frame(path, mid, self.settings.video_frame_width)
+                digest = ahash(frame)
+            except Exception as exc:  # noqa: BLE001 — one bad frame skips itself
+                log.warning("Video frame at %.1fs skipped for %s: %s", mid, source.filename, exc)
+                continue
+            if prev_hash is not None and frame_distance(digest, prev_hash) < self.settings.video_frame_hamming:
+                continue  # static slide — the transcript already covers it
+            data_url = "data:image/jpeg;base64," + base64.b64encode(frame).decode("ascii")
+            try:
+                caption = self.llm.complete(
+                    FRAME_CAPTION_SYSTEM,
+                    [{"type": "text", "text": f"Video frame at {mid:.0f}s from '{source.filename}'."},
+                     {"type": "image_url", "image_url": {"url": data_url}}],
+                    max_tokens=300,
+                ).strip()
+            except Exception as exc:  # noqa: BLE001 — text-only model: stop, keep transcript
+                result.warnings.append(
+                    f"Video frame captions stopped: vision model unavailable ({exc}). "
+                    "Transcript only."
+                )
+                break
+            if not caption or caption.strip() == "NO_CONTENT":
+                prev_hash = digest
+                continue
+            u.text = f"{u.text}\n\n[Visual {self._mmss(mid)}] {caption}"
+            prev_hash = digest
+            kept += 1
+        if kept:
+            result.warnings.append(f"Captioned {kept} video frames.")
+
+    @staticmethod
+    def _mmss(seconds: float) -> str:
+        total = int(max(0.0, seconds))
+        return f"{total // 60}:{total % 60:02d}"
+
     def _persist_topics(
         self,
         source: SourceRecord,
@@ -308,16 +397,46 @@ class IngestionPipeline:
                 continue
         return out
 
+    def topic_graph(self, project_id: str) -> dict:
+        """Nodes + prerequisite edges for a project, keyed by topic slug."""
+        rows = self.topics.list_for_project(project_id)
+        by_id = {str(r.id): r for r in rows}
+        nodes = [{"id": str(r.id), "slug": r.slug, "name": r.name} for r in rows]
+        edges = []
+        for row in self.topics.edges(project_id):
+            topic, prereq = by_id.get(str(row["topic_id"])), by_id.get(str(row["prereq_id"]))
+            if topic is None or prereq is None:
+                continue
+            edges.append({"topic_slug": topic.slug, "prereq_slug": prereq.slug})
+        return {"nodes": nodes, "edges": edges}
+
+    def refresh_prereq_edges(self, project_id: str) -> dict:
+        """Re-infer the project's prerequisite graph from its current topics.
+
+        Raises on LLM failure — ingestion calls this best-effort, the refresh
+        endpoint converts to a readable error.
+        """
+        rows = self.topics.list_for_project(project_id)
+        pairs = infer_prereq_edges(
+            self.llm,
+            [Topic(slug=r.slug, name=r.name, description=r.description or "") for r in rows],
+        )
+        by_slug = {r.slug: str(r.id) for r in rows}
+        self.topics.set_edges(project_id, [(by_slug[t], by_slug[p]) for t, p in pairs])
+        return self.topic_graph(project_id)
+
     def _embed_audio_native(
-        self, path: Path, chunks: list, source: SourceRecord
+        self, path: Path, chunks: list, source: SourceRecord, warnings: list
     ) -> list[list[float]]:
         """
         One audio-slice vector per chunk, cut to the chunk's `[start_ts, end_ts]`.
 
-        Chunks without timestamps fall back to a text embedding so the vector
-        list always aligns with the chunk list. Width is verified exactly like
-        the text path, because an audio-capable model swap has the same
-        re-embed consequences.
+        Chunks without timestamps — or whose slice holds no samples (segment
+        timestamps running past the file) — fall back to a text embedding so
+        the vector list always aligns with the chunk list. Every fallback is
+        recorded loudly; an empty slice has no acoustic content to retrieve.
+        Width is verified exactly like the text path, because an audio-capable
+        model swap has the same re-embed consequences.
         """
         from .parsers_media import slice_audio_wav
 
@@ -332,7 +451,12 @@ class IngestionPipeline:
             label = f"{c.locator_kind} {c.locator_value}"
             try:
                 if c.start_ts is not None and c.end_ts is not None and c.end_ts > c.start_ts:
-                    wav = slice_audio_wav(path, c.start_ts, c.end_ts)
+                    try:
+                        wav = slice_audio_wav(path, c.start_ts, c.end_ts)
+                    except ParserError as exc:
+                        warnings.append(f"{label}: {exc} Text vector used.")
+                        vectors.append(self.embedder.embed([c.text])[0])
+                        continue
                     vectors.append(embed_audio(wav, "audio/wav"))
                 else:
                     vectors.append(self.embedder.embed([c.text])[0])
@@ -345,6 +469,55 @@ class IngestionPipeline:
         if wrong and wrong != {expected}:
             raise IngestionError(
                 f"Audio embedding width {sorted(wrong)} does not match EMBEDDING_DIM={expected}. "
+                f"Set EMBEDDING_DIM to your model's output width, then re-embed the "
+                f"corpus with uv run python scripts/re_embed.py (use --check first)."
+            )
+        return vectors
+
+    def _embed_video_native(
+        self, path: Path, chunks: list, source: SourceRecord, warnings: list
+    ) -> list[list[float]]:
+        """
+        One keyframe vector per chunk, taken at the chunk's midpoint.
+
+        Chunks without timestamps — or whose frame cannot be read (midpoint
+        past the file duration) — fall back to a text embedding, recorded
+        loudly. Requires a joint vision-text model served by a byte-encoding
+        engine — prove it first with `uv run python scripts/probe_multimodal.py`,
+        then set VIDEO_EMBED_MODE=native and re-ingest the corpus.
+        """
+        from .video_frames import extract_frame
+
+        embed_image = getattr(self.embedder, "embed_image", None)
+        if embed_image is None:
+            raise IngestionError(
+                "The configured embedding provider does not support image inputs. "
+                "Use a joint vision-text embedding model, or keep VIDEO_EMBED_MODE=transcript."
+            )
+        vectors: list[list[float]] = []
+        for c in chunks:
+            label = f"{c.locator_kind} {c.locator_value}"
+            try:
+                if c.start_ts is not None and c.end_ts is not None and c.end_ts > c.start_ts:
+                    mid = (c.start_ts + c.end_ts) / 2.0
+                    try:
+                        frame = extract_frame(path, mid, self.settings.video_frame_width)
+                    except Exception as exc:
+                        warnings.append(f"{label}: {exc} Text vector used.")
+                        vectors.append(self.embedder.embed([c.text])[0])
+                        continue
+                    vectors.append(embed_image(frame, "image/jpeg"))
+                else:
+                    vectors.append(self.embedder.embed([c.text])[0])
+            except (ParserError, IngestionError):
+                raise
+            except Exception as exc:
+                raise IngestionError(f"Video frame embedding failed at {label}: {exc}") from exc
+        expected = self.settings.embedding_dim
+        wrong = {len(v) for v in vectors}
+        if wrong and wrong != {expected}:
+            raise IngestionError(
+                f"Video embedding width {sorted(wrong)} does not match EMBEDDING_DIM={expected}. "
                 f"Set EMBEDDING_DIM to your model's output width, then re-embed the "
                 f"corpus with uv run python scripts/re_embed.py (use --check first)."
             )
