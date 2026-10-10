@@ -171,7 +171,24 @@ class Handler(BaseHTTPRequestHandler):
             convo = "\n".join(_text(m) for m in msgs if m["role"] == "user")
             found = locators_in(convo)
             # Vision caption (Phase D.20): describe the image as study text.
-            if any(_has_image(m) for m in msgs):
+            if "create study flashcards" in system:
+                want = re.search(r"Generate (\d+) distinct flashcards", convo)
+                n = int(want.group(1)) if want else 3
+                parts = re.split(r"TOPIC (\S+) \(", convo)
+                contexts = []
+                for i in range(1, len(parts), 2):
+                    loc = re.search(r"SOURCE (\S+) LOCATOR ([^:]+):([^\n]+)", parts[i + 1])
+                    if loc:
+                        contexts.append((parts[i], *loc.groups()))
+                content = json.dumps({"cards": [
+                    {"front": f"Review concept {i + 1}", "back": "This is deterministic mock study content.",
+                     "topic_slug": contexts[i % len(contexts)][0],
+                     "locator": {"source_id": contexts[i % len(contexts)][1],
+                                 "kind": contexts[i % len(contexts)][2],
+                                 "value": contexts[i % len(contexts)][3]}}
+                    for i in range(n)
+                ] if contexts else []})
+            elif any(_has_image(m) for m in msgs):
                 content = ("The image shows a labeled study diagram. "
                            "Key parts: pressure gauge reading 101 kPa, a piston chamber, "
                            "and an entropy-temperature chart with two curves.")
@@ -226,10 +243,16 @@ class Handler(BaseHTTPRequestHandler):
                 # One locator pool per TOPIC section — a question must cite a
                 # locator from its own topic, or verification drops it.
                 per_topic: dict[str, tuple[str, str]] = {}
+                source_for_topic: dict[str, str] = {}
                 parts = re.split(r"TOPIC (\S+)", convo)
                 for i in range(1, len(parts), 2):
                     locs = locators_in(parts[i + 1]) if i + 1 < len(parts) else []
-                    per_topic[parts[i]] = locs[0] if locs else ("page", "1")
+                    scoped = re.search(r"SOURCE (\S+) LOCATOR ([^:]+):([^\n]+)", parts[i + 1])
+                    if scoped:
+                        source_for_topic[parts[i]] = scoped.group(1)
+                        per_topic[parts[i]] = (scoped.group(2), scoped.group(3).strip())
+                    else:
+                        per_topic[parts[i]] = locs[0] if locs else ("page", "1")
                 if not per_topic:
                     per_topic = {"topic-1": found[0] if found else ("page", "1")}
                 slugs = list(per_topic)
@@ -240,10 +263,12 @@ class Handler(BaseHTTPRequestHandler):
                     kinds = ["mcq", "short_answer", "numerical"]
                 made = []
                 for i in range(n):
-                    t = kinds[i % 3]
+                    t = kinds[i % len(kinds)]
                     slug = slugs[i % len(slugs)]
                     k, v = per_topic[slug]
                     loc = {"kind": k, "value": v}
+                    if slug in source_for_topic:
+                        loc["source_id"] = source_for_topic[slug]
                     stem = f"Mock {t} {call}.{i} on {slug} ({k} {v})?"
                     if t == "mcq":
                         made.append({"type": t, "topic_slug": slug, "stem": stem,

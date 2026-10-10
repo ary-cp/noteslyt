@@ -23,7 +23,7 @@ import re
 from typing import Any, Callable, Protocol, TypeVar
 
 import httpx
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 from pydantic import BaseModel
 
 from .config import Settings
@@ -102,14 +102,14 @@ class LLMClient:
         content = response.choices[0].message.content or ""
         return strip_think(content)
 
-    def complete(self, system: str, user: str, **kwargs) -> str:
+    def complete(self, system: str, user: str | list[dict], **kwargs) -> str:
         return self.chat(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
             **kwargs,
         )
 
     def complete_json(
-        self, system: str, user: str, *, max_tokens: int = 2048,
+        self, system: str, user: str | list[dict], *, max_tokens: int = 2048,
         json_mode: bool = False,
     ) -> dict:
         """
@@ -137,57 +137,48 @@ class LLMClient:
         return extract_json(raw)
 
     def complete_structured(
-        self, system: str, user: str, *, response_model: type[TStructured],
+        self, system: str, user: str | list[dict], *, response_model: type[TStructured],
         max_tokens: int = 2048,
     ) -> TStructured:
-        """Request JSON Schema output, then validate it into a Pydantic model.
-
-        Some OpenAI-compatible gateways return a successful HTTP envelope with
-        `choices: null`; the SDK's `.parse()` helper crashes while iterating it.
-        Read the normal completion response first so we can handle that case
-        and still validate any usable fallback response with Pydantic.
-        """
+        """Try schema, JSON, then portable JSON prompting; validate every response."""
+        schema = response_model.model_json_schema()
         schema_name = re.sub(r"[^a-zA-Z0-9_-]", "_", response_model.__name__)[:64]
-        response = self._client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            temperature=0.0,
-            max_tokens=max_tokens,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": schema_name,
-                    "strict": True,
-                    "schema": response_model.model_json_schema(),
-                },
-            },
-        )
-        choices = getattr(response, "choices", None)
-        if choices:
+        instruction = system + "\nReturn ONE JSON object matching this schema, without prose:\n" + json.dumps(schema)
+        formats = [
+            {"type": "json_schema", "json_schema": {"name": schema_name, "strict": True, "schema": schema}},
+            {"type": "json_object"},
+            None,
+        ]
+        last_error = None
+        for response_format in formats:
+            kwargs = {"response_format": response_format} if response_format else {}
+            try:
+                response = self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "system", "content": instruction}, {"role": "user", "content": user}],
+                    temperature=0.0, max_tokens=max_tokens, **kwargs,
+                )
+            except BadRequestError as exc:
+                # Gateways may not implement response_format. Authentication,
+                # rate limits and network failures are not format fallbacks.
+                detail = str(exc).lower()
+                if response_format and any(word in detail for word in ("response_format", "json_schema", "json_object", "structured", "schema")):
+                    last_error = exc
+                    continue
+                raise
+            choices = getattr(response, "choices", None)
+            if not choices:
+                last_error = ValueError("The model returned no completion.")
+                continue
             message = choices[0].message
-            if message.refusal:
-                raise ValueError(f"The model refused structured output: {message.refusal}")
-            raw = message.content or ""
-            if raw:
-                try:
-                    return response_model.model_validate_json(raw)
-                except Exception as exc:
-                    log.warning("Structured response failed Pydantic validation: %s", exc)
-        else:
-            log.warning("Structured response from %s had no choices; trying validated JSON mode", self.base_url)
-
-        # Provider returned no usable schema response. JSON mode is a fallback
-        # only; Pydantic still rejects missing or incorrectly typed fields.
-        fallback = self.complete_json(
-            system + "\nMatch the required response schema exactly.",
-            user,
-            max_tokens=max_tokens,
-            json_mode=True,
-        )
-        return response_model.model_validate(fallback)
+            if getattr(message, "refusal", None):
+                raise ValueError("The model could not generate study material from these sources.")
+            try:
+                return response_model.model_validate(extract_json(message.content or ""))
+            except (ValueError, TypeError) as exc:
+                last_error = exc
+                log.warning("Invalid structured completion; trying the next supported format")
+        raise ValueError("The model returned incomplete or invalid JSON. Please retry or use a model with structured-output support.") from last_error
 
 
 # =============================================================================

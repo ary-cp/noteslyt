@@ -72,23 +72,25 @@ class ProjectMemoryRepo(Repo):
         self, user_id: str, project_id: str, topic_id: str, correct: bool, params: BKTParams
     ) -> dict[str, Any]:
         """Full BKT update from a graded assessment attempt (Phase F)."""
-        row = self.get(user_id, project_id, topic_id)
-        p = float(row.p_mastery) if row else self.p_init
-        attempts = int(row.attempts) + 1 if row else 1
-        hits = int(row.correct) + (1 if correct else 0) if row else (1 if correct else 0)
-        new_p = update(p, correct, params)
-        status = derive_coverage(new_p, attempts, self.p_init)
-        return self._upsert(user_id, project_id, topic_id, new_p, attempts, hits, status)
+        with self.learner_write(user_id, project_id):
+            row = self.get(user_id, project_id, topic_id)
+            p = float(row.p_mastery) if row else self.p_init
+            attempts = int(row.attempts) + 1 if row else 1
+            hits = int(row.correct) + (1 if correct else 0) if row else (1 if correct else 0)
+            new_p = update(p, correct, params)
+            status = derive_coverage(new_p, attempts, self.p_init)
+            return self._upsert(user_id, project_id, topic_id, new_p, attempts, hits, status)
 
     def apply_nudge(self, user_id: str, project_id: str, topic_id: str, correct: bool) -> dict[str, Any]:
         """Bounded chat-evidence step: ±5% of the remaining distance, counters untouched."""
-        row = self.get(user_id, project_id, topic_id)
-        p = float(row.p_mastery) if row else self.p_init
-        attempts = int(row.attempts) if row else 0
-        hits = int(row.correct) if row else 0
-        new_p = round(min(max(p + (0.05 * (1 - p) if correct else -0.05 * p), 0.02), 0.98), 4)
-        status = derive_coverage(new_p, attempts, self.p_init)
-        return self._upsert(user_id, project_id, topic_id, new_p, attempts, hits, status)
+        with self.learner_write(user_id, project_id):
+            row = self.get(user_id, project_id, topic_id)
+            p = float(row.p_mastery) if row else self.p_init
+            attempts = int(row.attempts) if row else 0
+            hits = int(row.correct) if row else 0
+            new_p = round(min(max(p + (0.05 * (1 - p) if correct else -0.05 * p), 0.02), 0.98), 4)
+            status = derive_coverage(new_p, attempts, self.p_init)
+            return self._upsert(user_id, project_id, topic_id, new_p, attempts, hits, status)
 
     def _upsert(
         self, user_id: str, project_id: str, topic_id: str,

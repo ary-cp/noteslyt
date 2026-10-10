@@ -99,6 +99,17 @@ class ProfileRepo(Repo):
         )
         return _to_profile(row)
 
+    def quiz_progress(self, user_id: str) -> dict:
+        """Evidence from saved first answers, including quizzes taken before profile UI existed."""
+        return self._fetch_one(
+            "select count(*)::int as answered, count(*) filter (where a.correct)::int as correct, "
+            "count(distinct q.topic_id)::int as topics_practiced, count(distinct a.quiz_id)::int as quizzes_practiced "
+            "from answers a join questions q on q.id = a.question_id "
+            "join quizzes z on z.id = a.quiz_id join projects p on p.id = z.project_id "
+            "where a.user_id = %s and z.user_id = %s and p.user_id = %s",
+            (user_id, user_id, user_id),
+        ) or {"answered": 0, "correct": 0, "topics_practiced": 0, "quizzes_practiced": 0}
+
     def observe_study_pattern(self, user_id: str, **counters: int) -> None:
         """
         Increment observational counters (e.g. `sessions=1`, `quizzes=3`).
@@ -117,7 +128,7 @@ class ProfileRepo(Repo):
                 (user_id,),
             )
             row = conn.execute(
-                "select study_pattern from user_profiles where user_id = %s",
+                "select study_pattern from user_profiles where user_id = %s for update",
                 (user_id,),
             ).fetchone()
             pattern = dict(row["study_pattern"] or {})

@@ -279,7 +279,7 @@ export default function Workspace({
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
         <p className="text-[40px] font-semibold">404</p>
         <p className="text-sm text-[var(--text-secondary)]">This project does not exist or belongs to someone else.</p>
-        <Link to="/projects" className="inline-flex h-9 items-center rounded-[7px] bg-[var(--accent)] px-4 text-sm font-medium text-white">
+        <Link to="/" className="inline-flex h-9 items-center rounded-[7px] bg-[var(--accent)] px-4 text-sm font-medium text-white">
           Back to projects
         </Link>
       </div>
@@ -294,7 +294,7 @@ export default function Workspace({
     <div className="flex min-h-0 flex-1 flex-col">
       {/* workspace top bar */}
       <div className="flex h-[54px] shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--sidebar-bg)] px-3">
-        <Link to="/projects" aria-label="Back to projects" className="inline-flex h-8 w-8 items-center justify-center rounded-[7px] text-[var(--text-secondary)] hover:bg-[var(--surface-secondary)] hover:text-[var(--text-primary)]">
+        <Link to="/" aria-label="Back to projects" className="inline-flex h-8 w-8 items-center justify-center rounded-[7px] text-[var(--text-secondary)] hover:bg-[var(--surface-secondary)] hover:text-[var(--text-primary)]">
           <ArrowLeft size={16} />
         </Link>
         <button
@@ -476,7 +476,7 @@ export default function Workspace({
             </button>
           ))}
         </div>
-        <Link to="/projects" className="mt-1 flex items-center justify-center rounded-[6px] border border-[var(--border)] px-2 py-2 text-[13px] font-medium hover:bg-[var(--surface-secondary)]">
+        <Link to="/" className="mt-1 flex items-center justify-center rounded-[6px] border border-[var(--border)] px-2 py-2 text-[13px] font-medium hover:bg-[var(--surface-secondary)]">
           All projects
         </Link>
       </Popover>
@@ -497,13 +497,13 @@ export default function Workspace({
         open={palette}
         onClose={() => setPalette(false)}
         projectId={projectId}
-        onOpenCreateProject={() => navigate("/projects")}
+        onOpenCreateProject={() => navigate("/")}
         onAction={(kind) => {
           if (kind === "new-chat") void newChat();
           else if (kind === "toggle-theme") toggle();
           else if (kind === "settings") setSettings(true);
           else if (kind === "upload") push("Use + Add in Sources", { tone: "info" });
-          else if (kind === "new-project") navigate("/projects");
+          else if (kind === "new-project") navigate("/");
         }}
       />
       <SettingsModal open={settings} onClose={() => setSettings(false)} />

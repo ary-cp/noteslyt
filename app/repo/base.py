@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import uuid
+from contextlib import contextmanager
 from typing import Any, TypeVar
 
 import psycopg
@@ -45,6 +46,14 @@ def to_records(cls: type[T], rows: list[dict[str, Any]]) -> list[T]:
 class Repo:
     def __init__(self, db: Database):
         self.db = db
+
+    @contextmanager
+    def learner_write(self, user_id: str, project_id: str):
+        """Serialize assessment and mastery writes, including initially absent rows."""
+        with self.db.transaction() as conn:
+            conn.execute("select pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                         (f"learner:{user_id}:{project_id}",))
+            yield
 
     def _fetch_all(self, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
         with self.db.connection() as conn:

@@ -44,6 +44,19 @@ class SourceRepo(Repo):
         return [str(r["id"]) for r in rows]
 
     # ------------------------------------------------------- parsed content
+    def ready_chunks(self, project_id: str, source_ids: list[str], per_source: int = 4):
+        """Bounded, project-scoped context, including images without topic rows."""
+        return self._fetch_all(
+            "select * from (select c.id,c.source_id,c.text,c.locator_kind,c.locator_value,"
+            "c.heading,c.start_ts,c.end_ts,c.chunk_index, row_number() over "
+            "(partition by c.source_id order by c.chunk_index) as rn "
+            "from chunks c join sources s on s.id=c.source_id "
+            "where c.project_id=%s and s.project_id=%s and s.status='ready' "
+            "and c.source_id=any(%s::uuid[])) ranked where rn <= %s "
+            "order by source_id, chunk_index",
+            (project_id, project_id, source_ids, per_source),
+        )
+
     def save_content(self, source_id: str, markdown: str, truncated: bool = False) -> None:
         """Persist the parser's markdown for the viewer ("what the model read").
 

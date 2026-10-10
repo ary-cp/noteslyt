@@ -6,24 +6,25 @@
 > and its own memory. Every answer cites the exact page, slide or timestamp it came from,
 > and an adaptive quiz (Bayesian Knowledge Tracing) targets what you haven't mastered.
 
-Runs entirely on your machine: local Postgres + pgvector for the database and vectors,
-local disk for uploads. No cloud account, no hosted service.
+Database and uploads stay on your machine. AI requests use the providers configured
+in `.env`; fully offline operation requires local providers.
 
 ## Status
 
-The backend is being rebuilt around multi-project tenancy. See `plan.md` for the full
-roadmap; `AGENTS.md` documents how to run and verify it.
+The active product includes the React workspace, project-scoped streaming chat,
+server-side memory, multimodal ingestion, quizzes, exams and flashcards. Images
+use direct multimodal embeddings; image chat, quizzes and flashcards send original pixels
+to the configured vision-capable chat model. Topic extraction saves a project-level
+concept list from the image without creating OCR text or caption embeddings.
+Older indexed images get topics when a quiz is generated.
 
-| Area | State |
-|---|---|
-| Postgres + pgvector data layer, migrations | done |
-| Auth (argon2 + JWT), per-user project CRUD, tenancy enforcement | done |
-| Local file storage for every source type | done |
-| Multimodal ingestion + async status polling | PDF only; docx/pptx/xlsx/video in Phase D |
-| Project-level topics merged across sources | done |
-| Project-scoped chat, 3 memory tiers | Phase E |
-| Adaptive assessment, RAGAS evaluation | Phase F–G |
-| `frontend/` | frozen legacy; a test console drives the current API |
+The dashboard lives at `/`; `/projects` is the authenticated JSON API. The
+`/console` route is a developer harness. Studio summaries, guides and mind maps
+currently assemble topic metadata rather than synthesizing the full corpus.
+
+Generation runs in-process; restarting the API can interrupt background jobs.
+Flashcards validate source locators and retry malformed output, preserving a
+smaller valid set when material cannot support the requested count.
 
 ## Layout
 
@@ -53,7 +54,7 @@ study-companion/
 ├── scripts/                   migrate.py · verify_data_layer.py · verify_auth.py ·
 │                              mock_llm.py · make_sample_pdf.py · smoke_test.py
 ├── .env.example
-└── frontend/                      Vite · React 19 · TypeScript · Tailwind v4 (legacy, frozen)
+└── frontend/                      Vite · React 19 · TypeScript · Tailwind v4 (active product)
     ├── src/
     │   ├── App.tsx                split-screen shell + citation bridge
     │   ├── components/
@@ -113,7 +114,7 @@ uv run python scripts\verify_data_layer.py    # must print DATA LAYER VERIFIED
 uv run python scripts\verify_auth.py          # must print AUTH + TENANCY VERIFIED (needs the server)
 ```
 
-### 4 · Frontend (test console)
+### 4 · Frontend
 
 ```powershell
 cd frontend
@@ -121,9 +122,9 @@ npm install
 npm run dev                       # http://localhost:5173
 ```
 
-A manual console for the current API: health, auth, global memory, projects,
-**source upload with live ingestion progress**, project topics, and a one-click
-tenancy check. It is a harness for confirming the backend, not the product UI.
+The product UI is the project dashboard and study workspace. Build it with
+`npm run build` so FastAPI can serve it at `http://localhost:8000/`.
+The optional backend test console lives at `/console`.
 
 ### 5 · Providers (`.env`)
 
@@ -233,29 +234,39 @@ uv run uvicorn app.main:app --port 8000
 
 ## API
 
+All project, source, chat and assessment routes require a bearer token.
+
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/upload` | multipart PDF → parse → chunk → embed → topics → index |
-| `GET` | `/documents`, `/documents/{id}` | registry incl. topics |
-| `GET` | `/documents/{id}/file` | original PDF (streamed to the viewer) |
-| `DELETE` | `/documents/{id}` | remove vectors, mastery, quizzes, file |
-| `POST` | `/chat` | `{document_id, question, history}` → `{answer, citations[], grounded}` |
-| `POST` | `/quiz` | `{user_id, document_id, topic_id?}` → MCQs for the weakest topic |
-| `POST` | `/quiz/answer` | grade + BKT update → `{correct, explanation, page, p_before, p_after, mastery[]}` |
-| `GET` | `/learner/{user}/{doc}` | mastery snapshot |
-| `GET` | `/health` | resolved chat / embeddings / transcription endpoints, models, parser |
+| POST | `/auth/signup`, `/auth/login` | Create account / issue session |
+| GET, POST | `/projects` | List / create owned projects |
+| GET, PATCH, DELETE | `/projects/{id}` | Read / update / remove project |
+| POST | `/projects/{id}/sources` | Queue source ingestion |
+| GET | `/projects/{id}/ingest-status` | Poll processing status |
+| GET | `/sources/{id}/file`, `/sources/{id}/content` | Original / parsed text |
+| GET, POST | `/projects/{id}/chats` | List / create conversations |
+| POST | `/chats/{id}/messages`, `/chats/{id}/messages/stream` | Cited answer / SSE |
+| POST | `/projects/{id}/quiz`, `/projects/{id}/exam`, `/projects/{id}/flashcards` | Queue Studio generation |
+| GET | `/projects/{id}/studio-jobs` | Generation state, results and errors |
+| POST | `/quizzes/{id}/answer` | Atomic, idempotent grading and mastery update |
+| GET | `/projects/{id}/learner` | Mastery and assessment history |
+| GET | `/health` | Service configuration and database status |
 
----
+Additional regression checks: `uv run python scripts/verify_regressions.py`.
+These verify source-specific citations, bounded uploads, recent memory, summary
+checkpoints, concurrent grading, rollback, MCQ validation, saved image topics,
+profile evidence and image-based quizzes/flashcards without AI
+provider calls. This check and `verify_data_layer.py` remove only their own
+randomized test accounts, including on failure; existing user data is retained.
 
-## Demo script (2 minutes)
-1. Drop the lecture PDF → "Parsing → chunking → embedding → mapping topics" → split screen appears.
+## Demo flow
+1. Create a project and upload a lecture PDF → "Parsing → chunking → embedding → mapping topics" → split screen appears.
 2. Click a starter prompt → answer appears with `Page N` chips → click one → right pane glides to the slide.
 3. Ask something off-topic ("Who won the 2018 World Cup?") → *"I can't find this in your uploaded material."*
 4. Switch to **Quiz** → "Start adaptive quiz" → answer → mastery bar moves → "See Page N" → re-read the slide → next set targets a different weak topic.
-5. Swap `.env` from LM Studio to Groq live: nothing else changes.
+5. Provider changes in `.env` take effect after restarting the API.
 
 ## Troubleshooting
-- **`chroma-hnswlib` build error on Windows** → use Python 3.11/3.12 (`uv python pin 3.12`).
 - **LM Studio `/embeddings` 404** → load an embedding model (e.g. *nomic-embed-text*) in LM Studio, or point `EMBEDDING_BASE_URL` at an OpenAI-compatible embedding server.
 - **Refuses too often / too rarely** → tune `MAX_DISTANCE` (higher = more permissive). Set `2.0` to disable the gate and rely on the prompt alone.
 - **Scanned PDF, no text** → set `FIRECRAWL_API_KEY`; Firecrawl's `mode: auto` applies OCR.
@@ -264,3 +275,34 @@ uv run uvicorn app.main:app --port 8000
 
 
 
+
+Quiz questions are prompted to include the full scenario instead of referring to
+unseen examples. Studio renders LaTeX in questions, options, explanations and cards.
+The learning profile shows per-topic evidence after each answer; Settings summarizes
+saved quiz attempts across projects. Regenerate older quizzes to apply new question-writing rules.
+
+
+## Review notes (2026-10-10)
+
+Completed fixes pass the frontend production build, database checks, focused
+regressions, auth/tenancy checks and the HTTP smoke test with the local mock.
+The mock now understands source-specific quiz context. This is not a claim
+that the following remaining gaps are resolved:
+
+- Chat evidence still coerces a string `"false"` to true, unlike the fixed
+  short-answer grader. Malformed classifier output can increase mastery.
+- `.env.example` still specifies 1536 embedding dimensions while the current
+  schema and default configuration use 768. Fresh setup needs a matching
+  embedding model and dimension configuration before migrations/startup.
+- Numerical questions with zero tolerance (exact answers) are discarded by
+  validation because the tolerance parser accepts only positive numbers.
+- Studio generation uses in-process background tasks. Interrupted queued or
+  generating jobs have no restart recovery and can remain pending.
+- Mock-exam time resets when reopened; the countdown is client-side.
+- Settings' automatic-indexing and default-model controls are not connected to
+  upload/chat behaviour.
+- Summary, study guide and mind map currently assemble topic metadata rather
+  than generating a full source-grounded document.
+- Flashcard self-ratings are local component state, not persistent review history.
+
+These are outstanding work items, not covered by the passing-path test results.

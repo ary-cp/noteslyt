@@ -193,7 +193,7 @@ function ProjectCard({
           if (e.key === "Enter") onOpen();
         }}
       >
-        <div className="flex h-[104px] items-center justify-center border-b border-[var(--border)] bg-[var(--surface-secondary)]">
+        <div className="flex h-[104px] items-center justify-center border-b border-[var(--border)] bg-[linear-gradient(120deg,rgba(20,184,166,0.18),rgba(59,130,246,0.14),rgba(168,85,247,0.16))]">
           <span className="flex h-11 w-11 items-center justify-center rounded-[8px] border border-[var(--border)] bg-[var(--surface)] text-[15px] font-semibold text-[var(--text-secondary)]">
             {initials}
           </span>
@@ -214,7 +214,7 @@ function ProjectCard({
             {project.description || project.subject || "No description yet."}
           </p>
           <p className="mt-auto pt-2 text-xs text-[var(--text-muted)]">
-            {project.stats.sources} sources · {project.stats.chats} chats
+            {project.stats.sources} {project.stats.sources === 1 ? "source" : "sources"} · {project.stats.chats} {project.stats.chats === 1 ? "chat" : "chats"}
           </p>
           <p className="text-xs text-[var(--text-muted)]">Updated {timeAgo(project.updated_at)}</p>
         </div>

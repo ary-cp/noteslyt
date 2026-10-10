@@ -230,6 +230,24 @@ class FileStorage:
         path = self._path_for(project_id, source_id, filename)
         return path if path.is_file() else None
 
+    def save_stream(self, project_id: str, source_id: str, filename: str, stream, limit_bytes: int) -> StoredFile:
+        """Copy an upload in bounded blocks; never retain the whole file in memory."""
+        path = self._path_for(project_id, source_id, filename)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".part")
+        size = 0
+        try:
+            with tmp.open("wb") as out:
+                while block := stream.read(min(1024 * 1024, limit_bytes - size + 1)):
+                    size += len(block)
+                    if size > limit_bytes:
+                        raise ValueError("File exceeds the upload size limit.")
+                    out.write(block)
+            tmp.replace(path)
+        finally:
+            tmp.unlink(missing_ok=True)
+        return StoredFile(path=path, size_bytes=size, filename=Path(filename).name)
+
     def copy_in(self, project_id: str, source_id: str, filename: str, src: Path) -> StoredFile:
         """Move/stream a file already on disk (large uploads) into storage."""
         path = self._path_for(project_id, source_id, filename)

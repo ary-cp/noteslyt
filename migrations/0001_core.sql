@@ -105,7 +105,7 @@ create table if not exists chunks (
     chunk_index   integer not null default 0,
     heading       text not null default '',
     text          text not null,
-    embedding     vector(1536)
+    embedding     vector(768)
 );
 
 create index if not exists chunks_embedding_idx on chunks using hnsw (embedding vector_cosine_ops);
@@ -118,7 +118,7 @@ create index if not exists chunks_topic_idx     on chunks (project_id, topic_id)
 -- `filter_project_id` is REQUIRED and there is deliberately no "search everything"
 -- default — a project boundary is the whole tenancy guarantee (plan.md invariant 3).
 create or replace function match_chunks (
-    query_embedding   vector(1536),
+    query_embedding   vector(768),
     match_count       integer,
     filter_project_id uuid,
     filter_source_ids uuid[] default null,

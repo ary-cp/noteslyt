@@ -35,7 +35,7 @@ export function SourceViewerDrawer({
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold">{source.filename}</h2>
             <p className="mt-0.5 text-xs text-[var(--text-muted)]">
-              {source.source_type} · {source.chunk_count} chunks · {timeAgo(source.created_at)}
+              {source.source_type.toUpperCase()} · {source.status === "ready" ? "Ready" : source.status} · {timeAgo(source.created_at)}
               {source.duration_s ? ` · ${formatDuration(source.duration_s)}` : ""}
             </p>
           </div>
@@ -68,7 +68,7 @@ export function SourceViewerDrawer({
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <ViewerBody source={source} />
+          <ViewerBody key={source.id} source={source} />
           {source.status_detail && source.status !== "ready" && (
             <p className="mt-3 rounded-[8px] border border-[var(--danger)]/30 bg-[var(--danger-soft)] p-3 text-[13px]">
               {source.status_detail}
@@ -76,7 +76,7 @@ export function SourceViewerDrawer({
           )}
         </div>
         <div className="flex items-center justify-between border-t border-[var(--border)] px-4 py-2.5">
-          <span className="font-mono text-[11px] text-[var(--text-muted)]">{source.id.slice(0, 8)}… · {source.parser || "auto"}</span>
+          <span className="text-xs text-[var(--text-muted)]">{source.chunk_count} indexed {source.chunk_count === 1 ? "passage" : "passages"}</span>
           <button type="button" onClick={() => { onRemove(source.id); onClose(); }} className="cursor-pointer rounded-md px-2 py-1 text-xs text-[var(--danger)] hover:bg-[var(--danger-soft)]">
             Remove from project
           </button>
@@ -87,15 +87,16 @@ export function SourceViewerDrawer({
 }
 
 function ViewerBody({ source }: { source: SourceOut }) {
-  const [tab, setTab] = useState<"parsed" | "original">("parsed");
+  const kind = mediaKind(source.source_type);
+  const [tab, setTab] = useState<"parsed" | "original">(kind === "image" ? "original" : "parsed");
   const [markdown, setMarkdown] = useState<string | null>(null);
   const [parsedError, setParsedError] = useState("");
   const [url, setUrl] = useState<string | null>(null);
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const kind = mediaKind(source.source_type);
 
   useEffect(() => {
+    if (kind === "image") return;
     let live = true;
     setMarkdown(null);
     setParsedError("");
@@ -103,7 +104,7 @@ function ViewerBody({ source }: { source: SourceOut }) {
       .then((content) => live && setMarkdown(content.markdown))
       .catch((e: unknown) => live && setParsedError(e instanceof Error ? e.message : String(e)));
     return () => { live = false; };
-  }, [source.id]);
+  }, [source.id, kind]);
 
   useEffect(() => {
     let live = true;
@@ -132,15 +133,17 @@ function ViewerBody({ source }: { source: SourceOut }) {
 
   return (
     <div>
-      <div className="mb-3 flex gap-1 border-b border-[var(--border)]" role="tablist" aria-label="Source view">
-        {([ ["parsed", "Parsed Markdown"], ["original", "Original"] ] as const).map(([id, label]) => (
-          <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
-            className={`border-b-2 px-3 py-2 text-[13px] font-medium ${tab === id ? "border-[var(--accent)] text-[var(--accent)]" : "border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]"}`}>
-            {label}
-          </button>
-        ))}
-      </div>
-      {tab === "parsed" ? (
+      {kind !== "image" && (
+        <div className="mb-3 flex gap-1 border-b border-[var(--border)]" role="tablist" aria-label="Source view">
+          {([ ["parsed", "Text content"], ["original", "Original"] ] as const).map(([id, label]) => (
+            <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
+              className={`border-b-2 px-3 py-2 text-[13px] font-medium ${tab === id ? "border-[var(--accent)] text-[var(--accent)]" : "border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+      {kind !== "image" && tab === "parsed" ? (
         markdown !== null ? (
           <div>
             {parsedError && <p className="mb-3 rounded-[8px] bg-[var(--surface-secondary)] p-3 text-xs text-[var(--text-muted)]">{parsedError}</p>}

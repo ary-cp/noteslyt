@@ -20,6 +20,9 @@ const SHORTCUTS: [string, string][] = [
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { push } = useToast();
   const { mode, setMode } = useTheme();
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [profile, setProfile] = useState<ProfileOut | null>(null);
   const [levels, setLevels] = useState<ProfileLevels | null>(null);
   const [capability, setCapability] = useState("unknown");
@@ -30,12 +33,15 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
   useEffect(() => {
     if (!open) return;
+    let active = true;
+    setLoading(true); setLoadError("");
     getProfile().then((p) => {
+      if (!active) return;
       setProfile(p);
       setCapability(p.capability_level);
       setThinking(p.thinking_level);
       setGoals(p.goals);
-    }).catch(() => undefined);
+    }).catch((e) => { if (active) setLoadError(e instanceof Error ? e.message : "Could not load profile"); }).finally(() => { if (active) setLoading(false); });
     getProfileLevels().then(setLevels).catch(() => undefined);
     try {
       setAutoIndex(localStorage.getItem("studyspace:autoindex") !== "off");
@@ -43,16 +49,18 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     } catch {
       /* ignore */
     }
+    return () => { active = false; };
   }, [open ]);
 
   const saveProfile = async () => {
+    setSaving(true);
     try {
       const next = await updateProfile({ capability_level: capability, thinking_level: thinking, goals });
       setProfile(next);
       push("Profile saved", { tone: "success" });
     } catch (e) {
       push("Save failed", { detail: e instanceof Error ? e.message : String(e), tone: "error" });
-    }
+    } finally { setSaving(false); }
   };
 
   return (
@@ -114,8 +122,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         </section>
         <section>
           <h3 className="mb-2 text-[13px] font-semibold">Learning profile</h3>
-          {profile ? (
+          {loading ? <p className="text-sm text-[var(--text-muted)]">Loading your profile…</p> : loadError ? <p role="alert" className="text-sm text-[var(--danger)]">{loadError}</p> : profile ? (
             <div className="grid gap-3">
+              {profile.quiz_progress && <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3">
+                <p className="text-sm font-medium">Your quiz progress</p>
+                <p className="mt-1 text-sm">{profile.quiz_progress.correct} / {profile.quiz_progress.answered} answers correct · {profile.quiz_progress.topics_practiced} topics practiced</p>
+                <p className="mt-1 text-xs text-[var(--text-muted)]">{profile.quiz_progress.answered ? "Based on saved first attempts. Open a project's Studio to see mastery for each topic." : "Take your first quiz to build a learning profile from your answers."}</p>
+              </div>}
+              <p className="text-xs text-[var(--text-muted)]">Set your learning preferences below. Quiz performance is tracked separately for each topic.</p>
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Capability">
                   <Dropdown
@@ -138,7 +152,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 <TextArea value={goals} onChange={(e) => setGoals(e.target.value)} placeholder="e.g. pass thermodynamics" />
               </Field>
               <div>
-                <Button variant="secondary" onClick={() => void saveProfile()}>Save profile</Button>
+                <Button variant="secondary" loading={saving} disabled={saving} onClick={() => void saveProfile()}>Save profile</Button>
               </div>
             </div>
           ) : (

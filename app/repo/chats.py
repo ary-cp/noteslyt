@@ -112,6 +112,26 @@ class ChatRepo(Repo):
             ).fetchone()
         return int(row["n"])
 
+    def recent_messages(self, chat_id: str, limit: int = 10) -> list[ChatMessageRecord]:
+        rows = self._fetch_all(
+            f"select {_MSG_COLUMNS} from chat_messages where chat_id = %s "
+            "order by created_at desc, id desc limit %s",
+            (chat_id, max(1, min(limit, 200))),
+        )
+        return to_records(ChatMessageRecord, list(reversed(rows)))
+
+    def unsummarized_messages(self, chat_id: str, through_id: str | None, keep_recent: int):
+        rows = self._fetch_all(
+            "with ranked as (select *, row_number() over (order by created_at desc, id desc) as rn "
+            "from chat_messages where chat_id=%s) "
+            f"select {_MSG_COLUMNS} from ranked where rn > %s "
+            "and (%s::uuid is null or (created_at,id) > "
+            "(select created_at,id from chat_messages where id=%s)) "
+            "order by created_at, id limit 50",
+            (chat_id, keep_recent, through_id, through_id),
+        )
+        return to_records(ChatMessageRecord, rows)
+
     def user_message_count(self, chat_id: str) -> int:
         with self.db.connection() as conn:
             row = conn.execute(

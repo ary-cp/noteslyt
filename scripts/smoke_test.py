@@ -272,15 +272,13 @@ def main() -> int:
     check("citations present", len(ans["citations"]) > 0,
           str([f"[{x['locator_kind']} {x['locator_value']}]" for x in ans["citations"]]))
     check("retrieved locators reported", len(ans["retrieved"]) > 0, str(ans["retrieved"]))
-    check("every citation label is in the answer",
-          all((f"[{x['locator_kind'].capitalize()} {x['locator_value']}]" in ans["answer"]
-               or x["locator_kind"] == "segment" and x["locator_value"] in ans["answer"])
-              for x in ans["citations"]),
+    check("every numbered citation is in the answer",
+          all(f"[{i + 1}]" in ans["answer"] for i, _ in enumerate(ans["citations"])),
           ans["answer"][:120])
 
     detail = c.get(f"/chats/{chat_id}", headers=h).json()
     check("history persisted server-side", detail["total"] == 2, str(detail["total"]))
-    check("chat auto-titled", detail["chat"]["title"].startswith("What is an eigenvector"),
+    check("chat auto-titled", bool(detail["chat"]["title"]) and detail["chat"]["title"] not in {"New chat", "I can't find this in your uploaded material."},
           detail["chat"]["title"])
 
     refused = send(chat_id, "Who won the 2022 world cup?")
@@ -341,11 +339,25 @@ def main() -> int:
 
     # -------------------------------------------------- quiz (F)
     section("adaptive assessment")
-    check("no topics -> no quiz",
-          c.post(f"/projects/{pb['id']}/quiz", json={}, headers=h).status_code == 422)
+    def wait_job(project_id, job_id):
+        deadline = time.monotonic() + TIMEOUT_S
+        while time.monotonic() < deadline:
+            jobs = c.get(f"/projects/{project_id}/studio-jobs", headers=h).json()
+            job = next(row for row in jobs if row["id"] == job_id)
+            if job["status"] in {"ready", "failed"}:
+                return job
+            time.sleep(0.2)
+        raise AssertionError("Studio job did not finish")
+
+    empty = c.post(f"/projects/{pb['id']}/quiz", json={}, headers=h)
+    check("empty-project quiz queues", empty.status_code == 202)
+    failed = wait_job(pb["id"], empty.json()["id"])
+    check("empty project records readable generation failure", failed["status"] == "failed" and bool(failed["error"]))
     qz = c.post(f"/projects/{pa['id']}/quiz", json={"n_questions": 3}, headers=h)
-    check("quiz created (201)", qz.status_code == 201, str(qz.status_code))
-    quiz = qz.json()
+    check("quiz queued (202)", qz.status_code == 202, str(qz.status_code))
+    completed = wait_job(pa["id"], qz.json()["id"])
+    check("quiz generation completed", completed["status"] == "ready", completed["error"])
+    quiz = completed["payload"]
     quiz_id = quiz["quiz_id"]
     check("three questions", len(quiz["questions"]) == 3,
           str([(q["qtype"], q["topic_slug"]) for q in quiz["questions"]]))

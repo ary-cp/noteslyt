@@ -197,8 +197,7 @@ def _mount_frontend(application: FastAPI) -> str:
 
     Mounted AFTER every API route, so `/health`, `/projects`, … always reach
     the API first. Only one SPA path collides with the API (`GET /projects`
-    lists projects) — the client therefore uses `/` as its dashboard route
-    and navigates to `/projects` client-side only; `/`, `/login`, `/signup`,
+    lists projects) — the client therefore uses `/` as its dashboard route; `/`, `/login`, `/signup`,
     `/project/...` and `/console` have no API counterpart and serve index.html
     directly, including on hard refresh.
     """

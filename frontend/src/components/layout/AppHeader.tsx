@@ -11,7 +11,7 @@ export function AppHeader({ onSearch, onSettings }: { onSearch: () => void; onSe
 
   return (
     <header className="flex h-[52px] shrink-0 items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--sidebar-bg)] px-4">
-      <Link to="/projects" className="flex min-w-0 items-center gap-2" aria-label="StudySpace home">
+      <Link to="/" className="flex min-w-0 items-center gap-2" aria-label="StudySpace home">
         <span className="flex h-7 w-7 items-center justify-center rounded-[7px] bg-[var(--accent)] text-white">
           <BookMarked size={15} />
         </span>

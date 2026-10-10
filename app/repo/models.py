@@ -137,6 +137,7 @@ class AnswerRecord:
     correct: bool = False
     p_before: float = 0.30
     p_after: float = 0.30
+    feedback: str = ""
     created_at: datetime | None = None
 
 
