@@ -281,7 +281,7 @@ function SourceRow({
           <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-[var(--text-muted)]">
             <Badge tone={statusTone(source.status)}>{statusLabel(source.status)}</Badge>
             {source.status === "ready" ? (
-              <span>{source.chunk_count} chunks{source.duration_s ? ` · ${Math.round(source.duration_s / 60)} min` : ""}</span>
+              <span>{source.chunk_count} {source.chunk_count === 1 ? "passage" : "passages"}{source.duration_s ? ` · ${Math.round(source.duration_s / 60)} min` : ""}</span>
             ) : busy ? (
               <span className="text-[var(--warning)]">Indexing…</span>
             ) : (

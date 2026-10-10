@@ -79,7 +79,8 @@ def _generate_studio_job(job_id, kind, payload, user_id, project_id, studio, ser
         studio.update(job_id, "ready", title=title, payload=output)
     except Exception as exc:  # persisted so the learner can see and retry failures
         log.exception("Studio %s generation failed", kind)
-        studio.update(job_id, "failed", error=str(exc) or "Generation failed.")
+        label = {"quiz": "Quiz", "exam": "Mock exam", "flashcards": "Flashcards"}[kind]
+        studio.update(job_id, "failed", title=label, error=str(exc) or "Generation failed. Please retry.")
 
 
 def _iso(value) -> str:
@@ -159,6 +160,18 @@ def save_studio_artifact(project_id: uuid.UUID, payload: StudioJobCreate, user: 
     if payload.kind not in {"summary", "guide", "sheet", "mindmap"}:
         raise HTTPException(status_code=422, detail="Unsupported Studio artifact type.")
     return _job_out(studio.create(str(project_id), user.id, payload.kind, payload.title, payload.payload, "ready"))
+
+
+@router.get("/quizzes/{quiz_id}/answers", response_model=dict[str, AnswerOut])
+def saved_answers(
+    quiz_id: uuid.UUID,
+    user: CurrentUser,
+    quizzes: Annotated[QuizRepo, Depends(get_quizzes)],
+    service=Depends(get_quiz_service),
+) -> dict:
+    """Resume a learner's first attempts without grading again or revealing unanswered keys."""
+    require_quiz(quizzes, str(quiz_id), user.id)
+    return service.saved_answers(user.id, str(quiz_id))
 
 
 @router.post("/quizzes/{quiz_id}/answer", response_model=AnswerOut)

@@ -9,7 +9,7 @@ export default function NotFound() {
         The page you're looking for doesn't exist or was moved.
       </p>
       <div className="mt-5 flex gap-2">
-        <Link to="/projects" className="inline-flex h-9 items-center rounded-[7px] bg-[var(--accent)] px-4 text-sm font-medium text-white hover:bg-[var(--accent-hover)]">
+        <Link to="/" className="inline-flex h-9 items-center rounded-[7px] bg-[var(--accent)] px-4 text-sm font-medium text-white hover:bg-[var(--accent-hover)]">
           Back to projects
         </Link>
         <Link to="/" className="inline-flex h-9 items-center rounded-[7px] border border-[var(--border)] px-4 text-sm font-medium hover:bg-[var(--surface-secondary)]">

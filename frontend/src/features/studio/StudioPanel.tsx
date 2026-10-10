@@ -13,8 +13,8 @@ import {
   Sparkles,
   // TableProperties,
 } from "lucide-react";
-import { createExam, createFlashcards, createQuiz, fetchLearner, listStudioJobs, listTopics, saveStudioArtifact, submitAnswer } from "../../lib/api";
-import type { LearnerOut, QuizOut, SourceOut, StudioJob, TopicSummary } from "../../lib/types";
+import { createExam, createFlashcards, createQuiz, fetchLearner, getQuizAnswers, listStudioJobs, listTopics, saveStudioArtifact, submitAnswer } from "../../lib/api";
+import type { AnswerOut, LearnerOut, QuizOut, SourceOut, StudioJob, TopicSummary } from "../../lib/types";
 import { useToast } from "../../lib/toast";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/Feedback";
@@ -76,10 +76,23 @@ export function StudioPanel({
     let active = true;
     setJobs([]);
     listStudioJobs(projectId).then((rows) => { if (active) setJobs(rows); }).catch(() => undefined);
-    listTopics(projectId).then(setTopics).catch(() => undefined);
-    fetchLearner(projectId).then(setLearner).catch(() => undefined);
+    listTopics(projectId).then((rows) => { if (active) setTopics(rows); }).catch(() => undefined);
+    fetchLearner(projectId).then((row) => { if (active) setLearner(row); }).catch(() => undefined);
     return () => { active = false; };
   }, [projectId]);
+
+  const sourceRevision = sources.map((s) => `${s.id}:${s.status}`).join(',');
+  useEffect(() => {
+    let active = true;
+    Promise.all([listTopics(projectId), fetchLearner(projectId)]).then(([t, l]) => {
+      if (active) { setTopics(t); setLearner(l); }
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [projectId, sourceRevision]);
+  const refreshLearner = () => {
+    void fetchLearner(projectId).then(setLearner).catch(() => push("Progress could not refresh", { tone: "error" }));
+    void listTopics(projectId).then(setTopics).catch(() => undefined);
+  };
 
   const hasPendingJobs = jobs.some((j) => j.status === "queued" || j.status === "generating");
   useEffect(() => {
@@ -91,7 +104,11 @@ export function StudioPanel({
           const rows = await listStudioJobs(projectId, 25);
           if (!active) return;
           setJobs(rows);
-          if (!rows.some((job) => job.status === "queued" || job.status === "generating")) return;
+          if (!rows.some((job) => job.status === "queued" || job.status === "generating")) {
+            const [nextTopics, nextLearner] = await Promise.all([listTopics(projectId), fetchLearner(projectId)]);
+            if (active) { setTopics(nextTopics); setLearner(nextLearner); }
+            return;
+          }
         } catch {
           await new Promise((resolve) => window.setTimeout(resolve, 5000));
         }
@@ -236,16 +253,17 @@ export function StudioPanel({
           ))}
         </div>
 
-        {learner && learner.weakest.length > 0 && (
+        {learner && learner.topics.length > 0 && (
           <div className="mt-4 rounded-[8px] border border-[var(--border)] bg-[var(--surface)] p-3">
-            <p className="text-xs font-medium text-[var(--text-muted)]">WEAKEST TOPICS</p>
-            <div className="mt-1.5 grid gap-1.5">
-              {learner.weakest.slice(0, 3).map((w) => (
+            <p className="text-xs font-medium text-[var(--text-muted)]">YOUR LEARNING PROFILE</p>
+            <p className="mt-1 text-xs text-[var(--text-muted)]">Saved topics · mastery updates after each quiz answer.</p>
+            <div className="mt-2 grid max-h-64 gap-3 overflow-y-auto">
+              {learner.topics.map((w) => (
                 <div key={w.topic_id} className="flex min-w-0 items-center gap-2 text-[13px]">
-                  <span className="min-w-0 flex-1 truncate">{w.name}</span>
+                  <span className="min-w-0 flex-1"><span className="block">{w.name}</span><span className="block text-[11px] text-[var(--text-muted)]">{w.attempts ? `${w.correct}/${w.attempts} correct · ${w.coverage_status.replaceAll("_", " ")}` : "Take a quiz to assess this topic"}</span></span>
                   {w.attempts > 0 ? <span className="shrink-0 font-mono text-xs text-[var(--text-muted)]">{Math.round(w.p_mastery * 100)}%</span> : <span className="shrink-0 text-[11px] text-[var(--text-muted)]">Not practiced</span>}
                   <span className="h-1 w-16 shrink-0 overflow-hidden rounded-full bg-[var(--border)]">
-                    {w.attempts > 0 && <span className="block h-full max-w-full rounded-full bg-[var(--accent)]" style={{ width: `${Math.max(0, Math.min(100, Math.round(w.p_mastery * 100)))}%` }} />}
+                    {w.attempts > 0 && <span className="block h-full max-w-full rounded-full bg-gradient-to-r from-amber-500 via-teal-500 to-sky-500" style={{ width: `${Math.max(0, Math.min(100, Math.round(w.p_mastery * 100)))}%` }} />}
                   </span>
                 </div>
               ))}
@@ -264,17 +282,29 @@ export function StudioPanel({
           ) : (
             <div className="grid gap-1.5">
               {jobs.slice(0, 12).map((job) => (
-                <button
-                  key={job.id}
-                  disabled={job.status !== "ready"}
-                  onClick={() => job.status === "ready" && setViewing(jobArtifact(job))}
-                  title={job.status === "failed" ? job.error : undefined}
-                  className="flex items-center gap-2.5 rounded-[8px] border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-left text-[13px] enabled:cursor-pointer enabled:hover:border-[var(--border-strong)] disabled:cursor-default"
-                >
-                  <span className="text-[var(--text-secondary)]">{job.status === "queued" || job.status === "generating" ? <Loader2 size={16} className="animate-spin" /> : TOOLS.find((t) => t.id === job.kind)?.icon}</span>
-                  <span className="min-w-0 flex-1 truncate">{job.title}</span>
-                  <span className={`shrink-0 text-[10px] ${job.status === "failed" ? "text-[var(--danger)]" : "text-[var(--text-muted)]"}`}>{job.status === "ready" ? timeAgo(job.created_at) : job.status}</span>
-                </button>
+                <div key={job.id} className="overflow-hidden rounded-[8px] border border-[var(--border)] bg-[var(--surface)]">
+                  <button
+                    type="button"
+                    disabled={job.status !== "ready"}
+                    onClick={() => setViewing(jobArtifact(job))}
+                    className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-[13px] enabled:cursor-pointer enabled:hover:bg-[var(--surface-secondary)] disabled:cursor-default"
+                  >
+                    <span className="text-[var(--text-secondary)]">{job.status === "queued" || job.status === "generating" ? <Loader2 size={16} className="animate-spin" /> : TOOLS.find((t) => t.id === job.kind)?.icon}</span>
+                    <span className="min-w-0 flex-1 truncate">{job.status === "ready" ? job.title : TOOLS.find((t) => t.id === job.kind)?.title ?? job.kind}</span>
+                    <span className={`shrink-0 text-[11px] ${job.status === "failed" ? "text-[var(--danger)]" : "text-[var(--text-muted)]"}`}>
+                      {job.status === "ready" ? timeAgo(job.created_at) : job.status === "failed" ? "Failed" : job.status === "queued" ? "Queued" : "Generating…"}
+                    </span>
+                  </button>
+                  {job.status === "failed" && (
+                    <div className="border-t border-[var(--border)] px-3 pb-3 pt-2">
+                      <p className="break-words text-xs leading-relaxed text-[var(--text-secondary)]">{job.error || "Generation could not finish. Please try again."}</p>
+                      <button type="button" onClick={() => setGenTool(job.kind as StudioTool)}
+                        className="mt-2 cursor-pointer rounded-md border border-[var(--border-strong)] px-2.5 py-1 text-xs font-medium hover:bg-[var(--surface-secondary)]">
+                        Try again
+                      </button>
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
           )}
@@ -300,7 +330,7 @@ export function StudioPanel({
               value={topicId}
               onChange={setTopicId}
               ariaLabel="Topic"
-              options={[{ value: "", label: "Mixed (weakest first)" }, ...scopedTopics.map((t) => ({ value: t.id, label: t.name }))]}
+              options={[{ value: "", label: genTool === "flashcards" ? "All selected sources" : "Mixed (weakest first)" }, ...scopedTopics.map((t) => ({ value: t.id, label: t.name }))]}
             />
           </Field>
           {(genTool === "quiz" || genTool === "exam" || genTool === "flashcards") && (
@@ -309,7 +339,7 @@ export function StudioPanel({
               <div className="mt-1 flex justify-between font-mono text-[11px] text-[var(--text-muted)]"><span>5</span><span>{genTool === "exam" ? 30 : genTool === "flashcards" ? 20 : 10}</span></div>
             </Field>
           )}
-          <Field label="Difficulty">
+          {genTool !== "quiz" && genTool !== "exam" && genTool !== "flashcards" && <><Field label="Difficulty">
             <RadioGroup value={difficulty} onChange={setDifficulty} ariaLabel="Difficulty" options={[
               { value: "easy", label: "Easy" },
               { value: "medium", label: "Medium" },
@@ -324,11 +354,12 @@ export function StudioPanel({
               className="h-9 w-full rounded-[7px] border border-[var(--border)] bg-[var(--input)] px-2.5 text-sm outline-none focus:border-[var(--accent)]"
             />
           </Field>
+          </>}
           {busy && <p className="text-[13px] text-[var(--text-secondary)]">Generating… this calls your project corpus.</p>}
         </div>
       </Modal>
 
-      <ArtifactViewer artifact={viewing} onClose={() => setViewing(null)} />
+      <ArtifactViewer key={viewing?.id ?? "closed"} artifact={viewing} onAnswered={refreshLearner} onClose={() => setViewing(null)} />
     </div>
   );
 }
@@ -339,14 +370,14 @@ function sanitize(s: string) {
 
 /* ---------------- artifact viewer ---------------- */
 
-function ArtifactViewer({ artifact, onClose }: { artifact: Artifact | null; onClose: () => void }) {
+function ArtifactViewer({ artifact, onClose, onAnswered }: { artifact: Artifact | null; onClose: () => void; onAnswered: () => void }) {
   if (!artifact) return null;
   return (
     <Modal open onClose={onClose} title={artifact.title} subtitle={`${timeAgo(artifact.createdAt)}`} width={720}>
       {artifact.kind === "quiz" || artifact.kind === "exam" ? (
-        <QuizRunner quiz={artifact.payload as QuizOut} exam={artifact.kind === "exam"} />
+        <QuizRunner quiz={artifact.payload as QuizOut} exam={artifact.kind === "exam"} onAnswered={onAnswered} />
       ) : artifact.kind === "flashcards" ? (
-        <Flashcards cards={(artifact.payload as { cards: { front: string; back: string }[] }).cards} />
+        <Flashcards cards={(artifact.payload as { cards: { front: string; back: string }[] }).cards ?? []} requested={(artifact.payload as { requested?: number }).requested} />
       ) : artifact.kind === "mindmap" ? (
         <MindMapView mermaid={(artifact.payload as { mermaid: string }).mermaid} />
       ) : (
@@ -387,21 +418,29 @@ function MindMapView({ mermaid }: { mermaid: string }) {
 
 /* ---------------- flashcards ---------------- */
 
-function Flashcards({ cards }: { cards: { front: string; back: string }[] }) {
+function Flashcards({ cards, requested }: { cards: { front: string; back: string }[]; requested?: number }) {
   const [i, setI] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [grades, setGrades] = useState<Record<number, string>>({});
   if (cards.length === 0) return <p className="text-sm text-[var(--text-muted)]">No cards in this set.</p>;
-  const card = cards[Math.min(i, cards.length - 1)];
+  if (i >= cards.length) return (
+    <div className="py-6 text-center">
+      <p className="text-lg font-semibold">Set complete</p>
+      <p className="mt-1 text-sm text-[var(--text-secondary)]">You reviewed all {cards.length} cards.</p>
+      <Button className="mt-4" variant="secondary" onClick={() => { setI(0); setFlipped(false); setGrades({}); }}>Review again</Button>
+    </div>
+  );
+  const card = cards[i];
 
   const grade = (g: string) => {
     setGrades((prev) => ({ ...prev, [i]: g }));
     setFlipped(false);
-    setI((v) => Math.min(v + 1, cards.length - 1));
+    setI((v) => v + 1);
   };
 
   return (
     <div>
+      {requested && cards.length < requested && <p className="mb-3 rounded-lg bg-[var(--surface-secondary)] p-3 text-xs text-[var(--text-secondary)]">Created {cards.length} of {requested} requested cards from the available material.</p>}
       <p className="mb-2 text-center font-mono text-xs text-[var(--text-muted)]">{Math.min(i + 1, cards.length)} / {cards.length}</p>
       <div className="h-1 overflow-hidden rounded-full bg-[var(--border)]">
         <div className="h-full bg-[var(--accent)]" style={{ width: `${((i + 1) / cards.length) * 100}%` }} />
@@ -420,10 +459,10 @@ function Flashcards({ cards }: { cards: { front: string; back: string }[] }) {
       >
         <span className={`flip-inner ${flipped ? "flipped" : ""} relative block min-h-[180px]`}>
           <span className="flip-face absolute inset-0 flex items-center justify-center rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-6 text-center text-[15px]">
-            {card.front}
+            <MarkdownBody text={card.front} />
           </span>
           <span className="flip-face flip-back absolute inset-0 flex items-center justify-center rounded-[10px] border border-[var(--accent-border)] bg-[var(--accent-soft)]/40 p-6 text-center text-[15px]">
-            {card.back}
+            <MarkdownBody text={card.back} />
           </span>
         </span>
       </button>
@@ -433,7 +472,8 @@ function Flashcards({ cards }: { cards: { front: string; back: string }[] }) {
           <button
             key={g}
             onClick={() => grade(g)}
-            className={`h-8 cursor-pointer rounded-[7px] border px-3 text-[13px] font-medium ${grades[i] === g ? "border-[var(--accent-border)] bg-[var(--accent-soft)]" : "border-[var(--border)] hover:bg-[var(--surface-secondary)]"}`}
+            disabled={!flipped}
+            className={`h-8 cursor-pointer rounded-[7px] border px-3 text-[13px] font-medium disabled:cursor-not-allowed disabled:opacity-40 ${grades[i] === g ? "border-[var(--accent-border)] bg-[var(--accent-soft)]" : "border-[var(--border)] hover:bg-[var(--surface-secondary)]"}`}
           >
             {g}
           </button>
@@ -445,38 +485,56 @@ function Flashcards({ cards }: { cards: { front: string; back: string }[] }) {
 
 /* ---------------- quiz / exam ---------------- */
 
-function QuizRunner({ quiz, exam }: { quiz: QuizOut; exam: boolean }) {
+function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; onAnswered: () => void }) {
   const { push } = useToast();
   const [i, setI] = useState(0);
-  const [answers, setAnswers] = useState<Record<string, { correct: boolean; explanation: string }>>({});
+  const [answers, setAnswers] = useState<Record<string, AnswerOut>>({});
+  const [loadingAnswers, setLoadingAnswers] = useState(true);
+  const [resumeError, setResumeError] = useState("");
+  const [resumeVersion, setResumeVersion] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setLoadingAnswers(true); setResumeError("");
+    getQuizAnswers(quiz.quiz_id).then((saved) => { if (active) setAnswers(saved); })
+      .catch((e) => { if (active) setResumeError(e instanceof Error ? e.message : "Could not load saved answers"); })
+      .finally(() => { if (active) setLoadingAnswers(false); });
+    return () => { active = false; };
+  }, [quiz.quiz_id, resumeVersion]);
+  const [submitting, setSubmitting] = useState(false);
   const [picked, setPicked] = useState<number | null>(null);
   const [text, setText] = useState("");
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
   const [done, setDone] = useState(false);
-  const [left, setLeft] = useState(exam ? 42 * 60 + 13 : 0);
+  const [left, setLeft] = useState(exam ? quiz.questions.length * 120 : 0);
 
   useEffect(() => {
-    if (!exam) return;
+    if (!exam || done) return;
     const t = window.setInterval(() => setLeft((s) => Math.max(0, s - 1)), 1000);
     return () => window.clearInterval(t);
-  }, [exam]);
+  }, [exam, done]);
+  useEffect(() => { if (exam && left === 0) setDone(true); }, [exam, left]);
 
   const q = quiz.questions[i];
   const correct = Object.values(answers).filter((a) => a.correct).length;
 
+  if (loadingAnswers) return <p className="text-sm text-[var(--text-muted)]">Loading saved answers…</p>;
+  if (resumeError) return <div><p role="alert" className="mb-3 text-sm text-[var(--danger)]">{resumeError}</p><Button onClick={() => setResumeVersion((v) => v + 1)}>Try again</Button></div>;
   if (!q) return <p className="text-sm text-[var(--text-muted)]">No questions generated.</p>;
 
   const submit = async () => {
-    const given = q.options.length > 0 ? (picked ?? "") : text;
+    if (submitting || answers[q.id]) return;
+    const given = q.qtype === "mcq" ? (picked ?? "") : text.trim();
     if (given === "" || given === null) return;
+    setSubmitting(true);
     try {
       const res = await submitAnswer(quiz.quiz_id, q.id, given as number | string);
-      setAnswers((prev) => ({ ...prev, [q.id]: { correct: res.correct, explanation: res.explanation || res.feedback } }));
-      if (!res.correct) push("Not quite", { detail: res.explanation || res.feedback, tone: "error" });
+      setAnswers((prev) => ({ ...prev, [q.id]: res }));
+      onAnswered();
+      if (!res.correct) push("Answer saved — review the explanation", { tone: "warning" });
       else push("Correct", { tone: "success" });
     } catch (e) {
       push("Grading failed", { detail: e instanceof Error ? e.message : String(e), tone: "error" });
-    }
+    } finally { setSubmitting(false); }
   };
 
   if (done) {
@@ -492,13 +550,13 @@ function QuizRunner({ quiz, exam }: { quiz: QuizOut; exam: boolean }) {
               <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold ${answers[qq.id]?.correct ? "bg-[var(--accent)] text-white" : answers[qq.id] ? "bg-[var(--danger)] text-white" : "bg-[var(--surface-secondary)] text-[var(--text-muted)]"}`}>
                 {idx + 1}
               </span>
-              <span className="min-w-0 flex-1 truncate">{qq.stem}</span>
+              <div className="min-w-0 flex-1"><MarkdownBody text={qq.stem} /></div>
               <span className="text-xs text-[var(--text-muted)]">{answers[qq.id] ? (answers[qq.id].correct ? "Correct" : "Review") : "Skipped"}</span>
             </div>
           ))}
         </div>
         <div className="mt-4">
-          <Button variant="secondary" onClick={() => { setDone(false); setI(0); setAnswers({}); }}>Retry</Button>
+          <Button variant="secondary" onClick={() => { setDone(false); setI(0); }}>Review answers</Button>
         </div>
       </div>
     );
@@ -519,27 +577,33 @@ function QuizRunner({ quiz, exam }: { quiz: QuizOut; exam: boolean }) {
           </button>
         )}
       </div>
-      <p className="text-[15px] font-medium">{q.stem}</p>
-      {q.options.length > 0 ? (
+      <p className="mb-2 text-xs text-[var(--text-muted)]">{q.topic_slug.replaceAll("-", " ")}</p>
+      <MarkdownBody text={q.stem} />
+      {q.qtype === "mcq" ? (
         <div className="mt-3 grid gap-2">
           {q.options.map((opt, idx) => (
             <button
               key={idx}
               onClick={() => setPicked(idx)}
+              disabled={submitting || !!answers[q.id]}
+              aria-pressed={(answers[q.id] ? Number(answers[q.id].given) : picked) === idx}
               className={`flex cursor-pointer items-center gap-2.5 rounded-[8px] border px-3 py-2.5 text-left text-sm transition-colors ${
-                picked === idx ? "border-[var(--accent-border)] bg-[var(--accent-soft)]/50" : "border-[var(--border)] hover:border-[var(--border-strong)]"
+                answers[q.id] && opt === answers[q.id].expected ? "border-[var(--accent-border)] bg-[var(--accent-soft)]/50" :
+                answers[q.id] && Number(answers[q.id].given) === idx ? "border-[var(--danger)] bg-[var(--danger-soft)]" :
+                picked === idx && !answers[q.id] ? "border-[var(--border-strong)] bg-[var(--surface-secondary)]" : "border-[var(--border)] hover:border-[var(--border-strong)]"
               }`}
             >
               <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] border border-[var(--border)] font-mono text-xs">
                 {String.fromCharCode(65 + idx)}
               </span>
-              {opt}
+              <MarkdownBody text={opt} />
             </button>
           ))}
         </div>
       ) : (
         <textarea
-          value={text}
+          value={answers[q.id] ? String(answers[q.id].given) : text}
+          disabled={submitting || !!answers[q.id]}
           onChange={(e) => setText(e.target.value)}
           rows={3}
           placeholder="Type your answer…"
@@ -547,15 +611,19 @@ function QuizRunner({ quiz, exam }: { quiz: QuizOut; exam: boolean }) {
         />
       )}
       {answers[q.id] && (
-        <p className={`mt-3 rounded-[8px] border p-2.5 text-[13px] ${answers[q.id].correct ? "border-[var(--accent-border)] bg-[var(--accent-soft)]/40" : "border-[var(--danger)]/30 bg-[var(--danger-soft)]"}`}>
-          {answers[q.id].explanation || (answers[q.id].correct ? "Correct." : "Incorrect.")}
-        </p>
+        <div className={`mt-3 rounded-[8px] border p-2.5 text-[13px] ${answers[q.id].correct ? "border-[var(--accent-border)] bg-[var(--accent-soft)]/40" : "border-[var(--danger)]/30 bg-[var(--danger-soft)]"}`}>
+          <p className="mb-2 font-semibold">{answers[q.id].correct ? "Correct" : "Not quite"}</p>
+          {!answers[q.id].correct && <MarkdownBody text={`**Expected answer:** ${answers[q.id].expected ?? "See explanation"}`} />}
+          <MarkdownBody text={[answers[q.id].feedback, answers[q.id].feedback.includes(answers[q.id].explanation) ? "" : answers[q.id].explanation].filter(Boolean).join("\n\n")} />
+          {answers[q.id].topic && <p className="mt-2 text-xs">{answers[q.id].topic?.name} · mastery {Math.round(answers[q.id].p_before * 100)}% → {Math.round(answers[q.id].p_after * 100)}%</p>}
+          <p className="mt-2 text-xs text-[var(--text-muted)]">{answers[q.id].citation.source} · {answers[q.id].citation.label}</p>
+        </div>
       )}
       <div className="mt-4 flex items-center justify-between">
-        <Button variant="ghost" onClick={() => { setI((v) => Math.max(0, v - 1)); setPicked(null); setText(""); }} disabled={i === 0}>Back</Button>
+        <Button variant="ghost" onClick={() => { setI((v) => Math.max(0, v - 1)); setPicked(null); setText(""); }} disabled={i === 0 || submitting}>Back</Button>
         <div className="flex gap-2">
           {!answers[q.id] ? (
-            <Button variant="primary" onClick={() => void submit()} disabled={(q.options.length > 0 && picked === null) || (q.options.length === 0 && !text.trim())}>
+            <Button variant="primary" onClick={() => void submit()} loading={submitting} disabled={submitting || (q.options.length > 0 && picked === null) || (q.options.length === 0 && !text.trim())}>
               Check
             </Button>
           ) : i + 1 < quiz.questions.length ? (
@@ -570,6 +638,7 @@ function QuizRunner({ quiz, exam }: { quiz: QuizOut; exam: boolean }) {
           {quiz.questions.map((qq, idx) => (
             <button
               key={qq.id}
+              disabled={submitting}
               onClick={() => { setI(idx); setPicked(null); setText(""); }}
               className={`h-7 w-7 cursor-pointer rounded-[6px] border font-mono text-xs ${idx === i ? "border-[var(--accent)]" : "border-[var(--border)]"} ${answers[qq.id] ? (answers[qq.id].correct ? "bg-[var(--accent-soft)]" : "bg-[var(--danger-soft)]") : ""} ${flagged.has(qq.id) ? "ring-1 ring-[var(--warning)]" : ""}`}
             >

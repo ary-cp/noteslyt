@@ -3,8 +3,8 @@ import type * as React from "react";
  * StudySpace — AI learning workspace.
  *
  * Routes:
- *   /            → /projects
- *   /projects    → dashboard
+ *   /            → dashboard
+ *   /projects    → legacy client redirect (API on hard navigation)
  *   /login, /signup
  *   /project/:projectId
  *   /project/:projectId/chat/:chatId
@@ -144,11 +144,11 @@ function Shell() {
       {!hideHeader && <AppHeader onSearch={() => setPalette(true)} onSettings={() => setSettings(true)} />}
       <div className="flex min-h-0 flex-1 flex-col">
         <Routes>
-          <Route path="/" element={<Navigate to="/projects" replace />} />
+          <Route path="/projects" element={<Navigate to="/" replace />} />
           <Route path="/login" element={<AuthPage mode="login" />} />
           <Route path="/signup" element={<AuthPage mode="signup" />} />
           <Route
-            path="/projects"
+            path="/"
             element={
               <RequireAuth>
                 <Dashboard onOpenPalette={() => setPalette(true)} />

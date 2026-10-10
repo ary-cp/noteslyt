@@ -45,7 +45,7 @@ import type {
 function resolveApiBase(): string {
   const raw = import.meta.env.VITE_API_URL as string | undefined;
   if (raw !== undefined) return raw.replace(/\/$/, "");
-  return "http://localhost:8000";
+  return import.meta.env.DEV ? "http://localhost:8000" : "";
 }
 
 export const API_BASE: string = resolveApiBase();
@@ -310,6 +310,9 @@ export async function waitForStudioJob(projectId: string, jobId: string): Promis
 }
 export const saveStudioArtifact = (projectId: string, body: { kind: string; title: string; payload: Record<string, unknown> }): Promise<StudioJob> =>
   request(`/projects/${projectId}/studio-jobs`, json(body));
+
+export const getQuizAnswers = (quizId: string): Promise<Record<string, AnswerOut>> =>
+  request(`/quizzes/${quizId}/answers`);
 
 export const submitAnswer = (
   quizId: string,

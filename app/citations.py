@@ -107,51 +107,34 @@ CITATION_RE = re.compile(
 )
 
 
-def _resolve(match: re.Match, by_locator: dict, by_ts: dict) -> tuple[str, str] | None:
-    """Map a regex match to a retrieved `(kind, value)` key, or None."""
+def _resolve(match: re.Match, by_locator: dict, by_ts: dict) -> tuple[str, str, str] | None:
+    """Numbered references identify a source + locator; ambiguous labels are refused."""
     g = match.groupdict()
-    if g["page"]:
-        return ("page", g["page"].strip())
-    if g["slide"]:
-        return ("slide", g["slide"].strip())
-    if g["sheet"]:
-        return ("sheet", g["sheet"].strip())
-    if g["section"]:
-        return ("section", g["section"].strip())
-    if g["row"]:
-        return ("row", g["row"].strip())
-    if g["image"]:
-        value = g["image"].strip()
-        key = ("image", value)
-        if key in by_locator:
-            return key
-        # Vision models often number attached images instead of repeating a
-        # filename. Resolve [Image 1] to the first retrieved image while still
-        # emitting the canonical filename label in the audited answer.
-        if value.isdigit():
-            images = [candidate for candidate in by_locator if candidate[0] == "image"]
-            index = int(value) - 1
-            if 0 <= index < len(images):
-                return images[index]
-        return key
-    if g["segment"]:
-        return ("segment", g["segment"].strip())
+    keys = list(by_locator)
     if g["reference"]:
         index = int(g["reference"]) - 1
-        locators = list(by_locator)
-        if 0 <= index < len(locators):
-            return locators[index]
+        return keys[index] if 0 <= index < len(keys) else None
     if g["ts"]:
-        return by_ts.get(g["ts"].strip())
-    return None
+        matches = by_ts.get(g["ts"].strip(), [])
+    else:
+        kind = next((k for k in ("page", "slide", "sheet", "section", "row", "image", "segment") if g[k]), None)
+        if kind is None:
+            return None
+        value = g[kind].strip()
+        matches = [key for key in keys if key[1:] == (kind, value)]
+        if not matches and kind == "image" and value.isdigit():
+            images = [key for key in keys if key[1] == "image"]
+            index = int(value) - 1
+            return images[index] if 0 <= index < len(images) else None
+    return matches[0] if len(matches) == 1 else None
 
 
 def format_context(chunks: list, *, numbered: bool = False) -> str:
     """Each excerpt prefixed with its locator, optionally with a cite number."""
     blocks = []
-    references: dict[tuple[str, str], int] = {}
+    references: dict[tuple[str, str, str], int] = {}
     for c in chunks:
-        locator = (c.locator_kind, c.locator_value)
+        locator = (c.source_id, c.locator_kind, c.locator_value)
         if locator not in references:
             references[locator] = len(references) + 1
         label = citation_label(c.locator_kind, c.locator_value, getattr(c, "start_ts", None))
@@ -170,15 +153,15 @@ def audit_citations(answer: str, chunks: list) -> AuditResult:
     are normalised to canonical form; dangling punctuation left by a dropped
     citation ("word .") is tidied.
     """
-    by_locator: dict[tuple[str, str], object] = {}
+    by_locator: dict[tuple[str, str, str], object] = {}
     for c in chunks:  # best-ranked chunk per locator wins
-        by_locator.setdefault((c.locator_kind, c.locator_value), c)
-    by_ts: dict[str, tuple[str, str]] = {}
-    for (kind, value), c in by_locator.items():
+        by_locator.setdefault((c.source_id, c.locator_kind, c.locator_value), c)
+    by_ts: dict[str, list[tuple[str, str, str]]] = {}
+    for (source_id, kind, value), c in by_locator.items():
         if kind == "segment" and getattr(c, "start_ts", None) is not None:
-            by_ts.setdefault(format_timestamp(c.start_ts), (kind, value))
+            by_ts.setdefault(format_timestamp(c.start_ts), []).append((source_id, kind, value))
 
-    seen: list[tuple[str, str]] = []
+    seen: list[tuple[str, str, str]] = []
 
     def _replace(match: re.Match) -> str:
         key = _resolve(match, by_locator, by_ts)
@@ -197,8 +180,8 @@ def audit_citations(answer: str, chunks: list) -> AuditResult:
     cleaned = re.sub(r" +([.,;:!?])", r"\1", cleaned).strip()
 
     citations: list[Citation] = []
-    for kind, value in seen:
-        chunk = by_locator[(kind, value)]
+    for source_id, kind, value in seen:
+        chunk = by_locator[(source_id, kind, value)]
         page = None
         if kind == "page":
             try:

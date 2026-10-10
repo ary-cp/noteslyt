@@ -106,7 +106,9 @@ export const MarkdownBody = memo(function MarkdownBody({
           },
         }}
       >
-        {text}
+        {text.split(/(```[\s\S]*?```|`[^`\n]*`)/g).map((part, i) => i % 2 ? part : part
+          .replace(/\\\[([\s\S]*?)\\\]/g, (_, math: string) => `\n$$\n${math}\n$$\n`)
+          .replace(/\\\(([\s\S]*?)\\\)/g, (_, math: string) => `$${math}$`)).join("")}
       </ReactMarkdown>
     </div>
   );
@@ -139,7 +141,7 @@ function CitationChips({ citations, sources, onOpen }: { citations: ChatCitation
   );
 }
 
-function ChatMessage({ msg, sources, onOpenSource }: { msg: ChatMessageOut; sources: SourceOut[]; onOpenSource: (id: string | null) => void }) {
+const ChatMessage = memo(function ChatMessage({ msg, sources, onOpenSource }: { msg: ChatMessageOut; sources: SourceOut[]; onOpenSource: (id: string | null) => void }) {
   if (msg.role === "user") {
     return (
       <div className="flex justify-end">
@@ -162,7 +164,7 @@ function ChatMessage({ msg, sources, onOpenSource }: { msg: ChatMessageOut; sour
       <CitationChips citations={msg.citations} sources={sources} onOpen={onOpenSource} />
     </div>
   );
-}
+});
 
 /* ---------------- chat panel ---------------- */
 
@@ -222,6 +224,7 @@ export function ChatPanel({
     setLoading(true);
     setError("");
     getChat(chatId)
+      .then((d) => d.total > d.messages.length ? getChat(chatId, 200, Math.max(0, d.total - 200)) : d)
       .then((d) => {
         setMessages(d.messages);
         setTitle(d.chat.title);
@@ -392,7 +395,7 @@ export function ChatPanel({
 
       {/* input */}
       <div className="shrink-0 px-4 pt-2 pb-4">
-        <div className="mx-auto max-w-[760px] rounded-[10px] border border-[var(--border)] bg-[var(--input)] transition-colors focus-within:border-[var(--accent)]">
+        <div className="chat-composer mx-auto max-w-[760px] rounded-[12px] border border-[var(--border)] bg-[var(--input)] transition-colors">
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -405,7 +408,7 @@ export function ChatPanel({
             placeholder={hasReady ? "Ask anything about your sources…" : "Upload a source to start asking…"}
             aria-label="Ask anything about your sources"
             rows={2}
-            className="max-h-[140px] w-full resize-none bg-transparent px-3.5 pt-3 text-[15px] outline-none placeholder:text-[var(--text-muted)]"
+            className="max-h-[140px] w-full resize-none bg-transparent px-3.5 pt-3 text-[15px] outline-none focus-visible:outline-none placeholder:text-[var(--text-muted)]"
           />
           <div className="flex items-center gap-2 px-2.5 pb-2.5">
             <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
@@ -422,13 +425,13 @@ export function ChatPanel({
                 ]}
               />
             </label>
-            <span className="ml-auto text-xs text-[var(--text-muted)]">Shift+Enter for a new line</span>
+            <span className="ml-auto hidden text-xs text-[var(--text-muted)] sm:block">Shift+Enter for a new line</span>
             <button
               type="button"
               onClick={() => void send(draft)}
               disabled={!draft.trim() || sending}
               aria-label="Send message"
-              className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-[7px] bg-[var(--accent)] text-white transition-opacity hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="ml-auto inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-[7px] bg-[var(--accent)] text-white transition-opacity hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-40 sm:ml-0"
             >
               <Send size={15} />
             </button>

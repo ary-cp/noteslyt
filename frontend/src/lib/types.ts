@@ -93,6 +93,7 @@ export interface ProfileOut {
   thinking_level: string;
   goals: string;
   study_pattern: Record<string, number>;
+  quiz_progress: { answered: number; correct: number; topics_practiced: number; quizzes_practiced: number };
   strengths: string[];
 }
 
@@ -268,7 +269,8 @@ export interface QuizOut {
 
 export interface FlashcardsOut {
   flashcards_id: string;
-  cards: { id: string; front: string; back: string; topic: string; locator_kind: string; locator_value: string }[];
+  cards: { id: string; front: string; back: string; topic: string; locator_kind: string; locator_value: string; source_id: string | null }[];
+  requested: number | null;
 }
 
 export interface StudioJob {

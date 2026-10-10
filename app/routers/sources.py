@@ -157,20 +157,28 @@ def upload_sources(
             )
             continue
 
-        data = upload.file.read()
         limit_mb = settings.upload_limit_mb(source_type)
-        if len(data) > limit_mb * 1024 * 1024:
+        if upload.size is not None and upload.size > limit_mb * 1024 * 1024:
             rejected.append(
                 {
                     "filename": filename,
-                    "reason": f"{len(data) / 1_048_576:.1f} MB exceeds the {limit_mb} MB "
+                    "reason": f"{upload.size / 1_048_576:.1f} MB exceeds the {limit_mb} MB "
                               f"limit for {source_type} sources.",
                 }
             )
             continue
 
         source = sources.create(project_id, filename, source_type)
-        storage.save(project_id, source.id, filename, data)
+        try:
+            storage.save_stream(project_id, source.id, filename, upload.file, limit_mb * 1024 * 1024)
+        except (ValueError, OSError) as exc:
+            sources.delete_for_project(source.id, project_id)
+            log.warning("Could not store upload %s: %s", source.id, exc)
+            rejected.append({"filename": filename, "reason": (
+                f"File exceeds the {limit_mb} MB limit." if isinstance(exc, ValueError)
+                else "Could not save this file. Check available disk space and retry."
+            )})
+            continue
         accepted.append(_to_out(source))
         background.add_task(_background_ingest, pipeline, storage, source)
 

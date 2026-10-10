@@ -309,11 +309,13 @@ class FlashcardOut(BaseModel):
     topic: str
     locator_kind: str
     locator_value: str
+    source_id: str | None = None
 
 
 class FlashcardsOut(BaseModel):
     flashcards_id: str
     cards: list[FlashcardOut]
+    requested: int | None = None
 
 
 class StudioJobCreate(BaseModel):

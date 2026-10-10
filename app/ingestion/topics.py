@@ -126,6 +126,7 @@ def extract_topics(
     units: list[SourceUnit],
     max_topics: int = 8,
     existing_slugs: list[str] | None = None,
+    image_url: str | None = None,
 ) -> list[Topic]:
     """
     Propose topics for one source.
@@ -144,10 +145,14 @@ def extract_topics(
             f"material covers the same concept: {', '.join(existing_slugs[:24])}"
         )
 
+    request = f"Material outline (one line per {sorted({k for k, _ in valid}) or ['unit']}):\n{outline}{hint}"
+    if image_url:
+        request = [{"type": "text", "text": request + "\nRead the original image to identify topics. Return only topic metadata, never a caption or transcription. If no teachable content is legible, return an empty topics list."},
+                   {"type": "image_url", "image_url": {"url": image_url}}]
     try:
         data = llm.complete_json(
             TOPIC_SYSTEM_PROMPT.format(max_topics=max_topics),
-            f"Material outline (one line per {sorted({k for k, _ in valid}) or ['unit']}):\n{outline}{hint}",
+            request,
         )
         topics: list[Topic] = []
         seen: set[str] = set()
@@ -180,7 +185,7 @@ def extract_topics(
         log.warning("Topic extraction returned no semantic topics; using unclassified fallback")
     except Exception as exc:  # noqa: BLE001 — a demo must not depend on the LLM
         log.warning("Topic extraction failed (%s); using unclassified fallback", exc)
-    return fallback_topics(units)
+    return [] if image_url else fallback_topics(units)
 
 
 def assign_topics(

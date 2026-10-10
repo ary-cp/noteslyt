@@ -22,12 +22,16 @@ Every auxiliary LLM failure degrades to a readable `QuizError`, never a bare
 from __future__ import annotations
 
 import logging
+import base64
+from types import SimpleNamespace
 import random
 import re
 from pydantic import BaseModel, ConfigDict
 
-from .citations import citation_label, format_context
+from .citations import citation_label
 from .config import Settings
+from .ingestion.topics import extract_topics
+from .ingestion.units import SourceUnit
 from .learner.bkt import BKTParams
 from .llm import Embedder, LLMClient
 from .repo.memory import ProjectMemoryRepo
@@ -36,6 +40,7 @@ from .repo.quizzes import QuizRepo
 from .repo.sources import SourceRepo
 from .repo.topics import TopicRepo
 from .vectorstore import VectorStore
+from .storage import FileStorage, content_type_for
 
 log = logging.getLogger(__name__)
 
@@ -47,18 +52,28 @@ GENERATE_SYSTEM = """You write quiz questions grounded in study material. Output
 "stem": "...", "options": ["...","...","...","..."], "correct_index": 0,
 "key_points": ["..."], "sample_answer": "...",
 "value": 0.0, "tolerance": 0.0, "unit": "",
-"explanation": "...", "locator": {"kind": "...", "value": "..."}}]}
+"explanation": "...", "locator": {"kind": "...", "value": "...", "source_id": "..."}}]}
 Rules: exactly the requested number of questions, round-robin over the requested types;
 MCQ needs 4 options with exactly one correct; short_answer needs 2-4 key_points plus a
 sample_answer; numerical needs value, tolerance and unit ("" if unitless). Every question
 must be answerable from the excerpts and cite one locator from the list, using its exact
-kind and value. Explanations teach: restate the rule, then the application. Difficulty 0-1."""
+kind, value and source_id. Every stem must be self-contained: include all scenario facts,
+numbers, definitions and example details needed to answer. Never ask "in the papaya example",
+"as discussed above", or refer to an unseen diagram/table without reproducing the necessary
+information in the stem. If that context is missing, ask a different concept question.
+Test understanding and application, not recall of incidental names from an example.
+MCQ options must be distinct, plausible and mutually exclusive; check the keyed answer by
+solving the question before returning it. correct_index is a zero-based integer (0-3).
+Use Markdown and LaTeX math delimited by $...$ or $$...$$ in stems, options and explanations.
+Wrap complete quantities and units in math delimiters too; never leave raw m/s^2, x^2, subscripts or LaTeX commands in plain text.
+Escape every LaTeX backslash correctly for JSON. Never wrap math in code fences.
+Explanations teach: restate the rule, then the application. Difficulty 0-1."""
 
 FLASHCARD_SYSTEM = """You create study flashcards from the supplied study material. Output ONE JSON object:
 {"cards": [{"front": "a concise question or prompt", "back": "a concise accurate answer",
-"topic_slug": "...", "locator": {"kind": "...", "value": "..."}}]}
-Create exactly the requested number of useful cards. Each card must teach one fact or concept
-from the excerpts. Use the exact topic slug and locator supplied. Do not create quiz questions,
+"topic_slug": "...", "locator": {"kind": "...", "value": "...", "source_id": "..."}}]}
+Aim for the requested number of distinct useful cards; return fewer if the material is insufficient. Each card must teach one fact or concept
+from the excerpts. Include the full scenario when referencing an example. Format equations with $...$ or $$...$$ LaTeX and JSON-escape backslashes. Use the exact topic slug and locator supplied. Do not create quiz questions,
 multiple-choice options, answer indexes, explanations, or rubrics."""
 
 
@@ -66,6 +81,7 @@ class _FlashcardLocator(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: str
     value: str
+    source_id: str
 
 
 class _GeneratedFlashcard(BaseModel):
@@ -146,13 +162,14 @@ class QuizService:
             ready_ids = [source_id for source_id in ready_ids if source_id in selected]
         if not ready_ids:
             raise QuizError("Select at least one ready source before generating a quiz.")
+        self._ensure_image_topics(project_id, ready_ids)
         topics = (
             self.topics.list_for_sources(project_id, ready_ids)
             if source_ids is not None
             else self.topics.list_for_project(project_id)
         )
         if not topics:
-            raise QuizError("This project has no topics yet — upload material first.")
+            raise QuizError("No study topics could be identified in these sources. Use clearer images or add text-based study material.")
         by_slug = {t.slug: t for t in topics}
         by_id = {t.id: t for t in topics}
 
@@ -180,10 +197,13 @@ class QuizService:
                 topic.id, project_id=project_id, limit=8, source_ids=ready_ids
             )
             if not chunks:
+                linked_ids = [str(row["source_id"]) for row in self.topics.sources_for(topic.id) if str(row["source_id"]) in ready_ids]
+                if not linked_ids:
+                    raise QuizError(f"No selected ready source covers {topic.name}.")
                 vec = self.embedder.embed([f"{topic.name}: {topic.description}"])[0]
                 chunks = self.store.query(
                     vec, project_id=project_id, k=self.settings.top_k,
-                    source_ids=ready_ids,
+                    source_ids=linked_ids,
                 )
             if not chunks:
                 raise QuizError(f"No retrievable material for topic '{topic.name}'.")
@@ -267,84 +287,114 @@ class QuizService:
         self, user_id: str, project_id: str, topic_id: str | None, n_cards: int,
         source_ids: list[str] | None = None,
     ) -> dict:
-        """Generate a flashcard artifact directly; do not create a quiz or questions."""
+        """Generate from source content, including original image pixels."""
         import uuid
 
+        n_cards = max(1, min(n_cards, 20))
         ready_ids = self.sources.ready_ids(project_id)
         if source_ids is not None:
-            selected = set(source_ids)
-            ready_ids = [source_id for source_id in ready_ids if source_id in selected]
+            ready_ids = [sid for sid in ready_ids if sid in set(source_ids)]
         if not ready_ids:
             raise QuizError("Select at least one ready source before generating flashcards.")
-        topics = (
-            self.topics.list_for_sources(project_id, ready_ids)
-            if source_ids is not None
-            else self.topics.list_for_project(project_id)
-        )
-        if not topics:
-            raise QuizError("This project has no topics yet — upload material first.")
-        by_id = {t.id: t for t in topics}
+        contexts = {}
         if topic_id:
-            selected = by_id.get(topic_id)
-            if selected is None:
-                raise QuizNotFoundError(topic_id)
-            chosen = [selected]
-        else:
-            chosen = sorted(topics, key=lambda t: t.name)[:min(8, len(topics))]
-
-        contexts: dict[str, tuple[object, list]] = {}
-        for topic in chosen:
+            topic = next((t for t in self.topics.list_for_sources(project_id, ready_ids) if t.id == topic_id), None)
+            if topic is None:
+                raise QuizError("This topic is not available in the selected sources.")
             chunks = self.store.get_by_topic(topic.id, project_id=project_id, limit=8, source_ids=ready_ids)
-            if not chunks:
-                vec = self.embedder.embed([f"{topic.name}: {topic.description}"])[0]
-                chunks = self.store.query(vec, project_id=project_id, k=self.settings.top_k, source_ids=ready_ids)
             if chunks:
-                contexts[topic.slug] = (topic, chunks)
+                contexts[topic.slug] = (topic.name, chunks)
+        else:
+            # Source grouping supports cards even when topic extraction has
+            # not run or could not identify concepts from an image.
+            for row in self.sources.ready_chunks(project_id, ready_ids[:8]):
+                sid = str(row["source_id"])
+                if sid not in contexts:
+                    source = self.sources.get(sid)
+                    contexts[sid] = (source.filename, [])
+                contexts[sid][1].append(SimpleNamespace(**{**row, "source_id": sid}))
         if not contexts:
-            raise QuizError("No retrievable material is ready for flashcards.")
+            raise QuizError("No indexed content is available in the selected sources yet.")
 
-        sections = []
-        for slug, (topic, chunks) in contexts.items():
-            locators = sorted({(c.locator_kind, c.locator_value) for c in chunks})
-            sections.append(
-                f"TOPIC {slug} ({topic.name})\nLOCATORS: "
-                + ", ".join(f"{kind}:{value}" for kind, value in locators)
-                + "\n" + format_context(chunks)[:3200]
-            )
-        prompt = (f"Generate exactly {n_cards} flashcards, spread across these topics.\n\n"
-                  + "\n\n".join(sections))
-        try:
-            data = self.llm.complete_structured(
-                FLASHCARD_SYSTEM, prompt,
-                response_model=_GeneratedFlashcardSet,
-                max_tokens=min(12000, max(3000, n_cards * 350)),
-            )
-        except Exception as exc:
-            raise QuizError(f"Structured flashcard generation failed: {exc}") from exc
-
-        cards = []
-        for item in data.cards:
-            front, back = item.front.strip(), item.back.strip()
-            slug = item.topic_slug
-            if not front or not back or slug not in contexts:
-                continue
-            topic, chunks = contexts[slug]
-            match = next((c for c in chunks if c.locator_kind == item.locator.kind
-                          and str(c.locator_value) == str(item.locator.value)), chunks[0])
-            cards.append({
-                "id": str(uuid.uuid4()), "front": front[:1000], "back": back[:2000],
-                "topic": topic.name, "locator_kind": match.locator_kind,
-                "locator_value": match.locator_value,
-            })
-            if len(cards) == n_cards:
+        sections, images = [], []
+        storage = FileStorage(self.settings.uploads_dir)
+        seen_images = set()
+        for slug, (name, chunks) in contexts.items():
+            sections.append(f"TOPIC {slug} ({name})")
+            for chunk in chunks:
+                sections.append(f"SOURCE {chunk.source_id} LOCATOR {chunk.locator_kind}:{chunk.locator_value}\n{chunk.text[:1800]}")
+                if chunk.locator_kind == "image" and chunk.source_id not in seen_images:
+                    source = self.sources.get(chunk.source_id)
+                    path = storage.open_for_read(project_id, source.id, source.filename) if source else None
+                    if path is None:
+                        raise QuizError("An original image is missing. Upload it again before generating flashcards.")
+                    mime = content_type_for(source.filename).split(";")[0]
+                    url = f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+                    images.extend([
+                        {"type": "text", "text": f"Image for TOPIC {slug}, SOURCE {chunk.source_id}, LOCATOR {chunk.locator_kind}:{chunk.locator_value}"},
+                        {"type": "image_url", "image_url": {"url": url}},
+                    ])
+                    seen_images.add(chunk.source_id)
+        context = "\n\n".join(sections)
+        cards, seen = [], set()
+        last_error = None
+        for attempt in range(3):
+            missing = n_cards - len(cards)
+            if not missing:
                 break
-        if len(cards) < n_cards:
-            raise QuizError(
-                f"The model returned {len(cards)} of {n_cards} usable flashcards. Try again."
-            )
-        flashcards_id = str(uuid.uuid4())
-        log.info("Generated %d/%d flashcards", len(cards), n_cards)
-        return {"flashcards_id": flashcards_id, "cards": cards}
+            prompt = (f"Generate {missing} distinct flashcards using only the source content below. "
+                      "Copy the exact topic slug and locator kind, value and source_id. "
+                      "For images, read the attached image itself; metadata is not study content. "
+                      "Return fewer cards if the source cannot support more useful facts.\n\n" + context)
+            if cards:
+                prompt += "\nDo not repeat these fronts:\n" + "\n".join(c["front"] for c in cards)
+            user = [{"type": "text", "text": prompt}, *images] if images else prompt
+            try:
+                data = self.llm.complete_structured(
+                    FLASHCARD_SYSTEM, user, response_model=_GeneratedFlashcardSet,
+                    max_tokens=min(12000, max(3000, missing * 400)),
+                )
+            except (ValueError, TypeError) as exc:
+                last_error = exc
+                continue
+            except Exception as exc:
+                raise QuizError("The model could not generate flashcards. Check that your provider is available"
+                                + (" and the selected chat model supports images." if images else ".")) from exc
+            for item in data.cards:
+                front, back = item.front.strip(), item.back.strip()
+                key = " ".join(front.casefold().split())
+                if not front or not back or key in seen or item.topic_slug not in contexts:
+                    continue
+                name, chunks = contexts[item.topic_slug]
+                match = next((c for c in chunks if (c.source_id, c.locator_kind, str(c.locator_value)) ==
+                              (item.locator.source_id, item.locator.kind, item.locator.value)), None)
+                if match is None:
+                    continue
+                seen.add(key)
+                cards.append({"id": str(uuid.uuid4()), "front": front[:1000], "back": back[:2000],
+                              "topic": name, "locator_kind": match.locator_kind,
+                              "locator_value": str(match.locator_value), "source_id": match.source_id})
+                if len(cards) == n_cards:
+                    break
+        if not cards:
+            raise QuizError("No valid flashcards were returned. Try fewer cards or clearer source material."
+                            + (f" {last_error}" if last_error else ""))
+        return {"flashcards_id": str(uuid.uuid4()), "cards": cards, "requested": n_cards}
+
+    def saved_answers(self, user_id: str, quiz_id: str) -> dict:
+        quiz = self.quizzes.get_quiz_owned(quiz_id, user_id)
+        if quiz is None:
+            raise QuizNotFoundError(quiz_id)
+        questions = {q.id: q for q in self.quizzes.list_questions(quiz.id)}
+        result = {}
+        for answer in self.quizzes.answers_for_quiz(quiz.id, user_id):
+            question = questions.get(answer.question_id)
+            if question:
+                topic = self._topic_memory(user_id, quiz.project_id, question.topic_id)
+                result[question.id] = self._answer_payload(quiz, question, topic, answer.correct,
+                    answer.given, answer.p_before, answer.p_after)
+                result[question.id]["feedback"] = answer.feedback
+        return result
 
     # ================================================================ answer
     def answer(
@@ -357,34 +407,36 @@ class QuizService:
         if question is None or question.quiz_id != quiz.id:
             raise QuizNotFoundError(question_id)
 
-        prior = self.quizzes.find_answer(quiz.id, question.id, user_id)
-        topic = self._topic_memory(user_id, quiz.project_id, question.topic_id)
-        if prior is not None:  # idempotent replay — feedback recomputed, BKT untouched
-            _, _, feedback = self._grade(question, answer)
+        def replay(prior):
+            topic = self._topic_memory(user_id, quiz.project_id, question.topic_id)
             payload = self._answer_payload(quiz, question, topic, prior.correct,
                                            prior.given, prior.p_before, prior.p_after)
-            payload["feedback"] = feedback
+            payload["feedback"] = prior.feedback or (("Correct. " if prior.correct else "Not quite. ") + question.explanation)
             return payload
 
+        prior = self.quizzes.find_answer(quiz.id, question.id, user_id)
+        if prior is not None:
+            return replay(prior)
+        # Provider calls stay outside the lock. Recheck after acquiring it:
+        # another request may already have committed this answer.
         correct, expected, feedback = self._grade(question, answer)
-        mem_before = self.memory.get(user_id, quiz.project_id, question.topic_id or "")
-        p_before = float(mem_before.p_mastery) if mem_before else self.bkt.p_init
-        if question.topic_id:
-            updated = self.memory.apply_result(
-                user_id, quiz.project_id, question.topic_id, correct, self.bkt
-            )
-            p_after = float(updated["p_mastery"])
-        else:
+        with self.quizzes.learner_write(user_id, quiz.project_id):
+            prior = self.quizzes.find_answer(quiz.id, question.id, user_id)
+            if prior is not None:
+                return replay(prior)
+            mem_before = (self.memory.get(user_id, quiz.project_id, question.topic_id)
+                          if question.topic_id else None)
+            p_before = float(mem_before.p_mastery) if mem_before else self.bkt.p_init
             p_after = p_before
-        self.quizzes.record_answer(
-            quiz.id, question.id, user_id, _given_text(answer), correct, p_before, p_after,
-        )
-        topic = self._topic_memory(user_id, quiz.project_id, question.topic_id)
-        payload = self._answer_payload(quiz, question, topic, correct,
-                                       _given_text(answer), p_before, p_after)
-        payload["feedback"] = feedback
-        payload["assessment_id"] = self._maybe_assess(user_id, quiz)
-        return payload
+            if question.topic_id:
+                updated = self.memory.apply_result(user_id, quiz.project_id, question.topic_id, correct, self.bkt)
+                p_after = float(updated["p_mastery"])
+            self.quizzes.record_answer(quiz.id, question.id, user_id, _given_text(answer), correct, p_before, p_after, feedback=feedback)
+            topic = self._topic_memory(user_id, quiz.project_id, question.topic_id)
+            payload = self._answer_payload(quiz, question, topic, correct, _given_text(answer), p_before, p_after)
+            payload["feedback"] = feedback
+            payload["assessment_id"] = self._maybe_assess(user_id, quiz)
+            return payload
 
     # =============================================================== learner
     def learner(self, user_id: str, project_id: str) -> dict:
@@ -416,15 +468,54 @@ class QuizService:
             "created_at": row.created_at.isoformat() if row.created_at else "",
         }
 
+    def _image_parts(self, project_id, chunks):
+        parts, seen = [], set()
+        storage = FileStorage(self.settings.uploads_dir)
+        for chunk in chunks:
+            if chunk.locator_kind != "image" or chunk.source_id in seen:
+                continue
+            seen.add(chunk.source_id)
+            source = self.sources.get(chunk.source_id)
+            path = storage.open_for_read(project_id, source.id, source.filename) if source else None
+            if path is None:
+                raise QuizError("An original image is missing. Upload it again before generating a quiz.")
+            mime = content_type_for(source.filename).split(";")[0]
+            url = f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+            parts.extend([{"type": "text", "text": f"SOURCE {source.id} LOCATOR {chunk.locator_kind}:{chunk.locator_value}"},
+                          {"type": "image_url", "image_url": {"url": url}}])
+        return parts
+
+    def _ensure_image_topics(self, project_id, ready_ids):
+        """Backfill saved visual topics for images indexed before topic extraction existed."""
+        existing = self.topics.list_for_project(project_id)
+        for source_id in ready_ids:
+            source = self.sources.get(source_id)
+            if not source or source.source_type != "image" or self.topics.list_for_sources(project_id, [source_id]):
+                continue
+            chunks = self.sources.ready_chunks(project_id, [source_id], per_source=1)
+            chunks = [SimpleNamespace(**{**row, "source_id": str(row["source_id"])}) for row in chunks]
+            if not chunks:
+                continue
+            parts = self._image_parts(project_id, chunks)
+            units = [SourceUnit(index=i, text=c.text, locator_kind=c.locator_kind, locator_value=c.locator_value) for i, c in enumerate(chunks)]
+            proposed = extract_topics(self.llm, units, self.settings.max_topics,
+                                      existing_slugs=[t.slug for t in existing], image_url=parts[-1]["image_url"]["url"])
+            for topic in proposed:
+                row = self.topics.upsert(project_id, topic.slug, topic.name, topic.description)
+                self.topics.link_source(row.id, source_id, topic.locators)
+                existing.append(row)
+
     # ------------------------------------------------------- generation
     def _generate_round(self, plan, contexts, types, n, avoid: list[str]) -> list[dict]:
         sections = []
+        all_chunks = []
         for topic, _count in plan:
             _t, chunks = contexts[topic.slug]
+            all_chunks.extend(chunks)
             sections.append(
                 f"TOPIC {topic.slug} ({topic.name}):\n"
-                f"Locators: {', '.join(sorted({(c.locator_kind + ':' + c.locator_value) for c in chunks}))}\n"
-                + format_context(chunks)[:4000]
+                f"Locators: {', '.join(sorted({(c.source_id + ' / ' + c.locator_kind + ':' + c.locator_value) for c in chunks}))}\n"
+                + "\n\n".join(f"SOURCE {c.source_id} LOCATOR {c.locator_kind}:{c.locator_value}\n{c.text[:3000]}" for c in chunks)
             )
         type_list = ", ".join(types)
         avoid_note = ""
@@ -435,16 +526,15 @@ class QuizService:
             f"Distribute across the topic sections below.\n{avoid_note}\n\n"
             + "\n\n".join(sections)
         )
+        images = self._image_parts(plan[0][0].project_id, all_chunks) if any(c.locator_kind == "image" for c in all_chunks) else []
         data = None
         last_error: Exception | None = None
         for attempt in range(2):
             try:
+                prompt = request_text + ("\nReturn valid JSON only, with all fields." if attempt else "")
                 data = self.llm.complete_json(
                     GENERATE_SYSTEM,
-                    request_text if attempt == 0 else (
-                        request_text + "\n\nReturn a compact, syntactically valid JSON object only. "
-                        "Include every required field for each question and no markdown."
-                    ),
+                    [{"type": "text", "text": prompt}, *images] if images else prompt,
                     max_tokens=min(16384, max(4096, n * 700)),
                     json_mode=True,
                 )
@@ -478,7 +568,11 @@ class QuizService:
             return False
         if not any(getattr(c, "locator_kind", None) == locator.get("kind")
                    and str(getattr(c, "locator_value", "")) == str(locator.get("value"))
+                   and (not locator.get("source_id") or c.source_id == locator["source_id"])
                    for c in chunks):
+            return False
+        matches = {c.source_id for c in chunks if c.locator_kind == locator.get("kind") and str(c.locator_value) == str(locator.get("value"))}
+        if not locator.get("source_id") and len(matches) != 1:
             return False
         if q["type"] == "mcq":
             options = q.get("options")
@@ -496,24 +590,28 @@ class QuizService:
         if not kept:
             return kept
         recent = self.quizzes.recent_stems(user_id, project_id)
-        if not recent:
-            return kept
         import numpy as np
 
         new_vecs = np.asarray(self.embedder.embed([q["stem"] for q in kept]), dtype=np.float32)
-        old_vecs = np.asarray(recent, dtype=np.float32)
         new_vecs /= np.linalg.norm(new_vecs, axis=1, keepdims=True) + 1e-9
-        old_vecs /= np.linalg.norm(old_vecs, axis=1, keepdims=True) + 1e-9
-        sims = new_vecs @ old_vecs.T
-        out, seen_idx = [], []
+        sims = None
+        if recent:
+            old_vecs = np.asarray(recent, dtype=np.float32)
+            old_vecs /= np.linalg.norm(old_vecs, axis=1, keepdims=True) + 1e-9
+            sims = new_vecs @ old_vecs.T
+        out, seen_idx, seen_stems = [], [], set()
         for i, q in enumerate(kept):
-            if sims[i].max() >= self.settings.quiz_similarity_max:
+            stem_key = " ".join(q["stem"].split()).casefold()
+            if stem_key in seen_stems:
+                continue
+            if sims is not None and sims[i].max() >= self.settings.quiz_similarity_max:
                 log.info("Dropped near-duplicate stem %r", q["stem"][:80])
                 continue
             if seen_idx and (new_vecs[i] @ new_vecs[seen_idx].T).max() >= self.settings.quiz_similarity_max:
                 log.info("Dropped within-quiz duplicate stem %r", q["stem"][:80])
                 continue
             seen_idx.append(i)
+            seen_stems.add(stem_key)
             out.append(q)
         return out
 
@@ -564,7 +662,9 @@ class QuizService:
             )
         except Exception as exc:
             raise QuizError(f"Short-answer grading is unavailable right now: {exc}") from exc
-        correct = bool(data.get("correct", False))
+        if not isinstance(data, dict) or type(data.get("correct")) is not bool:
+            raise QuizError("The grader returned an invalid result. Your answer was not recorded; please try again.")
+        correct = data["correct"]
         sample = str(key.get("sample_answer", ""))
         feedback = str(data.get("feedback", "")).strip()
         return correct, sample, (
@@ -582,7 +682,7 @@ class QuizService:
     def _source_for(self, q: dict, contexts) -> str | None:
         _topic, chunks = contexts[q["topic_slug"]]
         for c in chunks:
-            if (c.locator_kind, c.locator_value) == (q["locator"]["kind"], q["locator"]["value"]):
+            if (c.locator_kind, c.locator_value) == (q["locator"]["kind"], q["locator"]["value"]) and (not q["locator"].get("source_id") or c.source_id == q["locator"]["source_id"]):
                 return c.source_id
         return chunks[0].source_id if chunks else None
 
@@ -703,15 +803,18 @@ def _shape_questions(raw: list, slugs: set[str], types: list[str]) -> list[dict]
             "explanation": str(item.get("explanation", ""))[:2000],
             "difficulty": _clamp01(item.get("difficulty", 0.5)),
             "locator": {"kind": str(loc.get("kind", "page")).strip() or "page",
-                        "value": str(loc.get("value", "")).strip()},
+                        "value": str(loc.get("value", "")).strip(),
+                        "source_id": str(loc.get("source_id", "")).strip()},
         }
         if qtype == "mcq":
-            options = [str(o)[:500] for o in (item.get("options") or [])][:4]
-            try:
-                key = int(item.get("correct_index", -1))
-            except (TypeError, ValueError):
-                key = -1
-            if len(options) != 4 or not 0 <= key < 4:
+            raw_options = item.get("options")
+            key = item.get("correct_index")
+            if (not isinstance(raw_options, list) or len(raw_options) != 4
+                    or not all(isinstance(o, str) and o.strip() for o in raw_options)
+                    or type(key) is not int or not 0 <= key < 4):
+                continue
+            options = [o.strip()[:500] for o in raw_options]
+            if len({o.casefold() for o in options}) != 4:
                 continue
             q["options"] = options
             q["correct_index"] = key

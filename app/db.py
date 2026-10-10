@@ -24,6 +24,7 @@ import logging
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 import psycopg
@@ -82,6 +83,7 @@ class Database:
 
     def __init__(self, settings: Settings):
         self._settings = settings
+        self._active_connection = ContextVar(f"db_connection_{id(self)}", default=None)
         url = settings.database_url
         if not url:
             raise DatabaseError(
@@ -108,15 +110,23 @@ class Database:
     @contextmanager
     def connection(self) -> Iterator[psycopg.Connection]:
         """Borrow a connection; commits on success, rolls back on error."""
+        active = self._active_connection.get()
+        if active is not None:
+            yield active
+            return
         with self._pool.connection() as conn:
             yield conn
 
     @contextmanager
     def transaction(self) -> Iterator[psycopg.Connection]:
         """Run a unit of work atomically. Read-only callers should use `connection`."""
-        with self._pool.connection() as conn:
+        with self.connection() as conn:
             with conn.transaction():
-                yield conn
+                token = self._active_connection.set(conn)
+                try:
+                    yield conn
+                finally:
+                    self._active_connection.reset(token)
 
     def close(self) -> None:
         self._pool.close()

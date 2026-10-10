@@ -128,9 +128,8 @@ class ChatService:
             raise ChatNotFoundError(chat_id)
         question = content.strip()
 
+        prior = self.chats.recent_messages(chat_id, limit=self.settings.memory_chat_window)
         self.chats.add_message(chat_id, "user", question, [], None)
-        recent = self.chats.list_messages(chat_id, limit=self.settings.memory_chat_window + 1)
-        prior = recent[:-1]  # everything before the message just stored
 
         # 1. Rewrite follow-ups ("what about that?" → standalone) before embedding.
         rewritten, did_rewrite = self._rewrite(question, prior)
@@ -193,7 +192,7 @@ class ChatService:
                                       _retrieved_labels(chunks), best)
             result = audit_citations(retry, chunks)
 
-        if not result.answer.strip():
+        if not result.answer.strip() or not result.citations:
             log.warning("Chat model returned no usable answer for %s", chat_id)
             self.chats.add_message(chat_id, "assistant", REFUSAL, [], False)
             self._after_turn(user_id, chat, question, REFUSAL, [], nudge=False)
@@ -230,7 +229,7 @@ class ChatService:
                 max_tokens=32,
             ).strip().strip("\"'`*# ")
             title = " ".join(title.split())
-            return title[:60] or fallback
+            return title[:60] if title and not _is_refusal(title) else fallback
         except Exception as exc:  # noqa: BLE001 — naming must not fail a turn
             log.warning("Chat title generation failed; using question text: %s", exc)
             return fallback
@@ -438,12 +437,20 @@ class ChatService:
         if total <= self.settings.memory_summarize_threshold:
             return
         window = self.settings.memory_chat_window
-        older = self.chats.list_messages(chat.id, limit=total - window, offset=0)
+        fresh = self.chats.get_owned(chat.id, user_id)
+        older = self.chats.unsummarized_messages(chat.id, fresh.summarized_through if fresh else None, window)
         if not older:
             return
-        fresh = self.chats.get_owned(chat.id, user_id)
         previous = (fresh.summary if fresh else "") or ""
-        turns = "\n".join(f"{m.role.upper()}: {m.content[:800]}" for m in older)
+        selected, lines, size = [], [], 0
+        for message in older:
+            line = f"{message.role.upper()}: {message.content[:800]}"
+            if size + len(line) + 1 > 6000:
+                break
+            selected.append(message)
+            lines.append(line)
+            size += len(line) + 1
+        turns = "\n".join(lines)
         try:
             summary = self.llm.complete(
                 SUMMARY_SYSTEM,
@@ -453,8 +460,8 @@ class ChatService:
             log.warning("Chat summarization skipped: %s", exc)
             return
         if summary:
-            self.chats.set_summary(chat.id, summary, older[-1].id)
-            log.info("Summarized chat %s through %s (%d msgs)", chat.id, older[-1].id, total)
+            self.chats.set_summary(chat.id, summary, selected[-1].id)
+            log.info("Summarized chat %s through %s (%d msgs)", chat.id, selected[-1].id, total)
 
     # --------------------------------------------------------------- payload
     @staticmethod
@@ -483,7 +490,7 @@ class ChatService:
     @staticmethod
     def _chunk_by_label(chunks, citation):
         for c in chunks:
-            if (c.locator_kind, c.locator_value) == (citation.locator_kind, citation.locator_value):
+            if (c.source_id, c.locator_kind, c.locator_value) == (citation.source_id, citation.locator_kind, citation.locator_value):
                 return c
         return None
 

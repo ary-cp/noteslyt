@@ -47,7 +47,7 @@ def get_profile(
     """
     repo = _repo(users)
     profile = repo.get(user.id) or repo.upsert_basics(user.id)
-    return _to_response(profile)
+    return {**_to_response(profile), "quiz_progress": repo.quiz_progress(user.id)}
 
 
 @router.patch("/profile")
@@ -69,7 +69,7 @@ def update_profile(
         thinking_level=payload.thinking_level,
         goals=payload.goals,
     )
-    return _to_response(profile)
+    return {**_to_response(profile), "quiz_progress": repo.quiz_progress(user.id)}
 
 
 @router.get("/profile/levels")

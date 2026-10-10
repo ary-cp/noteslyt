@@ -26,6 +26,7 @@ failure — the reason is recorded on the row so the learner can read it.
 
 from __future__ import annotations
 
+import base64
 import logging
 import time
 import uuid
@@ -161,19 +162,15 @@ class IngestionPipeline:
                 source.id, "embedding", f"embedding {len(chunks)} chunks"
             )
             existing = self.topics.list_for_project(source.project_id)
+            image_url = None
             if source.source_type == "image":
-                # The image vector represents the visual content itself. A
-                # caption/topic pass would turn this back into text-only RAG.
-                proposed = []
-                topic_by_slug = {}
-            else:
-                proposed = extract_topics(
-                    self.llm,
-                    parsed.units,
-                    self.settings.max_topics,
-                    existing_slugs=[t.slug for t in existing],
-                )
-                topic_by_slug = self._persist_topics(source, proposed, existing)
+                mime = content_type_for(source.filename).split(";")[0]
+                image_url = f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+            proposed = extract_topics(
+                self.llm, parsed.units, self.settings.max_topics,
+                existing_slugs=[t.slug for t in existing], image_url=image_url,
+            )
+            topic_by_slug = self._persist_topics(source, proposed, existing)
             slugs = [t.slug for t in proposed if t.slug in topic_by_slug]
 
             # 4. Embed --------------------------------------------------------
@@ -303,7 +300,7 @@ class IngestionPipeline:
             if not topic.locators:
                 continue
             prior = self.topics.sources_for(record.id)
-            prior_locators = prior[0]["locators"] if prior else None
+            prior_locators = next((row["locators"] for row in prior if str(row["source_id"]) == source.id), None)
             # Only this source's contribution is replaced; other sources' locators stay.
             merged = merge_locators(prior_locators, topic.locators)
             self.topics.link_source(record.id, source.id, merged)

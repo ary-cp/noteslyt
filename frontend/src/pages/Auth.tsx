@@ -1,7 +1,7 @@
 import type * as React from "react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { BookMarked } from "lucide-react";
+import { BookMarked, Eye, EyeOff } from "lucide-react";
 import { login, signup } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useToast } from "../lib/toast";
@@ -14,6 +14,7 @@ export default function AuthPage({ mode }: { mode: "login" | "signup" }) {
   const { push } = useToast();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -35,7 +36,7 @@ export default function AuthPage({ mode }: { mode: "login" | "signup" }) {
       const res = isLogin ? await login(email.trim(), password) : await signup(email.trim(), password, name.trim());
       signIn(res.access_token, res.user);
       push(isLogin ? "Welcome back" : "Account created", { detail: res.user.display_name, tone: "success" });
-      navigate("/projects");
+      navigate("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -66,13 +67,24 @@ export default function AuthPage({ mode }: { mode: "login" | "signup" }) {
             <TextInput autoFocus={isLogin} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" />
           </Field>
           <Field label="Password">
-            <TextInput
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={isLogin ? "Your password" : "Min 8 characters"}
-              autoComplete={isLogin ? "current-password" : "new-password"}
-            />
+            <div className="relative">
+              <TextInput
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={isLogin ? "Your password" : "Min 8 characters"}
+                autoComplete={isLogin ? "current-password" : "new-password"}
+                className="w-full pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
           </Field>
           {error && (
             <p role="alert" className="rounded-[7px] border border-[var(--danger)]/30 bg-[var(--danger-soft)] px-2.5 py-2 text-[13px] text-[var(--danger)]">
