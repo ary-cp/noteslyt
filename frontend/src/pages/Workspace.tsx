@@ -1,6 +1,6 @@
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   BookMarked,
@@ -17,7 +17,6 @@ import {
   deleteChat,
   deleteSource,
   getProject,
-  ingestStatus,
   listChats,
   listProjects,
   listSources,
@@ -57,6 +56,7 @@ export default function Workspace({
 }) {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { push } = useToast();
   const { resolved, toggle } = useTheme();
   const isTablet = useMediaQuery("(max-width: 1100px)");
@@ -67,6 +67,7 @@ export default function Workspace({
   const [sources, setSources] = useState<SourceOut[]>([]);
   const selectedProjectRef = useRef("");
   const selectionTouchedRef = useRef(false);
+  const newlyUploaded = useRef(new Set<string>());
   const currentProjectRef = useRef(projectId);
   currentProjectRef.current = projectId;
   const [chats, setChats] = useState<ChatOut[]>([]);
@@ -104,7 +105,9 @@ export default function Workspace({
         const ready = list.filter((s) => s.status === "ready").map((s) => s.id);
         if (!selectionTouchedRef.current) return new Set(ready);
         const readyIds = new Set(ready);
-        return new Set([...prev].filter((id) => readyIds.has(id)));
+        const added = ready.filter((id) => newlyUploaded.current.has(id));
+        added.forEach((id) => newlyUploaded.current.delete(id));
+        return new Set([...prev].filter((id) => readyIds.has(id)).concat(added));
       });
     } catch {
       /* panel surfaces its own errors */
@@ -115,11 +118,10 @@ export default function Workspace({
     if (!projectId) return;
     try {
       const list = await listChats(projectId);
+      if (currentProjectRef.current !== projectId) return;
       setChats(list);
-      setActiveChatId((prev) => {
-        if (prev && list.some((c) => c.id === prev)) return prev;
-        return list[0]?.id ?? null;
-      });
+      // A list response may precede a newly created chat; never replace an active conversation.
+      setActiveChatId((prev) => prev ?? list[0]?.id ?? null);
     } catch {
       /* keep old list */
     }
@@ -139,20 +141,38 @@ export default function Workspace({
     };
   }, [projectId, refreshSources, refreshChats]);
 
-  // Poll ingestion while unsettled
   useEffect(() => {
-    if (!projectId) return;
-    if (!sources.some((s) => ["queued", "parsing", "embedding"].includes(s.status))) return;
-    const t = window.setTimeout(() => {
-      ingestStatus(projectId)
-        .then((st) => {
-          if (!st.settled) void refreshSources();
-          else void refreshSources();
-        })
-        .catch(() => undefined);
-    }, 2000);
-    return () => window.clearTimeout(t);
-  }, [projectId, sources, refreshSources]);
+    if (initialChatId) setActiveChatId(initialChatId);
+    if (!initialSourceId) { setViewer(null); return; }
+    const query = new URLSearchParams(location.search);
+    const chat = query.get("chat");
+    if (chat) setActiveChatId(chat);
+    const end = query.get("end");
+    setViewer({ sourceId: initialSourceId, kind: query.get("kind") ?? undefined,
+      value: query.get("value") ?? undefined, end: end !== null && Number.isFinite(Number(end)) ? Number(end) : null,
+      snippet: (location.state as { snippet?: string } | null)?.snippet, nonce: Date.now() });
+  }, [initialChatId, initialSourceId, location.key, location.search, location.state]);
+
+  useEffect(() => {
+    const refresh = () => { void refreshChats(); };
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [refreshChats]);
+
+  // Retry transient failures until every upload settles; a rejected poll must
+  // never leave an image stuck as "processing" until the browser is reloaded.
+  const hasPendingSources = sources.some((s) => ["queued", "parsing", "embedding"].includes(s.status));
+  useEffect(() => {
+    if (!projectId || !hasPendingSources) return;
+    let live = true;
+    let timer = 0;
+    const poll = async () => {
+      await refreshSources();
+      if (live) timer = window.setTimeout(poll, 2000);
+    };
+    timer = window.setTimeout(poll, 1000);
+    return () => { live = false; window.clearTimeout(timer); };
+  }, [projectId, hasPendingSources, refreshSources]);
 
   useEffect(() => {
     if (isMobile) {
@@ -178,6 +198,7 @@ export default function Workspace({
       const c = await createChat(projectId);
       await refreshChats();
       setActiveChatId(c.id);
+      setMobileTab("chat");
       navigate(`/project/${projectId}/chat/${c.id}`, { replace: true });
     } catch (e) {
       push("Could not create chat", { detail: e instanceof Error ? e.message : String(e), tone: "error" });
@@ -224,10 +245,16 @@ export default function Workspace({
   const openSource = useCallback(
     (id: string | null, locator?: CitationLocator) => {
       if (!id) return;
-      setViewer({ sourceId: id, kind: locator?.kind, value: locator?.value, end: locator?.end, nonce: Date.now() });
-      navigate(`/project/${projectId}/source/${id}`);
+      if (!locator && viewer?.sourceId === id) return;
+      const query = new URLSearchParams();
+      if (activeChatId) query.set("chat", activeChatId);
+      if (locator) {
+        query.set("kind", locator.kind); query.set("value", locator.value);
+        if (locator.end != null) query.set("end", String(locator.end));
+      }
+      navigate(`/project/${projectId}/source/${id}?${query}`, { state: { snippet: locator?.snippet } });
     },
-    [navigate, projectId],
+    [navigate, projectId, activeChatId, viewer?.sourceId],
   );
 
   const removeChat = useCallback(async (chat: ChatOut) => {
@@ -250,6 +277,8 @@ export default function Workspace({
       if (!files.length) return;
       try {
         const res = await uploadSources(projectId, files);
+        res.accepted.forEach((source) => newlyUploaded.current.add(source.id));
+        setSources((prev) => [...prev.filter((source) => !res.accepted.some((added) => added.id === source.id)), ...res.accepted]);
         if (res.rejected.length) {
           push("Some files were rejected", {
             detail: res.rejected.map((r) => `${r.filename}: ${r.reason}`).join("; "),
@@ -361,15 +390,16 @@ export default function Workspace({
 
       {/* three regions, one workspace */}
       <div className="flex min-h-0 flex-1">
-        {leftVisible && (
+        {(
           <aside
-            className={`${isMobile ? "flex-1" : "w-[300px] shrink-0"} flex min-h-0 flex-col border-r border-[var(--border)] bg-[var(--sidebar-bg)]`}
+            className={`${isMobile ? "flex-1" : "w-[300px] shrink-0"} ${leftVisible ? "flex" : "hidden"} min-h-0 flex-col border-r border-[var(--border)] bg-[var(--sidebar-bg)]`}
             aria-label="Sources and chats"
           >
             <SourcesPanel
               sources={sources}
               chats={chats}
               activeChatId={activeChatId}
+              openSourceId={viewer?.sourceId}
               selectedIds={selectedIds}
               query={sourceQuery}
               debouncedQuery={debouncedQuery}
@@ -408,8 +438,8 @@ export default function Workspace({
           </aside>
         )}
 
-        {chatVisible && (
-          <main className="flex min-w-0 flex-1 flex-col bg-[var(--main-bg)]" aria-label="Chat">
+        {(
+          <main className={`${chatVisible ? "flex" : "hidden"} min-w-0 flex-1 flex-col bg-[var(--main-bg)]`} aria-label="Chat">
             {!leftOpen && !isMobile && (
               <button type="button" onClick={() => setLeftOpen(true)} aria-label="Show sources" className="absolute mt-2 ml-2 cursor-pointer rounded-md border border-[var(--border)] bg-[var(--surface)] p-1 text-[var(--text-secondary)]">
                 <ChevronRight size={14} />
@@ -428,9 +458,8 @@ export default function Workspace({
                 void refreshChats();
                 navigate(`/project/${projectId}/chat/${id}`, { replace: true });
               }}
-              onOpenSource={(id, locator) => {
-                openSource(id, locator);
-              }}
+              onChatUpdated={refreshChats}
+              onOpenSource={openSource}
               onNeedSources={() => (isMobile ? setMobileTab("sources") : setLeftOpen(true))}
             />
           </main>
@@ -490,6 +519,7 @@ export default function Workspace({
 
       <SourceViewerDrawer
         target={viewer}
+        docked={!isMobile && leftVisible}
         sources={sources}
         onClose={() => {
           setViewer(null);

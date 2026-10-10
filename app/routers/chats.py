@@ -187,6 +187,7 @@ def send_message(
 @router.post("/chats/{chat_id}/messages/stream")
 async def send_message_stream(
     chat_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     payload: SendMessageRequest,
     user: CurrentUser,
     chats: Annotated[ChatRepo, Depends(get_chats)],
@@ -207,14 +208,19 @@ async def send_message_stream(
             lambda token: emit("token", token),
             payload.response_style,
             payload.source_ids,
+            background_tasks.add_task,
         ))
+        heartbeat = loop.time()
         try:
             while not task.done() or not queue.empty():
                 try:
                     kind, value = await asyncio.wait_for(queue.get(), timeout=0.1)
                     yield f"data: {json.dumps({'type': kind, 'value': value}, ensure_ascii=False)}\n\n"
                 except asyncio.TimeoutError:
-                    continue
+                    # Keep intermediaries from buffering an idle vision/retrieval request.
+                    if loop.time() - heartbeat >= 10:
+                        yield ": working\n\n"
+                        heartbeat = loop.time()
             result = await task
             count = chats.user_message_count(str(chat_id))
             if count % max(1, settings.memory_refine_every) == 0:

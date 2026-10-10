@@ -230,6 +230,7 @@ export interface ViewerTarget {
   kind?: string;
   value?: string;
   end?: number | null;
+  snippet?: string;
   nonce: number;
 }
 
@@ -238,6 +239,7 @@ export interface CitationLocator {
   kind: string;
   value: string;
   end?: number | null;
+  snippet?: string;
 }
 
 /** `app/schemas.py: ChatDetailOut` */

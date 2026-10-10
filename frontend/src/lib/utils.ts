@@ -40,6 +40,8 @@ export function parseTimestamp(value: string): number | null {
 
 export function citationLabel(kind: string, value: string): string {
   switch (kind) {
+    case "image":
+      return "Image";
     case "page":
       return `p. ${value}`;
     case "slide":

@@ -1,24 +1,46 @@
-import { useEffect, useRef, useState } from "react";
-import { Download, FileText, X } from "lucide-react";
+import { lazy, Suspense, useEffect, useState } from "react";
+import { Download, Maximize2, Minimize2, X } from "lucide-react";
 import { fetchSourceBlob, getSourceContent } from "../../lib/api";
 import type { SourceOut, ViewerTarget } from "../../lib/types";
 import { mediaKind } from "../../lib/sourceKind";
 import { citationLabel, formatDuration, parseTimestamp, timeAgo } from "../../lib/utils";
 import { MarkdownBody } from "../chat/ChatPanel";
+import MediaPane from "./MediaPane";
+const PdfPane = lazy(() => import("./PdfPane"));
 
 export function SourceViewerDrawer({
-  target,
+  target: requestedTarget,
   sources,
+  docked = false,
   onClose,
   onRemove,
 }: {
   target: ViewerTarget | null;
   sources: SourceOut[];
+  docked?: boolean;
   onClose: () => void;
   onRemove: (id: string) => void;
 }) {
+  const [retained, setRetained] = useState<ViewerTarget | null>(requestedTarget);
+  const [visible, setVisible] = useState(false);
+  const target = requestedTarget ?? retained;
+  useEffect(() => {
+    let frame = 0;
+    let timer = 0;
+    if (requestedTarget) {
+      setRetained(requestedTarget);
+      frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => setVisible(true)); });
+    } else {
+      setVisible(false);
+      timer = window.setTimeout(() => setRetained(null), 220);
+    }
+    return () => { cancelAnimationFrame(frame); clearTimeout(timer); };
+  }, [requestedTarget]);
   const source = sources.find((s) => s.id === target?.sourceId) ?? null;
   const [jumpTick, setJumpTick] = useState(0);
+  const [expanded, setExpanded] = useState(false);
+  const [downloadError, setDownloadError] = useState("");
+  const besideSources = docked && !expanded;
 
   useEffect(() => {
     if (!target) return;
@@ -41,8 +63,8 @@ export function SourceViewerDrawer({
     : (target.kind && target.value ? citationLabel(target.kind, target.value) : "");
 
   return (
-    <div className="anim-fade fixed inset-0 z-[55] flex justify-end bg-black/50" style={{ zIndex: 55 }} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="anim-rise flex h-full w-full max-w-[560px] flex-col border-l border-[var(--border)] bg-[var(--surface)]" role="dialog" aria-modal="true" aria-label={source.filename}>
+    <div className={`viewer-backdrop fixed inset-0 z-[55] flex justify-end ${besideSources ? "viewer-docked" : "bg-black/50"} ${visible ? "is-open" : ""}`} style={{ zIndex: 55, left: besideSources ? 300 : 0 }} onMouseDown={(e) => !besideSources && e.target === e.currentTarget && onClose()} inert={!requestedTarget}>
+      <div className={`viewer-drawer flex h-full w-full ${expanded ? "max-w-full" : "max-w-[860px]"} flex-col border-l border-[var(--border)] bg-[var(--surface)] shadow-xl`} role="dialog" aria-modal={besideSources ? undefined : true} aria-label={source.filename}>
         <div className="flex items-start gap-2 border-b border-[var(--border)] px-4 py-3">
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold">{source.filename}</h2>
@@ -51,9 +73,11 @@ export function SourceViewerDrawer({
               {source.duration_s ? ` · ${formatDuration(source.duration_s)}` : ""}
             </p>
           </div>
+          <button type="button" aria-label={expanded ? "Restore viewer size" : "Expand viewer"} onClick={() => setExpanded((v) => !v)} className="rounded-md p-2 hover:bg-[var(--surface-secondary)]">{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>
           <button
             type="button"
             onClick={() => {
+              setDownloadError("");
               fetchSourceBlob(source.id)
                 .then((blob) => {
                   const url = URL.createObjectURL(blob);
@@ -61,9 +85,9 @@ export function SourceViewerDrawer({
                   a.href = url;
                   a.download = source.filename;
                   a.click();
-                  URL.revokeObjectURL(url);
+                  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
                 })
-                .catch(() => undefined);
+                .catch(() => setDownloadError("Download failed. Please try again."));
             }}
             aria-label="Download source"
             className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-[7px] text-[var(--text-secondary)] hover:bg-[var(--surface-secondary)]"
@@ -79,6 +103,7 @@ export function SourceViewerDrawer({
             <X size={16} />
           </button>
         </div>
+        {downloadError && <p role="alert" className="px-4 py-2 text-sm text-[var(--danger)]">{downloadError}</p>}
         {target.kind && target.value && (
           <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--accent-border)] bg-[var(--accent-soft)]/50 px-4 py-1.5 text-[13px]">
             <span className="font-medium text-[var(--accent)]">Cited {citedLabel}</span>
@@ -97,9 +122,11 @@ export function SourceViewerDrawer({
           <ViewerBody
             key={source.id}
             source={source}
+            active={!!requestedTarget}
             locatorKind={target.kind}
             locatorValue={target.value}
             locatorEnd={target.end}
+            snippet={target.snippet}
             nonce={target.nonce}
             jumpTick={jumpTick}
           />
@@ -122,26 +149,29 @@ export function SourceViewerDrawer({
 
 function ViewerBody({
   source,
+  active,
   locatorKind,
   locatorValue,
   locatorEnd,
+  snippet,
   nonce,
   jumpTick,
 }: {
   source: SourceOut;
+  active: boolean;
   locatorKind?: string;
   locatorValue?: string;
   locatorEnd?: number | null;
+  snippet?: string;
   nonce: number;
   jumpTick: number;
 }) {
   const kind = mediaKind(source.source_type);
-  // Deep links open on the Original tab: only it can jump (pdf #page fragment,
-  // media currentTime). Parsed text has no page/timestamp anchors.
+  // Citations open the renderer that supports page or playback navigation.
   const seekable =
     (kind === "pdf" && locatorKind === "page" && parsePage(locatorValue) !== null) ||
     ((kind === "video" || kind === "audio") && locatorKind === "segment" && (locatorValue ? parseTimestamp(locatorValue) : null) !== null);
-  const [tab, setTab] = useState<"parsed" | "original">(kind === "image" || seekable ? "original" : "parsed");
+  const [tab, setTab] = useState<"parsed" | "original">(["image", "video", "audio", "pdf"].includes(kind) || seekable ? "original" : "parsed");
   useEffect(() => {
     if (seekable) setTab("original");
   }, [seekable, nonce]);
@@ -160,7 +190,7 @@ function ViewerBody({
       .then((content) => live && setMarkdown(content.markdown))
       .catch((e: unknown) => live && setParsedError(e instanceof Error ? e.message : String(e)));
     return () => { live = false; };
-  }, [source.id, kind]);
+  }, [source.id, source.status, kind]);
 
   useEffect(() => {
     let live = true;
@@ -212,8 +242,14 @@ function ViewerBody({
             {source.status !== "ready" && <p className="mt-2 text-xs">This source is still processing. The parsed view will be available when parsing finishes.</p>}
           </div>
         ) : <LoadingBlock label="Loading parsed content…" />
-      ) : <OriginalBody
+      ) : null}
+      <div hidden={kind !== "image" && tab !== "original"}>
+      {snippet && kind !== "video" && kind !== "audio" && kind !== "image" && <blockquote className="mb-3 rounded-lg border-l-2 border-[var(--accent)] bg-[var(--accent-soft)] p-3 text-sm">{snippet}</blockquote>}
+      <OriginalBody
         source={source}
+        active={active && tab === "original"}
+        markdown={markdown ?? ""}
+        snippet={snippet}
         kind={kind}
         url={url}
         text={text}
@@ -223,13 +259,17 @@ function ViewerBody({
         stopAt={locatorKind === "segment" && locatorEnd != null ? locatorEnd : null}
         seekKey={nonce}
         jumpTick={jumpTick}
-      />}
+      />
+      </div>
     </div>
   );
 }
 
 function OriginalBody({
   source,
+  active,
+  markdown,
+  snippet,
   kind,
   url,
   text,
@@ -242,6 +282,9 @@ function OriginalBody({
 }: {
   source: SourceOut;
   kind: ReturnType<typeof mediaKind>;
+  active: boolean;
+  markdown: string;
+  snippet?: string;
   url: string | null;
   text: string | null;
   error: string;
@@ -261,26 +304,10 @@ function OriginalBody({
   }
   if (url === null) return <LoadingBlock label="Loading preview…" />;
   if (kind === "pdf") {
-    return <PdfPane url={url} title={source.filename} page={page} seekKey={seekKey} jumpTick={jumpTick} />;
+    return <Suspense fallback={<LoadingBlock label="Loading PDF viewer…" />}><PdfPane url={url} page={page} seekKey={seekKey} jumpTick={jumpTick} /></Suspense>;
   }
-  if (kind === "video") {
-    return (
-      <div>
-        <VideoPane url={url} time={time} stopAt={stopAt} seekKey={seekKey} jumpTick={jumpTick} />
-        <TranscriptHint />
-      </div>
-    );
-  }
-  if (kind === "audio") {
-    return (
-      <div className="rounded-[8px] border border-[var(--border)] bg-[var(--surface-secondary)] p-4">
-        <div className="mb-3 flex items-center gap-2 text-[var(--text-secondary)]">
-          <FileText size={16} /> {source.filename}
-        </div>
-        <AudioPane url={url} time={time} stopAt={stopAt} seekKey={seekKey} jumpTick={jumpTick} />
-        <TranscriptHint />
-      </div>
-    );
+  if (kind === "video" || kind === "audio") {
+    return <MediaPane active={active} url={url} video={kind === "video"} time={time} stopAt={stopAt} seekKey={seekKey} jumpTick={jumpTick} markdown={markdown} snippet={snippet} />;
   }
   if (kind === "image") {
     return <img src={url} alt={source.filename} className="max-h-[70vh] w-full rounded-[8px] border border-[var(--border)] object-contain" />;
@@ -302,68 +329,6 @@ function parsePage(value?: string): number | null {
   return Number.isInteger(n) && n >= 1 ? n : null;
 }
 
-/** Browser PDF viewers honor #page=N — the zero-dependency exact-page jump. */
-function PdfPane({ url, title, page, seekKey, jumpTick }: { url: string; title: string; page: number | null; seekKey: number; jumpTick: number }) {
-  const src = page !== null ? `${url}#page=${page}` : url;
-  return (
-    <iframe
-      key={`${seekKey}-${jumpTick}-${page ?? "all"}`}
-      src={src}
-      title={title}
-      className="h-[70vh] w-full rounded-[8px] border border-[var(--border)] bg-white"
-    />
-  );
-}
-
-function seekMedia(el: HTMLMediaElement | null, time: number) {
-  if (!el) return;
-  const apply = () => {
-    try {
-      el.currentTime =
-        Number.isFinite(el.duration) && el.duration > 0 ? Math.min(time, Math.max(0, el.duration - 0.25)) : time;
-    } catch {
-      /* metadata not ready — the loadedmetadata listener below retries */
-    }
-    void el.play().catch(() => undefined);
-  };
-  if (el.readyState >= 1) apply();
-  else el.addEventListener("loadedmetadata", apply, { once: true });
-}
-
-function VideoPane({ url, time, stopAt, seekKey, jumpTick }: { url: string; time: number | null; stopAt: number | null; seekKey: number; jumpTick: number }) {
-  const ref = useRef<HTMLVideoElement>(null);
-  useEffect(() => {
-    if (time !== null) seekMedia(ref.current, time);
-  }, [url, time, seekKey, jumpTick]);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || stopAt === null || time === null || stopAt <= time) return;
-    const onTime = () => {
-      if (el.currentTime >= stopAt) el.pause();
-    };
-    el.addEventListener("timeupdate", onTime);
-    return () => el.removeEventListener("timeupdate", onTime);
-  }, [url, time, stopAt, seekKey, jumpTick]);
-  return <video ref={ref} src={url} controls preload="metadata" className="w-full rounded-[8px] border border-[var(--border)]" />;
-}
-
-function AudioPane({ url, time, stopAt, seekKey, jumpTick }: { url: string; time: number | null; stopAt: number | null; seekKey: number; jumpTick: number }) {
-  const ref = useRef<HTMLAudioElement>(null);
-  useEffect(() => {
-    if (time !== null) seekMedia(ref.current, time);
-  }, [url, time, seekKey, jumpTick]);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || stopAt === null || time === null || stopAt <= time) return;
-    const onTime = () => {
-      if (el.currentTime >= stopAt) el.pause();
-    };
-    el.addEventListener("timeupdate", onTime);
-    return () => el.removeEventListener("timeupdate", onTime);
-  }, [url, time, stopAt, seekKey, jumpTick]);
-  return <audio ref={ref} src={url} controls preload="metadata" className="w-full" />;
-}
-
 function LoadingBlock({ label }: { label: string }) {
   return (
     <div className="grid gap-2" aria-label={label}>
@@ -372,8 +337,4 @@ function LoadingBlock({ label }: { label: string }) {
       <div className="h-4 w-1/2 animate-pulse rounded bg-[var(--surface-secondary)]" />
     </div>
   );
-}
-
-function TranscriptHint() {
-  return <p className="mt-2 text-xs text-[var(--text-muted)]">Segments from transcription become clickable citations in chat.</p>;
 }

@@ -163,54 +163,39 @@ class Transcriber:
                 kwargs["language"] = language
             return self._client.audio.transcriptions.create(**kwargs)
 
+    @staticmethod
+    def _format_error(exc: Exception) -> bool:
+        # Only capability errors justify another expensive transcription call.
+        status = getattr(exc, "status_code", None)
+        message = str(exc).lower()
+        return status in (400, 422, 501) and any(term in message for term in (
+            "response_format", "verbose_json", "language", "not implemented", "unsupported format",
+        ))
+
     def transcribe(self, audio_path: Path) -> list[Segment]:
-        fallback_lang = self.language or "en"
-        try:
-            result = self._create(audio_path, "verbose_json", self.language)
-        except Exception as exc:
-            # Some self-hosted engines (e.g. whisper.cpp-style servers like
-            # LM Studio's local STT) answer 501 to `verbose_json` without an
-            # explicit `language`: "Send the 'language' parameter, or use
-            # response_format 'json' or 'text'." Retry with timestamps intact
-            # first (verbose_json + language, then srt/vtt), and only use
-            # plain `json`/`text` as a last resort (redistributed over the
-            # audio duration so citations still get [m:ss] timeframes).
-            msg = str(exc).lower()
-            retryable = (
-                "verbose_json" in msg
-                or "language" in msg
-                or "501" in msg
-                or "not implemented" in msg
-            )
-            if not retryable:
-                raise
+        # MOSS does not report detected language for verbose_json/SRT/VTT.
+        # JSON preserves automatic language detection, including Hindi lectures.
+        preferred = getattr(self, "_working_format", None)
+        formats = [preferred] if preferred else (["json", "text"] if "moss" in self.model.lower() else ["verbose_json", "json", "text"])
+        if preferred:
+            formats += [fmt for fmt in ("json", "text") if fmt != preferred]
+        for index, fmt in enumerate(formats):
             try:
-                result = self._create(audio_path, "verbose_json", fallback_lang)
-            except Exception:
-                result = self._transcribe_with_timestamps(audio_path, fallback_lang)
-        return self._to_segments(result, audio_path)
-
-    def _transcribe_with_timestamps(self, audio_path: Path, language: str):
-        """Fallback chain that preserves per-segment timestamps.
-
-        Order: `srt` → `vtt` (both carry `start --> end` cues and are widely
-        supported, including by servers that reject `verbose_json`), then
-        plain `json` (no timestamps — kept as a single segment).
-        """
-        last_exc: Exception | None = None
-        for fmt in ("srt", "vtt", "json"):
-            try:
-                return self._create(audio_path, fmt, language)
-            except Exception as exc:  # noqa: BLE001 — try the next format
-                last_exc = exc
-        raise last_exc if last_exc else RuntimeError("Transcription failed")
+                result = self._create(audio_path, fmt, self.language)
+            except Exception as exc:
+                if index == len(formats) - 1 or not self._format_error(exc):
+                    raise
+                continue
+            self._working_format = fmt
+            return self._to_segments(result, audio_path)
+        raise RuntimeError("Transcription failed")
 
     def _to_segments(self, result, audio_path: Path) -> list[Segment]:
         # `srt`/`vtt`/`text` come back as raw strings — parse cues so each
         # segment keeps its timeframe (the `.vtt`-style citations downstream
         # depend on it). Plain `json`/`text` has no cues: redistribute its
         # sentences over the audio duration so each segment still gets a
-        # real [m:ss] timeframe instead of collapsing to one `0:00` block.
+        # estimated [m:ss] timeframe instead of collapsing to one `0:00` block.
         if isinstance(result, str):
             parsed = parse_srt_vtt(result)
             if parsed:
