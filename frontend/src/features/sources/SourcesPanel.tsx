@@ -1,6 +1,6 @@
 import type * as React from "react";
 import { useMemo, useRef, useState } from "react";
-import { Check, MessageSquarePlus, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { Check, MessageSquarePlus, Minus, PanelLeft, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import type { ChatOut, SourceOut } from "../../lib/types";
 import { SourceTypeIcon, mediaKind, statusLabel, statusTone } from "../../lib/sourceKind";
 import { timeAgo } from "../../lib/utils";
@@ -38,6 +38,7 @@ export function SourcesPanel({
   onChatMenu,
   onDeleteChat,
   onRefresh,
+  onHide,
 }: {
   sources: SourceOut[];
   chats: ChatOut[];
@@ -57,9 +58,11 @@ export function SourcesPanel({
   onChatMenu: (e: React.MouseEvent, chat: ChatOut) => void;
   onDeleteChat: (chat: ChatOut) => void;
   onRefresh: () => void;
+  onHide: () => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [dragOver, setDragOver] = useState(false);
+  const dragDepth = useRef(0);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const filtered = useMemo(() => {
@@ -71,19 +74,47 @@ export function SourcesPanel({
   const ready = filtered.filter((s) => s.status === "ready");
   const failed = filtered.filter((s) => s.status === "failed");
 
+  // Tri-state master checkbox: tick = all ready selected, dash = some, none = empty.
+  const readyIds = useMemo(() => sources.filter((s) => s.status === "ready").map((s) => s.id), [sources]);
+  const selectedReadyCount = useMemo(() => readyIds.filter((id) => selectedIds.has(id)).length, [readyIds, selectedIds]);
+  const allSelected = readyIds.length > 0 && selectedReadyCount === readyIds.length;
+  const someSelected = selectedReadyCount > 0 && !allSelected;
+  const toggleSelectAll = () => {
+    if (allSelected) onClear();
+    else onSelectAll();
+  };
+
   return (
     <div
       className="flex min-h-0 flex-1 flex-col"
+      onDragEnter={(e) => {
+        e.preventDefault();
+        // Counter guards against dragleave firing for every child element,
+        // which caused the drop highlight to flicker while dragging over the list.
+        if (e.dataTransfer.types.includes("Files")) {
+          dragDepth.current += 1;
+          setDragOver(true);
+        }
+      }}
       onDragOver={(e) => {
         e.preventDefault();
-        setDragOver(true);
+        e.dataTransfer.dropEffect = "copy";
       }}
-      onDragLeave={() => setDragOver(false)}
+      onDragLeave={(e) => {
+        e.preventDefault();
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) setDragOver(false);
+      }}
       onDrop={(e) => {
         e.preventDefault();
+        dragDepth.current = 0;
         setDragOver(false);
         const files = Array.from(e.dataTransfer.files ?? []);
         if (files.length) onFiles(files);
+      }}
+      onDragEnd={() => {
+        dragDepth.current = 0;
+        setDragOver(false);
       }}
     >
       {/* sources header */}
@@ -94,8 +125,8 @@ export function SourcesPanel({
             <IconButton label="Refresh sources" onClick={onRefresh}>
               <RefreshCw size={14} />
             </IconButton>
-            <IconButton label="Add sources (Ctrl+U)" onClick={() => fileRef.current?.click()}>
-              <Plus size={16} />
+            <IconButton label="Hide sources" onClick={onHide}>
+              <PanelLeft size={16} />
             </IconButton>
           </div>
         </div>
@@ -124,14 +155,36 @@ export function SourcesPanel({
             </button>
           ))}
         </div>
+        {/* add-sources action bar */}
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          className="mt-2 flex h-9 w-full cursor-pointer items-center justify-center gap-1.5 rounded-[7px] border border-dashed border-[var(--border-strong)] text-[13px] font-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
+        >
+          <Plus size={14} /> Add sources
+        </button>
         <div className="mt-2 flex items-center justify-between text-xs text-[var(--text-muted)]">
           <span>
             {sources.length} sources · {selectedIds.size} selected
           </span>
-          <span className="flex gap-2">
-            <button type="button" onClick={onSelectAll} className="cursor-pointer hover:text-[var(--text-primary)]">Select all</button>
-            <button type="button" onClick={onClear} className="cursor-pointer hover:text-[var(--text-primary)]">Clear</button>
-          </span>
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={allSelected ? true : someSelected ? "mixed" : false}
+            aria-label={allSelected ? "Deselect all sources" : "Select all sources"}
+            onClick={toggleSelectAll}
+            disabled={readyIds.length === 0}
+            className="flex cursor-pointer items-center gap-1.5 hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <span
+              className={`flex h-[16px] w-[16px] items-center justify-center rounded-[5px] border text-[11px] transition-colors ${
+                allSelected || someSelected ? "border-[var(--accent)] bg-[var(--accent)] text-white" : "border-[var(--border-strong)]"
+              }`}
+            >
+              {allSelected ? <Check size={11} /> : someSelected ? <Minus size={11} /> : null}
+            </span>
+            Select all
+          </button>
         </div>
         <input
           ref={fileRef}
@@ -148,9 +201,9 @@ export function SourcesPanel({
       </div>
 
       {/* source list */}
-      <div className={`min-h-0 flex-1 overflow-y-auto px-2 py-2 ${dragOver ? "bg-[var(--accent-soft)]" : ""}`} aria-label="Source list">
+      <div className={`relative min-h-0 flex-1 overflow-y-auto px-2 py-2 ${dragOver ? "bg-[var(--accent-soft)]" : ""}`} aria-label="Source list">
         {dragOver && (
-          <div className="mb-2 rounded-[8px] border border-dashed border-[var(--accent)] p-3 text-center text-[13px] text-[var(--accent)]">
+          <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-[8px] border border-dashed border-[var(--accent)] bg-[var(--surface)]/85 text-[13px] font-medium text-[var(--accent)]">
             Drop files to upload
           </div>
         )}
@@ -178,7 +231,7 @@ export function SourcesPanel({
               </SourceSection>
             )}
             {ready.length > 0 && (
-              <SourceSection title="Ready to chat" count={ready.length}>
+              <SourceSection title="Sources" count={ready.length}>
                 {ready.map((s) => <SourceRow key={s.id} source={s} selected={selectedIds.has(s.id)} onToggle={() => onToggleSelect(s.id)} onOpen={() => onOpenSource(s.id)} onRemove={() => onRemoveSource(s.id)} />)}
               </SourceSection>
             )}
@@ -279,7 +332,7 @@ function SourceRow({
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] font-medium text-[var(--text-primary)]">{source.filename}</span>
           <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-[var(--text-muted)]">
-            <Badge tone={statusTone(source.status)}>{statusLabel(source.status)}</Badge>
+            {source.status !== "ready" && <Badge tone={statusTone(source.status)}>{statusLabel(source.status)}</Badge>}
             {source.status === "ready" ? (
               <span>{source.chunk_count} {source.chunk_count === 1 ? "passage" : "passages"}{source.duration_s ? ` · ${Math.round(source.duration_s / 60)} min` : ""}</span>
             ) : busy ? (

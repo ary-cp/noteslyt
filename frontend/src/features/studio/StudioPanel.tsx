@@ -1,25 +1,25 @@
 import type * as React from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Brain,
   ClipboardList,
   FileText,
   GraduationCap,
-  Layers,
   Loader2,
-  Map,
+  PanelRight,
   // Mic,
   // Presentation,
   Sparkles,
   // TableProperties,
 } from "lucide-react";
+import { MdQuiz } from "react-icons/md";
+import { PiCardsThreeBold } from "react-icons/pi";
+import { RiMindMap } from "react-icons/ri";
 import { createExam, createFlashcards, createQuiz, fetchLearner, getQuizAnswers, listStudioJobs, listTopics, saveStudioArtifact, submitAnswer } from "../../lib/api";
 import type { AnswerOut, LearnerOut, QuizOut, SourceOut, StudioJob, TopicSummary } from "../../lib/types";
 import { useToast } from "../../lib/toast";
-import { Button } from "../../components/ui/Button";
+import { Button, IconButton } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/Feedback";
 import { Modal } from "../../components/ui/Modal";
-import { Dropdown } from "../../components/ui/Menu";
 import { Field, RadioGroup, Slider } from "../../components/ui/Controls";
 import { MarkdownBody } from "../chat/ChatPanel";
 import { timeAgo } from "../../lib/utils";
@@ -28,11 +28,11 @@ export type StudioTool = "summary" | "flashcards" | "quiz" | "exam" | "guide" | 
 
 const TOOLS: { id: StudioTool; title: string; desc: string; icon: React.ReactNode; ready: boolean }[] = [
   { id: "summary", title: "Summary", desc: "Key points from your sources", icon: <FileText size={16} />, ready: true },
-  { id: "quiz", title: "Quiz", desc: "Test yourself with feedback", icon: <Brain size={16} />, ready: true },
-  { id: "flashcards", title: "Flashcards", desc: "Review key concepts", icon: <Layers size={16} />, ready: true },
+  { id: "quiz", title: "Quiz", desc: "Test yourself with feedback", icon: <MdQuiz size={16} />, ready: true },
+  { id: "flashcards", title: "Flashcards", desc: "Review key concepts", icon: <PiCardsThreeBold size={16} />, ready: true },
   { id: "exam", title: "Mock exam", desc: "Timed, exam-style practice", icon: <GraduationCap size={16} />, ready: true },
   { id: "guide", title: "Study guide", desc: "Structured revision document", icon: <ClipboardList size={16} />, ready: true },
-  { id: "mindmap", title: "Mind map", desc: "See how ideas connect", icon: <Map size={16} />, ready: true },
+  { id: "mindmap", title: "Mind map", desc: "See how ideas connect", icon: <RiMindMap size={16} />, ready: true },
   // { id: "podcast", title: "Audio overview", desc: "Listen on the go", icon: <Mic size={16} />, ready: false },
   // { id: "slides", title: "Presentation", desc: "Slides from sources", icon: <Presentation size={16} />, ready: false },
   // { id: "sheet", title: "Cheat sheet", desc: "One-page revision", icon: <TableProperties size={16} />, ready: false },
@@ -55,10 +55,12 @@ export function StudioPanel({
   projectId,
   sources,
   selectedSources,
+  onHide,
 }: {
   projectId: string;
   sources: SourceOut[];
   selectedSources: SourceOut[];
+  onHide: () => void;
 }) {
   const { push } = useToast();
   const [topics, setTopics] = useState<TopicSummary[]>([]);
@@ -68,7 +70,6 @@ export function StudioPanel({
   const [busy, setBusy] = useState(false);
   const [count, setCount] = useState(10);
   const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("medium");
-  const [topicId, setTopicId] = useState("");
   const [focus, setFocus] = useState("");
   const [viewing, setViewing] = useState<Artifact | null>(null);
 
@@ -131,9 +132,6 @@ export function StudioPanel({
     () => topics.filter((topic) => topic.sources.some((source) => selectedIdSet.has(source.source_id))),
     [topics, selectedIdSet],
   );
-  useEffect(() => {
-    if (topicId && !scopedTopics.some((topic) => topic.id === topicId)) setTopicId("");
-  }, [topicId, scopedTopics]);
   const scopeLabel = selectedSources.length > 0
     ? `${selectedSources.length} selected source${selectedSources.length > 1 ? "s" : ""}`
     : "no sources selected";
@@ -154,7 +152,6 @@ export function StudioPanel({
         const n = genTool === "exam" ? Math.min(count, 30) : Math.min(count, 10);
         const create = genTool === "exam" ? createExam : createQuiz;
         const job = await create(projectId, {
-          topic_id: topicId || undefined,
           n_questions: n,
           qtypes: ["mcq", "short_answer"],
           source_ids: selectedSources.map((source) => source.id),
@@ -163,7 +160,6 @@ export function StudioPanel({
         push("Generation started", { detail: "You can keep using the project while it runs.", tone: "success" });
       } else if (genTool === "flashcards") {
         const job = await createFlashcards(projectId, {
-          topic_id: topicId || undefined,
           n_cards: Math.min(count, 20),
           source_ids: selectedSources.map((source) => source.id),
         });
@@ -171,8 +167,6 @@ export function StudioPanel({
         push("Flashcard generation started", { tone: "success" });
       } else if (genTool === "summary" || genTool === "guide" || genTool === "sheet") {
         const names = selectedSources.map((s) => s.filename).join(", ");
-        const scopedTopicIds = new Set(scopedTopics.map((topic) => topic.id));
-        const weak = (learner?.weakest ?? []).filter((topic) => scopedTopicIds.has(topic.topic_id));
         const md = [
           `# ${genTool === "guide" ? "Study guide" : genTool === "sheet" ? "Cheat sheet" : "Summary"}`,
           ``,
@@ -181,14 +175,13 @@ export function StudioPanel({
           `## What this covers`,
           ``,
           `Sources: ${names || "—"}.`,
-          scopedTopics.length ? `Topics detected: ${scopedTopics.map((t) => t.name).join(", ")}.` : `Topics are extracted during indexing.`,
+          ...(scopedTopics.length === 0 ? [`Topics are still being extracted during indexing.`] : []),
           ``,
           `## Key points`,
           ``,
           ...(scopedTopics.slice(0, 8).map((t, i) => `${i + 1}. **${t.name}** — ${t.description || `covered in ${t.sources.filter((s) => selectedIdSet.has(s.source_id)).map((s) => s.filename).join(", ") || "your sources"}`}`)),
           ...(scopedTopics.length === 0 ? [`1. Upload completes → key points appear here, each linked to its source.`] : []),
           ``,
-          ...(weak.length ? [`## Topics to review`, ``, ...weak.slice(0, 5).map((w) => `- **${w.name}** — ${Math.round(w.p_mastery * 100)}% mastery${w.attempts ? ` (${w.attempts} attempts)` : " (not practiced yet)"}`), ``, `Generate a focused quiz to practice one of these topics.`, ``] : []),
           `## Next step`,
           ``,
           `Generate a quiz from the same scope to check recall, or ask the chat to explain any point above.`,
@@ -205,8 +198,12 @@ export function StudioPanel({
         push("Document ready", { tone: "success" });
       } else if (genTool === "mindmap") {
         const nodes = scopedTopics.slice(0, 10);
-        const edges = nodes.slice(1).map((t, i) => `  main --> ${sanitize(nodes[i % Math.max(1, nodes.length - 1)]?.name ?? "Topic")}_${i}[${t.name.slice(0, 24)}]`);
-        const mermaid = ["graph TD", `  main[${((selectedSources[0]?.filename ?? "Project").slice(0, 28))}]`, ...edges].join("\n");
+        const rootName = (selectedSources[0]?.filename ?? "Project").replace(/\.[^.]+$/, "");
+        const lines = ["graph TD", `  main[${mermaidLabel(rootName)}]`];
+        nodes.forEach((t, i) => {
+          lines.push(`  main --> ${mermaidId(t.name, "topic")}_${i}[${mermaidLabel(t.name, 26)}]`);
+        });
+        const mermaid = lines.join("\n");
         const art: Artifact = {
           id: `mm-${Date.now()}`,
           kind: "mindmap",
@@ -229,7 +226,12 @@ export function StudioPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 border-b border-[var(--border)] px-3.5 pt-3 pb-2.5">
-        <h2 className="text-[13px] font-semibold tracking-wide">Studio</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-[13px] font-semibold tracking-wide">Studio</h2>
+          <IconButton label="Hide studio" onClick={onHide}>
+            <PanelRight size={16} />
+          </IconButton>
+        </div>
         <p className="mt-0.5 text-xs text-[var(--text-secondary)]">Turn your sources into learning materials.</p>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
@@ -254,21 +256,10 @@ export function StudioPanel({
         </div>
 
         {learner && learner.topics.length > 0 && (
-          <div className="mt-4 rounded-[8px] border border-[var(--border)] bg-[var(--surface)] p-3">
-            <p className="text-xs font-medium text-[var(--text-muted)]">YOUR LEARNING PROFILE</p>
-            <p className="mt-1 text-xs text-[var(--text-muted)]">Saved topics · mastery updates after each quiz answer.</p>
-            <div className="mt-2 grid max-h-64 gap-3 overflow-y-auto">
-              {learner.topics.map((w) => (
-                <div key={w.topic_id} className="flex min-w-0 items-center gap-2 text-[13px]">
-                  <span className="min-w-0 flex-1"><span className="block">{w.name}</span><span className="block text-[11px] text-[var(--text-muted)]">{w.attempts ? `${w.correct}/${w.attempts} correct · ${w.coverage_status.replaceAll("_", " ")}` : "Take a quiz to assess this topic"}</span></span>
-                  {w.attempts > 0 ? <span className="shrink-0 font-mono text-xs text-[var(--text-muted)]">{Math.round(w.p_mastery * 100)}%</span> : <span className="shrink-0 text-[11px] text-[var(--text-muted)]">Not practiced</span>}
-                  <span className="h-1 w-16 shrink-0 overflow-hidden rounded-full bg-[var(--border)]">
-                    {w.attempts > 0 && <span className="block h-full max-w-full rounded-full bg-gradient-to-r from-amber-500 via-teal-500 to-sky-500" style={{ width: `${Math.max(0, Math.min(100, Math.round(w.p_mastery * 100)))}%` }} />}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
+          <LearningProfileCard
+            learner={learner}
+            onStartDiagnostic={() => setGenTool("quiz")}
+          />
         )}
 
         <div className="mt-4">
@@ -325,14 +316,11 @@ export function StudioPanel({
         }
       >
         <div className="grid gap-3.5">
-          <Field label="Topic">
-            <Dropdown
-              value={topicId}
-              onChange={setTopicId}
-              ariaLabel="Topic"
-              options={[{ value: "", label: genTool === "flashcards" ? "All selected sources" : "Mixed (weakest first)" }, ...scopedTopics.map((t) => ({ value: t.id, label: t.name }))]}
-            />
-          </Field>
+          {(genTool === "quiz" || genTool === "exam") && (
+            <p className="rounded-[7px] bg-[var(--surface-secondary)] px-2.5 py-2 text-[13px] text-[var(--text-secondary)]">
+              Questions are picked automatically — a spread across your material for new learners, weakest areas first once you've practiced.
+            </p>
+          )}
           {(genTool === "quiz" || genTool === "exam" || genTool === "flashcards") && (
             <Field label={genTool === "flashcards" ? `Flashcards · ${count}` : `${genTool === "exam" ? "Questions" : "Quiz questions"} · ${count}`} hint={`Choose from 5 to ${genTool === "exam" ? 30 : genTool === "flashcards" ? 20 : 10}.`}>
               <Slider value={count} min={5} max={genTool === "exam" ? 30 : genTool === "flashcards" ? 20 : 10} onChange={setCount} ariaLabel={genTool === "exam" ? "Number of exam questions" : genTool === "flashcards" ? "Number of flashcards" : "Number of quiz questions"} />
@@ -364,8 +352,52 @@ export function StudioPanel({
   );
 }
 
-function sanitize(s: string) {
-  return s.replace(/[^a-zA-Z0-9 ]/g, "").slice(0, 24) || "Topic";
+/** Mermaid flowchart node id: letters and digits only (spaces break parsing). */
+function mermaidId(s: string, fallback: string): string {
+  return s.replace(/[^a-zA-Z0-9]/g, "").slice(0, 20) || fallback;
+}
+
+/** Mermaid flowchart label: quoted, with diagram-breaking characters stripped. */
+function mermaidLabel(s: string, max = 28): string {
+  const clean = s.replace(/["#<>`[\]{}()|\\]/g, "").replace(/\s+/g, " ").trim().slice(0, max) || "Topic";
+  return `"${clean}"`;
+}
+
+/**
+ * The learner sees one number only: overall mastery across the project's
+ * topics. Per-topic names, attempt counts and coverage stay server-side —
+ * they drive adaptive quizzes but are never disclosed.
+ */
+function LearningProfileCard({ learner, onStartDiagnostic }: { learner: LearnerOut; onStartDiagnostic: () => void }) {
+  const overall = Math.round((learner.topics.reduce((sum, t) => sum + t.p_mastery, 0) / learner.topics.length) * 100);
+  const practiced = learner.topics.some((t) => t.attempts > 0);
+  return (
+    <div className="mt-4 rounded-[8px] border border-[var(--border)] bg-[var(--surface)] p-3">
+      <p className="text-xs font-medium text-[var(--text-muted)]">YOUR LEARNING PROFILE</p>
+      <div className="mt-2 flex items-center gap-3">
+        <p className="text-[28px] font-semibold leading-none">{overall}%</p>
+        <div className="min-w-0 flex-1">
+          <div className="h-1.5 overflow-hidden rounded-full bg-[var(--border)]">
+            <div className="h-full rounded-full bg-[var(--accent)]" style={{ width: `${overall}%` }} />
+          </div>
+          <p className="mt-1.5 text-xs text-[var(--text-muted)]">Overall mastery · updates after each quiz answer.</p>
+        </div>
+      </div>
+      {!practiced && (
+        <div className="mt-3 rounded-[7px] bg-[var(--surface-secondary)] p-2.5">
+          <p className="text-[13px] font-medium">New here? Start with a diagnostic.</p>
+          <p className="mt-0.5 text-xs text-[var(--text-muted)]">A short mixed quiz across your sources finds your level.</p>
+          <button
+            type="button"
+            onClick={onStartDiagnostic}
+            className="mt-2 inline-flex h-8 cursor-pointer items-center rounded-[7px] bg-[var(--accent)] px-3 text-[13px] font-medium text-white hover:bg-[var(--accent-hover)]"
+          >
+            Start diagnostic quiz
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /* ---------------- artifact viewer ---------------- */
@@ -577,7 +609,6 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
           </button>
         )}
       </div>
-      <p className="mb-2 text-xs text-[var(--text-muted)]">{q.topic_slug.replaceAll("-", " ")}</p>
       <MarkdownBody text={q.stem} />
       {q.qtype === "mcq" ? (
         <div className="mt-3 grid gap-2">
@@ -615,7 +646,6 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
           <p className="mb-2 font-semibold">{answers[q.id].correct ? "Correct" : "Not quite"}</p>
           {!answers[q.id].correct && <MarkdownBody text={`**Expected answer:** ${answers[q.id].expected ?? "See explanation"}`} />}
           <MarkdownBody text={[answers[q.id].feedback, answers[q.id].feedback.includes(answers[q.id].explanation) ? "" : answers[q.id].explanation].filter(Boolean).join("\n\n")} />
-          {answers[q.id].topic && <p className="mt-2 text-xs">{answers[q.id].topic?.name} · mastery {Math.round(answers[q.id].p_before * 100)}% → {Math.round(answers[q.id].p_after * 100)}%</p>}
           <p className="mt-2 text-xs text-[var(--text-muted)]">{answers[q.id].citation.source} · {answers[q.id].citation.label}</p>
         </div>
       )}

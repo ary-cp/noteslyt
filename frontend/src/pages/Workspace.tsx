@@ -8,8 +8,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Moon,
-  PanelLeft,
-  PanelRight,
   Search,
   Settings as SettingsIcon,
   Sun,
@@ -321,16 +319,6 @@ export default function Workspace({
           {selectedIds.size} of {sources.length} sources
         </span>
         <div className="ml-auto flex items-center gap-1">
-          {!isMobile && (
-            <>
-              <IconButton label={leftOpen ? "Hide sources" : "Show sources"} onClick={() => setLeftOpen((v) => !v)}>
-                <PanelLeft size={16} />
-              </IconButton>
-              <IconButton label={rightOpen ? "Hide studio" : "Show studio"} onClick={() => setRightOpen((v) => !v)}>
-                <PanelRight size={16} />
-              </IconButton>
-            </>
-          )}
           <IconButton label="Search (Ctrl+K)" onClick={onSearch}>
             <Search size={16} />
           </IconButton>
@@ -398,6 +386,10 @@ export default function Workspace({
               }}
               onChatMenu={openChatMenu}
               onDeleteChat={(chat) => void removeChat(chat)}
+              onHide={() => {
+                if (isMobile) setMobileTab("chat");
+                else setLeftOpen(false);
+              }}
               onRefresh={() => {
                 void refreshSources();
                 void refreshChats();
@@ -445,6 +437,10 @@ export default function Workspace({
               projectId={projectId}
               sources={sources}
               selectedSources={selectedSources}
+              onHide={() => {
+                if (isMobile) setMobileTab("chat");
+                else setRightOpen(false);
+              }}
             />
           </aside>
         )}

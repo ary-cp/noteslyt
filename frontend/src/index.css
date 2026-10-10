@@ -303,3 +303,11 @@ button, input, textarea, select { font-family: inherit; }
 /* Keep rendered equations readable within narrow quiz options and chat bubbles. */
 .md { min-width: 0; overflow-wrap: anywhere; }
 .md .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding: 0.2em 0; }
+
+/* ---------- mermaid diagrams: svg follows the zoom wrapper width ---------- */
+.mermaid-canvas svg {
+  width: 100% !important;
+  height: auto !important;
+  max-width: none !important;
+  display: block;
+}

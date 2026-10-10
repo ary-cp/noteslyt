@@ -126,10 +126,10 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <div className="grid gap-3">
               {profile.quiz_progress && <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3">
                 <p className="text-sm font-medium">Your quiz progress</p>
-                <p className="mt-1 text-sm">{profile.quiz_progress.correct} / {profile.quiz_progress.answered} answers correct · {profile.quiz_progress.topics_practiced} topics practiced</p>
-                <p className="mt-1 text-xs text-[var(--text-muted)]">{profile.quiz_progress.answered ? "Based on saved first attempts. Open a project's Studio to see mastery for each topic." : "Take your first quiz to build a learning profile from your answers."}</p>
+                <p className="mt-1 text-sm">{profile.quiz_progress.answered ? `${Math.round((profile.quiz_progress.correct / profile.quiz_progress.answered) * 100)}% correct overall` : "No quizzes taken yet"}</p>
+                <p className="mt-1 text-xs text-[var(--text-muted)]">{profile.quiz_progress.answered ? "Based on saved first attempts. Open a project's Studio to see your overall mastery." : "Take your first quiz to build a learning profile from your answers."}</p>
               </div>}
-              <p className="text-xs text-[var(--text-muted)]">Set your learning preferences below. Quiz performance is tracked separately for each topic.</p>
+              <p className="text-xs text-[var(--text-muted)]">Set your learning preferences below. Quiz performance quietly adapts what you practice next.</p>
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Capability">
                   <Dropdown

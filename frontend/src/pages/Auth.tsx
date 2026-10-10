@@ -1,12 +1,11 @@
 import type * as React from "react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { BookMarked, Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff } from "lucide-react";
 import { login, signup } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useToast } from "../lib/toast";
-import { Button } from "../components/ui/Button";
-import { Field, TextInput } from "../components/ui/Controls";
+import "./Auth.css";
 
 export default function AuthPage({ mode }: { mode: "login" | "signup" }) {
   const navigate = useNavigate();
@@ -45,63 +44,128 @@ export default function AuthPage({ mode }: { mode: "login" | "signup" }) {
   };
 
   return (
-    <div className="flex min-h-full items-center justify-center px-4 py-10">
-      <div className="w-full max-w-[380px]">
-        <div className="mb-6 flex items-center gap-2">
-          <span className="flex h-8 w-8 items-center justify-center rounded-[8px] bg-[var(--accent)] text-white">
-            <BookMarked size={16} />
-          </span>
-          <span className="text-[16px] font-semibold">StudySpace</span>
+    <div className="auth-screen">
+      <div className="auth-ambient" aria-hidden="true">
+        <div className="auth-blob auth-blob-1" />
+        <div className="auth-blob auth-blob-2" />
+        <div className="auth-blob auth-blob-3" />
+      </div>
+      <div className="auth-grid" aria-hidden="true" />
+
+      <div className="auth-card">
+        <div className="auth-brand">
+          <div className="auth-logo" aria-hidden="true">
+            <svg fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+              />
+            </svg>
+          </div>
+          <span className="auth-name">StudySpace</span>
         </div>
-        <h1 className="text-[24px] font-semibold tracking-tight">{isLogin ? "Sign in" : "Create account"}</h1>
-        <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          {isLogin ? "Your projects and sources are private to you." : "One account, unlimited study projects."}
-        </p>
-        <form onSubmit={(e) => void submit(e)} className="mt-5 grid gap-3">
+
+        <div className="auth-head">
+          <h1 className="auth-title">{isLogin ? "Sign in" : "Create account"}</h1>
+          <p className="auth-subtitle">
+            {isLogin ? "Your projects and sources are private to you." : "One account, unlimited study projects."}
+          </p>
+        </div>
+
+        <form onSubmit={(e) => void submit(e)}>
           {!isLogin && (
-            <Field label="Display name">
-              <TextInput autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Priya" autoComplete="name" />
-            </Field>
+            <div className="auth-group">
+              <div className="auth-label-row">
+                <label className="auth-label" htmlFor="auth-name">Display name</label>
+              </div>
+              <div className="auth-input-wrap">
+                <input
+                  id="auth-name"
+                  type="text"
+                  className="auth-input"
+                  placeholder="Priya"
+                  autoComplete="name"
+                  autoFocus
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+            </div>
           )}
-          <Field label="Email">
-            <TextInput autoFocus={isLogin} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" />
-          </Field>
-          <Field label="Password">
-            <div className="relative">
-              <TextInput
+
+          <div className="auth-group">
+            <div className="auth-label-row">
+              <label className="auth-label" htmlFor="auth-email">Email</label>
+            </div>
+            <div className="auth-input-wrap">
+              <input
+                id="auth-email"
+                type="email"
+                className="auth-input"
+                placeholder="you@example.com"
+                autoComplete="email"
+                autoFocus={isLogin}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
+            </div>
+          </div>
+
+          <div className="auth-group">
+            <div className="auth-label-row">
+              <label className="auth-label" htmlFor="auth-password">Password</label>
+              {isLogin && (
+                <button
+                  type="button"
+                  className="auth-forgot"
+                  onClick={() => push("Password reset is not enabled", { detail: "Contact your workspace admin.", tone: "info" })}
+                >
+                  Forgot?
+                </button>
+              )}
+            </div>
+            <div className="auth-input-wrap">
+              <input
+                id="auth-password"
                 type={showPassword ? "text" : "password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                className="auth-input auth-input-with-icon"
                 placeholder={isLogin ? "Your password" : "Min 8 characters"}
                 autoComplete={isLogin ? "current-password" : "new-password"}
-                className="w-full pr-10"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
               />
               <button
                 type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                className="auth-eye"
+                onClick={() => setShowPassword((v) => !v)}
                 aria-label={showPassword ? "Hide password" : "Show password"}
               >
                 {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
-          </Field>
+          </div>
+
           {error && (
-            <p role="alert" className="rounded-[7px] border border-[var(--danger)]/30 bg-[var(--danger-soft)] px-2.5 py-2 text-[13px] text-[var(--danger)]">
+            <p role="alert" className="auth-error" style={{ marginBottom: 18 }}>
               {error}
             </p>
           )}
-          <Button variant="primary" size="md" loading={busy} type="submit">
-            {isLogin ? "Sign in" : "Create account"}
-          </Button>
+
+          <button type="submit" className="auth-submit" disabled={busy}>
+            {busy ? (isLogin ? "Signing in…" : "Creating account…") : isLogin ? "Sign in" : "Create account"}
+          </button>
         </form>
-        <p className="mt-4 text-center text-[13px] text-[var(--text-secondary)]">
+
+        <div className="auth-footer">
           {isLogin ? (
-            <>No account? <Link to="/signup" className="text-[var(--accent)] underline underline-offset-2">Create one</Link></>
+            <>No account?<Link to="/signup" className="auth-footer-link">Create one</Link></>
           ) : (
-            <>Have an account? <Link to="/login" className="text-[var(--accent)] underline underline-offset-2">Sign in</Link></>
+            <>Have an account?<Link to="/login" className="auth-footer-link">Sign in</Link></>
           )}
-        </p>
+        </div>
       </div>
     </div>
   );

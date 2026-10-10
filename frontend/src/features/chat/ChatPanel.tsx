@@ -154,17 +154,39 @@ const ChatMessage = memo(function ChatMessage({ msg, sources, onOpenSource }: { 
   const linkedAnswer = msg.content.replace(/\[(\d{1,3})\]/g, "[$1](#cite-ref=$1)");
 
   return (
-    <div className="min-w-0">
+    <div className="group/msg min-w-0">
       {msg.grounded === false && (
         <p className="mb-2 inline-flex items-center gap-1.5 rounded-[7px] border border-[var(--warning)]/30 bg-[var(--warning-soft)] px-2.5 py-1 text-[13px] text-[var(--warning)]">
           <AlertTriangle size={13} /> Not in your sources — answered from general knowledge.
         </p>
       )}
       <MarkdownBody text={linkedAnswer} citations={msg.citations} sources={sources} onOpenCitation={onOpenSource} />
+      <MessageActions content={msg.content} />
       <CitationChips citations={msg.citations} sources={sources} onOpen={onOpenSource} />
     </div>
   );
 });
+
+function MessageActions({ content }: { content: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="mt-1.5 flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          navigator.clipboard.writeText(content).catch(() => undefined);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1500);
+        }}
+        aria-label="Copy response"
+        title="Copy response"
+        className="inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-xs text-[var(--text-muted)] opacity-0 transition-opacity group-hover/msg:opacity-100 hover:text-[var(--text-primary)] focus:opacity-100 focus-visible:opacity-100"
+      >
+        {copied ? <><Check size={13} /> Copied</> : <><Copy size={13} /> Copy response</>}
+      </button>
+    </div>
+  );
+}
 
 /* ---------------- chat panel ---------------- */
 
