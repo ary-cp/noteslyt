@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 export type ThemeMode = "dark" | "light" | "system";
 export type ResolvedTheme = "dark" | "light";
 
-const KEY = "studyspace:theme";
+const KEY = "noteslyt:theme";
 
 function resolve(mode: ThemeMode): ResolvedTheme {
   if (mode !== "system") return mode;

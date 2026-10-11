@@ -136,6 +136,22 @@ class ParsedContentOut(BaseModel):
     chars: int = 0
 
 
+class SourceSegmentOut(BaseModel):
+    """One timestamped chunk for the viewer's transcript rail.
+
+    Returned oldest-first by `GET /sources/{id}/segments`; the viewer
+    highlights the segment containing a cited timestamp and scrolls to it.
+    """
+
+    locator_kind: str = ""
+    locator_value: str = ""
+    heading: str = ""
+    text: str = ""
+    start_ts: float | None = None
+    end_ts: float | None = None
+    chunk_index: int = 0
+
+
 class TopicSummary(BaseModel):
     """A project-level topic plus where it is covered."""
 

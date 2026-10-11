@@ -45,7 +45,7 @@ from ..ingestion.registry import parse_source
 from ..repo.projects import ProjectRepo
 from ..repo.sources import SourceRepo
 from ..repo.topics import TopicRepo
-from ..schemas import ParsedContentOut, SourceOut, SourceUploadAccepted, TopicGraphOut, TopicSummary
+from ..schemas import ParsedContentOut, SourceOut, SourceSegmentOut, SourceUploadAccepted, TopicGraphOut, TopicSummary
 from ..storage import (
     FileStorage,
     content_type_for,
@@ -361,6 +361,25 @@ def get_source_content(
         truncated=bool(content.get("truncated")),
         chars=int(content.get("chars") or len(content["markdown"])),
     )
+
+
+@router.get("/sources/{source_id}/segments", response_model=list[SourceSegmentOut])
+def get_source_segments(
+    source_id: str,
+    user: CurrentUser,
+    sources: Annotated[SourceRepo, Depends(get_sources)],
+) -> list[SourceSegmentOut]:
+    """
+    Timestamped transcript segments for one source, oldest first.
+
+    The viewer uses these to highlight the segment containing a cited
+    timestamp and scroll to it (audio/video). Empty — not 404 — when the
+    source has no timed chunks yet. 404 for another learner's source id
+    (never 403) so ids are not enumerable.
+    """
+    if sources.get_owned(source_id, user.id) is None:
+        raise HTTPException(status_code=404, detail="Source not found.")
+    return [SourceSegmentOut(**row) for row in sources.list_segments(source_id, user.id)]
 
 
 # =============================================================================

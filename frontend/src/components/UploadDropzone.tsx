@@ -39,7 +39,7 @@ export function UploadDropzone({ uploading, error, onUpload }: Props) {
   return (
     <main className="flex h-screen items-center justify-center bg-surface px-6">
       <div className="w-full max-w-lg text-center">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-accent">Study Companion</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-accent">Noteslyt</p>
         <h1 className="mt-3 text-3xl font-semibold tracking-tight">Learn from your own slides.</h1>
         <p className="mt-2 text-[15px] text-ink-muted">
           Upload lecture PDFs. Ask anything — every answer cites the page. Then let the adaptive quiz find what you
