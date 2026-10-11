@@ -59,8 +59,6 @@ class Settings(BaseSettings):
     llm_model: str = "local-model"
     llm_temperature: float = 0.1       # low = faithful to the source material
     llm_max_tokens: int = 128000
-    # Audio embeddings/transcription do not imply that the chat model accepts audio.
-    llm_audio_input: bool = False
 
     # ------------------------------------------------------------ Embeddings
     # Any OpenAI-compatible /embeddings endpoint (LM Studio, OpenAI, a local

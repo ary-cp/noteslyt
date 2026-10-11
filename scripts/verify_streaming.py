@@ -64,15 +64,6 @@ def main():
         for token in ['A diagram ', '[1].']: on_chunk(token)
         return 'A diagram [1].'
     service.llm = NS(chat=reply)
-    # A selected video must not turn an image request into an unsupported audio request.
-    from unittest.mock import patch
-    mixed = [{"role": "user", "content": [{"type": "text", "text": "Lecture transcript"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,eA=="}}]}]
-    segment = NS(locator_kind="segment", source_id="video", start_ts=0, end_ts=10, locator_value="0:00")
-    with patch("app.ingestion.parsers_media.slice_audio_wav", side_effect=AssertionError("Audio must be opt-in")):
-        assert service._attach_retrieved_audio(mixed, [segment]) is mixed
-    assert mixed[0]["content"][1]["type"] == "image_url"
-    print("PASS: mixed image/video sources retain vision and transcript without unsupported audio")
-
     root = Path(__file__).resolve().parents[1]/'data'
     root.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(dir=root) as temp:

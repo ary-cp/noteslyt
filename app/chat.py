@@ -356,15 +356,9 @@ class ChatService:
 
         Each `segment` chunk's `[start_ts, end_ts]` is cut from the stored
         original and attached as an `input_audio` part, so the model hears the
-        exact cited timeframe when LLM_AUDIO_INPUT is enabled. Slice failures
-        retain transcript context; models without audio support use transcripts
-        by default.
+        exact cited timeframe. Failures degrade to text-only context — a turn
+        never 500s because an audio slice or a text-only chat model balked.
         """
-        # Transcripts are already in CONTEXT. Opt in separately for models
-        # supporting input_audio; image-capable models can still reject audio.
-        if not getattr(self.settings, "llm_audio_input", False):
-            return messages
-
         from .ingestion.parsers_media import slice_audio_wav
 
         audio_parts: list[dict] = []
