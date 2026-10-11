@@ -23,6 +23,7 @@ export function SourcesPanel({
   sources,
   chats,
   activeChatId,
+  openSourceId,
   selectedIds,
   query,
   debouncedQuery,
@@ -43,6 +44,7 @@ export function SourcesPanel({
   sources: SourceOut[];
   chats: ChatOut[];
   activeChatId: string | null;
+  openSourceId?: string;
   selectedIds: Set<string>;
   query: string;
   debouncedQuery: string;
@@ -227,17 +229,17 @@ export function SourcesPanel({
           <>
             {processing.length > 0 && (
               <SourceSection title="Processing" count={processing.length} hint="Chat remains available with ready sources.">
-                {processing.map((s) => <SourceRow key={s.id} source={s} selected={false} onToggle={() => undefined} onOpen={() => onOpenSource(s.id)} onRemove={() => onRemoveSource(s.id)} />)}
+                {processing.map((s) => <SourceRow key={s.id} source={s} opened={openSourceId === s.id} selected={false} onToggle={() => undefined} onOpen={() => onOpenSource(s.id)} onRemove={() => onRemoveSource(s.id)} />)}
               </SourceSection>
             )}
             {ready.length > 0 && (
               <SourceSection title="Sources" count={ready.length}>
-                {ready.map((s) => <SourceRow key={s.id} source={s} selected={selectedIds.has(s.id)} onToggle={() => onToggleSelect(s.id)} onOpen={() => onOpenSource(s.id)} onRemove={() => onRemoveSource(s.id)} />)}
+                {ready.map((s) => <SourceRow key={s.id} source={s} opened={openSourceId === s.id} selected={selectedIds.has(s.id)} onToggle={() => onToggleSelect(s.id)} onOpen={() => onOpenSource(s.id)} onRemove={() => onRemoveSource(s.id)} />)}
               </SourceSection>
             )}
             {failed.length > 0 && (
               <SourceSection title="Needs attention" count={failed.length}>
-                {failed.map((s) => <SourceRow key={s.id} source={s} selected={false} onToggle={() => undefined} onOpen={() => onOpenSource(s.id)} onRemove={() => onRemoveSource(s.id)} />)}
+                {failed.map((s) => <SourceRow key={s.id} source={s} opened={openSourceId === s.id} selected={false} onToggle={() => undefined} onOpen={() => onOpenSource(s.id)} onRemove={() => onRemoveSource(s.id)} />)}
               </SourceSection>
             )}
           </>
@@ -298,12 +300,14 @@ function SourceSection({ title, count, hint, children }: { title: string; count:
 
 function SourceRow({
   source,
+  opened,
   selected,
   onToggle,
   onOpen,
   onRemove,
 }: {
   source: SourceOut;
+  opened: boolean;
   selected: boolean;
   onToggle: () => void;
   onOpen: () => void;
@@ -312,7 +316,7 @@ function SourceRow({
   const busy = ["queued", "parsing", "embedding"].includes(source.status);
   return (
     <div
-      className="group mb-1 flex items-start gap-2.5 rounded-[8px] border border-transparent px-2.5 py-2 transition-colors hover:bg-[var(--surface-secondary)]"
+      className={`group mb-1 flex items-start gap-2.5 rounded-[8px] border px-2.5 py-2 transition-colors duration-150 ${opened ? "border-[var(--border-strong)] bg-[var(--surface-secondary)]" : "border-transparent hover:bg-[var(--surface-secondary)]"}`}
     >
       <button
         type="button"
@@ -327,7 +331,7 @@ function SourceRow({
       >
         {selected && <Check size={12} />}
       </button>
-      <button type="button" onClick={onOpen} className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 text-left">
+      <button type="button" onClick={onOpen} aria-current={opened ? "true" : undefined} className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 text-left">
         <span className="mt-0.5"><SourceTypeIcon type={source.source_type} /></span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] font-medium text-[var(--text-primary)]">{source.filename}</span>

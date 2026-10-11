@@ -36,6 +36,7 @@ import json
 import math
 import os
 import re
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # Embedding width must match the `vector(...)` column and EMBEDDING_DIM.
@@ -191,7 +192,9 @@ class Handler(BaseHTTPRequestHandler):
                                  "value": contexts[i % len(contexts)][3]}}
                     for i in range(n)
                 ] if contexts else []})
-            elif any(_has_image(m) for m in msgs):
+            elif any(_has_image(m) for m in msgs) and "STUDENT QUESTION:" in convo:
+                content = ("The uploaded image contains a study diagram. " + canonical_label(*found[0])) if found else REFUSAL
+            elif any(_has_image(m) for m in msgs) and "instructional designer" not in system:
                 content = ("The image shows a labeled study diagram. "
                            "Key parts: pressure gauge reading 101 kPa, a piston chamber, "
                            "and an entropy-temperature chart with two curves.")
@@ -348,6 +351,24 @@ class Handler(BaseHTTPRequestHandler):
                     quote = " ".join(text_lines)[:300].strip()
                     if quote:
                         content += f' As stated: "{quote}"'
+            if req.get("stream"):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                try:
+                    for token in re.findall(r"\S+\s*", content):
+                        event = {"id": "mock", "object": "chat.completion.chunk", "created": 0,
+                                 "model": req.get("model"), "choices": [{"index": 0, "delta": {"content": token}, "finish_reason": None}]}
+                        self.wfile.write(("data: " + json.dumps(event) + "\n\n").encode())
+                        self.wfile.flush()
+                        time.sleep(0.02)
+                    # Some providers append usage without a choices entry.
+                    self.wfile.write(b'data: {"id":"mock","object":"chat.completion.chunk","created":0,"model":"mock","choices":[]}\n\ndata: [DONE]\n\n')
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
             return self._json(200, {"id": "mock", "object": "chat.completion", "model": req.get("model"), "usage": {},
                                     "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": content}}]})
 

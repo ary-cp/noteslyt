@@ -88,20 +88,34 @@ class LLMClient:
                 stream=True,
             )
             parts: list[str] = []
-            for event in stream:
-                delta = event.choices[0].delta.content or ""
-                if delta:
-                    parts.append(delta)
-                    on_chunk(delta)
-            return strip_think("".join(parts))
+            try:
+                for event in stream:
+                    if getattr(event, "error", None):
+                        raise RuntimeError("The model provider interrupted the response. Please try again.")
+                    # Usage-only chunks are valid in OpenAI-compatible streams.
+                    if not event.choices:
+                        continue
+                    delta = event.choices[0].delta.content or ""
+                    if delta:
+                        parts.append(delta)
+                        on_chunk(delta)
+            finally:
+                stream.close()
+            answer = strip_think("".join(parts))
+            if not answer:
+                raise RuntimeError("The model returned no answer. It may have exhausted its output limit while reasoning; retry or check the model settings.")
+            return answer
         response = self._client.chat.completions.create(
             model=self.model,
             messages=messages,  # type: ignore[arg-type]
             temperature=self.temperature if temperature is None else temperature,
             max_tokens=max_tokens or self.max_tokens,
         )
-        content = response.choices[0].message.content or ""
-        return strip_think(content)
+        content = response.choices[0].message.content if response.choices else ""
+        answer = strip_think(content or "")
+        if not answer:
+            raise RuntimeError("The model returned no answer. Please retry or check the model settings.")
+        return answer
 
     def complete(self, system: str, user: str | list[dict], **kwargs) -> str:
         return self.chat(
