@@ -154,8 +154,12 @@ def _extract_wav_chunks(video: Path, workdir: Path) -> list[Path]:
     return sorted(workdir.glob("part-*.wav"))
 
 
-def group_segments(segments: list[Segment]) -> list[SourceUnit]:
-    """Merge whisper-fine segments into ~15-20 s `segment` units."""
+def group_segments(
+    segments: list[Segment],
+    target_s: float = _SEGMENT_TARGET_S,
+    target_chars: int = _SEGMENT_TARGET_CHARS,
+) -> list[SourceUnit]:
+    """Merge whisper-fine segments into ~`target_s`-second `segment` units."""
     spoken = [s for s in segments if s.text and s.text.strip()]
     if not spoken:
         raise ParserError("Transcription returned no speech — silent file, or the wrong language model?")
@@ -183,7 +187,7 @@ def group_segments(segments: list[Segment]) -> list[SourceUnit]:
         buf.append(seg)
         buf_chars += len(seg.text)
         span = seg.end - buf[0].start
-        if span >= _SEGMENT_TARGET_S or buf_chars >= _SEGMENT_TARGET_CHARS:
+        if span >= target_s or buf_chars >= target_chars:
             flush()
             buf_chars = 0
     flush()
@@ -223,7 +227,11 @@ def parse_video(path: Path, settings: Settings) -> ParsedSource:
                 s.start += offset
                 s.end += offset
             segments.extend(got)
-    units = group_segments(segments)
+    units = group_segments(
+        segments,
+        target_s=settings.video_segment_seconds,
+        target_chars=_SEGMENT_TARGET_CHARS,
+    )
     minutes = (units[-1].end_ts or 0.0) / 60.0
     warnings = [f"Transcribed {minutes:.1f} min of video audio into {len(units)} segments."]
     return ParsedSource(units=units, parser="whisper-video", warnings=warnings)

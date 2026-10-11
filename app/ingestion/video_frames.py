@@ -51,13 +51,13 @@ def extract_frame(video: Path, at_s: float, width: int) -> bytes:
     return proc.stdout
 
 
-def slice_clip(video: Path, start_s: float, duration_s: float, width: int = 480) -> bytes:
+def slice_clip(video: Path, start_s: float, duration_s: float, width: int = 720) -> bytes:
     """Cut `duration_s` seconds of video from `start_s` (mp4 bytes, fast seek).
 
-    Stream copy keeps it quick; frames are scaled to `width` px (aspect kept)
-    because embedding tokens scale with frame size (~80 tokens/frame at
-    480 px). MP4 needs a seekable output, so this goes through a temp file
-    rather than a pipe. Raises with a readable reason on failure.
+    Frames wider than `width` px are downscaled (aspect kept); narrower input
+    passes through untouched, so low-res originals are never upscaled into
+    fake tokens. MP4 needs a seekable output, so this goes through a temp
+    file rather than a pipe. Raises with a readable reason on failure.
     """
     exe = _ffmpeg()
     if duration_s <= 0:
@@ -70,7 +70,7 @@ def slice_clip(video: Path, start_s: float, duration_s: float, width: int = 480)
             subprocess.run(
                 [exe, "-y", "-v", "error", "-ss", f"{max(start_s, 0.0):.2f}",
                  "-i", str(video), "-t", f"{duration_s:.2f}",
-                 "-vf", f"scale={max(width, 160)}:-1",
+                 "-vf", f"scale='min({max(width, 160)},iw)':-2",
                  "-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac",
                  str(tmp.name)],
                 check=True, timeout=180, capture_output=True,
