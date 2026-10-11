@@ -1,1 +1,1 @@
-"""Study Companion package."""
+"""NotesLyt package."""

@@ -12,7 +12,7 @@ export function AppHeader({ onSearch, onSettings }: { onSearch: () => void; onSe
 
   return (
     <header className="flex h-[52px] shrink-0 items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--sidebar-bg)] px-4">
-      <Link to="/" className="flex min-w-0 items-center" aria-label="Noteslyt home">
+      <Link to="/" className="flex min-w-0 items-center" aria-label="NotesLyt home">
         <Brand markSize={28} fontSize={16} />
       </Link>
       <div className="flex items-center gap-1">

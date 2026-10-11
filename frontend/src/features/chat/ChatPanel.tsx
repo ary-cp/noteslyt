@@ -11,7 +11,6 @@ import type { ChatCitation, ChatMessageOut, CitationLocator, SourceOut } from ".
 import { useToast } from "../../lib/toast";
 import { ErrorState } from "../../components/ui/Feedback";
 import { Dropdown } from "../../components/ui/Menu";
-import { SourceTypeIcon } from "../../lib/sourceKind";
 import { citationLabel } from "../../lib/utils";
 
 const MermaidBlock = lazy(() => import("./MermaidBlock"));
@@ -367,28 +366,10 @@ export function ChatPanel({
               <span className="ml-1 text-[13px]">
                 {selectedSources.length > 0 ? `Reading ${selectedSources.length} source${selectedSources.length > 1 ? "s" : ""}…` : "Thinking…"}
               </span>
-              <button type="button" onClick={() => { abortRef.current = true; setSending(false); }} className="ml-2 inline-flex cursor-pointer items-center gap-1 rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--surface-secondary)]">
-                <Square size={11} /> Stop
-              </button>
             </div>
           )}
         </div>
       </div>
-
-      {/* selected sources strip */}
-      {selectedSources.length > 0 && (
-        <div className="shrink-0 border-t border-[var(--border)] px-4 py-1.5">
-          <div className="mx-auto flex max-w-[760px] items-center gap-1.5 overflow-x-auto">
-            {selectedSources.slice(0, 6).map((s) => (
-              <span key={s.id} className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface)] px-2 py-0.5 text-xs text-[var(--text-secondary)]">
-                <SourceTypeIcon type={s.source_type} size={12} />
-                <span className="max-w-[140px] truncate">{s.filename}</span>
-              </span>
-            ))}
-            {selectedSources.length > 6 && <span className="text-xs text-[var(--text-muted)]">+{selectedSources.length - 6}</span>}
-          </div>
-        </div>
-      )}
 
       {/* input */}
       <div className="shrink-0 px-4 pt-2 pb-4">
@@ -423,15 +404,27 @@ export function ChatPanel({
               />
             </label>
             <span className="ml-auto hidden text-xs text-[var(--text-muted)] sm:block">Shift+Enter for a new line</span>
-            <button
-              type="button"
-              onClick={() => void send(draft)}
-              disabled={!draft.trim() || sending}
-              aria-label="Send message"
-              className="ml-auto inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-[7px] bg-[var(--accent)] text-white transition-opacity hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-40 sm:ml-0"
-            >
-              <Send size={15} />
-            </button>
+            {sending ? (
+              <button
+                type="button"
+                onClick={() => { abortRef.current = true; setSending(false); }}
+                aria-label="Stop generating"
+                title="Stop generating"
+                className="ml-auto inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-[7px] bg-[var(--accent)] text-white transition-opacity hover:bg-[var(--accent-hover)] sm:ml-0"
+              >
+                <Square size={15} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void send(draft)}
+                disabled={!draft.trim()}
+                aria-label="Send message"
+                className="ml-auto inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-[7px] bg-[var(--accent)] text-white transition-opacity hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-40 sm:ml-0"
+              >
+                <Send size={15} />
+              </button>
+            )}
           </div>
         </div>
       </div>

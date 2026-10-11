@@ -1,5 +1,5 @@
 [project]
-name = "study-companion"
+name = "noteslyt"
 version = "0.1.0"
 description = "Source-cited RAG tutor + adaptive assessment over your own lecture PDFs."
 readme = "README.md"
@@ -24,4 +24,5 @@ dependencies = [
     "python-pptx>=1.0.2",
     "openpyxl>=3.1.5",
     "pillow>=12.3.0",
+    "pymupdf>=1.28.2",
 ]

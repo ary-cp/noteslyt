@@ -51,6 +51,43 @@ def extract_frame(video: Path, at_s: float, width: int) -> bytes:
     return proc.stdout
 
 
+def slice_clip(video: Path, start_s: float, duration_s: float, width: int = 480) -> bytes:
+    """Cut `duration_s` seconds of video from `start_s` (mp4 bytes, fast seek).
+
+    Stream copy keeps it quick; frames are scaled to `width` px (aspect kept)
+    because embedding tokens scale with frame size (~80 tokens/frame at
+    480 px). MP4 needs a seekable output, so this goes through a temp file
+    rather than a pipe. Raises with a readable reason on failure.
+    """
+    exe = _ffmpeg()
+    if duration_s <= 0:
+        raise RuntimeError(f"Cannot cut a {duration_s}s clip.")
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    tmp.close()
+    try:
+        try:
+            subprocess.run(
+                [exe, "-y", "-v", "error", "-ss", f"{max(start_s, 0.0):.2f}",
+                 "-i", str(video), "-t", f"{duration_s:.2f}",
+                 "-vf", f"scale={max(width, 160)}:-1",
+                 "-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac",
+                 str(tmp.name)],
+                check=True, timeout=180, capture_output=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            tail = (exc.stderr or b"").decode(errors="replace")[-300:]
+            raise RuntimeError(f"Clip cut failed at {start_s:.1f}s: {tail or exc}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"Clip cut timed out at {start_s:.1f}s.") from exc
+        data = Path(tmp.name).read_bytes()
+    finally:
+        Path(tmp.name).unlink(missing_ok=True)
+    if not data or b"ftyp" not in data[:32]:
+        raise RuntimeError(f"Clip at {start_s:.1f}s came back empty.")
+    return data
+
+
 def ahash(jpeg: bytes) -> int:
     """64-bit average hash for near-duplicate detection (static slides)."""
     try:

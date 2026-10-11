@@ -471,16 +471,27 @@ class QuizService:
     def _image_parts(self, project_id, chunks):
         parts, seen = [], set()
         storage = FileStorage(self.settings.uploads_dir)
+        from .storage import read_image_chunk_bytes
         for chunk in chunks:
-            if chunk.locator_kind != "image" or chunk.source_id in seen:
+            if chunk.locator_kind != "image":
                 continue
-            seen.add(chunk.source_id)
+            key = f"{chunk.source_id}:{chunk.locator_value}"
+            if key in seen:
+                continue
+            seen.add(key)
             source = self.sources.get(chunk.source_id)
-            path = storage.open_for_read(project_id, source.id, source.filename) if source else None
-            if path is None:
+            if source is None:
+                continue
+            found = read_image_chunk_bytes(
+                storage, project_id, source, chunk.locator_kind, chunk.locator_value
+            )
+            if found is None:
+                if getattr(source, "source_type", "") in ("pdf", "pptx"):
+                    log.warning("Quiz image %s has no page render; skipped.", key)
+                    continue
                 raise QuizError("An original image is missing. Upload it again before generating a quiz.")
-            mime = content_type_for(source.filename).split(";")[0]
-            url = f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+            data, mime = found
+            url = f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
             parts.extend([{"type": "text", "text": f"SOURCE {source.id} LOCATOR {chunk.locator_kind}:{chunk.locator_value}"},
                           {"type": "image_url", "image_url": {"url": url}}])
         return parts

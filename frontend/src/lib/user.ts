@@ -6,7 +6,7 @@
  * nothing else changes.
  */
 
-const KEY = "study-companion:user-id";
+const KEY = "noteslyt:user-id";
 
 export function getUserId(): string {
   try {

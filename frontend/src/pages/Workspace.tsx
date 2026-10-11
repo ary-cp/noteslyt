@@ -371,13 +371,13 @@ export default function Workspace({
       <div className="flex h-[58px] shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--sidebar-bg)] px-3">
         <Link
           to="/"
-          aria-label="Noteslyt home — back to projects"
+          aria-label="NotesLyt home — back to projects"
           title="Back to projects"
           className="shrink-0 rounded-[7px] hover:opacity-90"
         >
           <img
             src={resolved === "dark" ? BRAND_LOCKUP_DARK_SRC : BRAND_LOCKUP_LIGHT_SRC}
-            alt="Noteslyt"
+            alt="NotesLyt"
             draggable={false}
             style={{ height: 50, width: "auto", display: "block", borderRadius: 6 }}
           />

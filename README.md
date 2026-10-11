@@ -1,4 +1,4 @@
-# Study Companion — source-cited AI tutor + adaptive assessment
+# NotesLyt — source-cited AI tutor + adaptive assessment
 
 > **Track D · Personalized Tutoring & Adaptive Learning**
 > A learner creates **projects** ("books"), each with its own corpus of sources —
@@ -22,6 +22,10 @@ segments with the vision model (`VIDEO_*` in `.env`) — slide and diagram
 content becomes searchable, cited `[Visual M:SS]` text on the same timestamp;
 a text-only chat model degrades to transcript-only with a warning. Segment
 citations carry their end time, so the viewer replays the cited clip range.
+Every PDF page is additionally rendered to PNG and embedded as an
+`[Image N]` chunk next to the text chunks, so charts and diagrams stay
+retrievable even where the text parse loses them (`PDF_PAGE_IMAGES=false`
+disables it; slides need LibreOffice).
 
 The dashboard lives at `/`; `/projects` is the authenticated JSON API. The
 `/console` route is a developer harness. Studio summaries, guides and mind maps
@@ -34,7 +38,7 @@ smaller valid set when material cannot support the requested count.
 ## Layout
 
 ```
-study-companion/
+noteslyt/
 ├── app/
 │   ├── main.py                composition root: builds services, mounts routers
 │   ├── config.py              .env → typed Settings (DB / providers / storage / RAG / BKT / auth)
@@ -87,7 +91,7 @@ study-companion/
 You need Postgres with the **pgvector** extension available. Easiest path is Docker:
 
 ```powershell
-docker run -d --name study-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=StudyCompanion `
+docker run -d --name noteslyt-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=StudyCompanion `
   -p 5432:5432 pgvector/pgvector:pg17
 ```
 
@@ -223,7 +227,9 @@ uv run uvicorn app.main:app --port 8000
 2. **The chunker never crosses a page boundary.** Every chunk is stored in pgvector with `page` metadata that is exact by construction.
 3. **Context is labelled** `[Page N]` per excerpt; the system prompt allows citing *only* those labels.
 4. **Citation audit** after generation: any `[Page N]` not in the retrieved set is stripped (a model cannot cite what it did not see); an answer with zero valid citations triggers one corrective retry.
-5. **Frontend bridge**: `[Page N]` → `[Page N](#page=N)` → rendered as a chip → `onCite(N)` → `PdfViewer` scrolls to page N and flashes it.
+5. **Frontend bridge**: `[Page N]` renders as a chip with a `filename · label`
+   tooltip → clicking opens the source in the sidebar reader, scrolled to the
+   cited lines (highlighted) or at least the cited page marker.
 
 ### Strict refusal
 - **Retrieval gate**: if the best chunk's cosine distance exceeds `MAX_DISTANCE`, the API returns the refusal sentence *without* calling the LLM.
@@ -290,10 +296,21 @@ checks, so treat absolute numbers as smoke signals — the gates are the claim.
 
 ## Demo flow
 1. Create a project and upload a lecture PDF → "Parsing → chunking → embedding → mapping topics" → split screen appears.
-2. Click a starter prompt → answer appears with `Page N` chips → click one → right pane glides to the slide.
+2. Click a starter prompt → answer appears with numbered citation chips → click one → the source opens in the sidebar reader, scrolled to the cited lines.
 3. Ask something off-topic ("Who won the 2018 World Cup?") → *"I can't find this in your uploaded material."*
 4. Switch to **Quiz** → "Start adaptive quiz" → answer → mastery bar moves → "See Page N" → re-read the slide → next set targets a different weak topic.
 5. Provider changes in `.env` take effect after restarting the API.
+
+## Branding
+
+The product name is **NotesLyt** — "Notes" in the theme text color, "lyt" in
+emerald. Logo assets live in `frontend/public/` (`00-mark.svg` through
+`10-variant-*.svg`, served as static files; the folder must stay lowercase
+`public/` for Vite) and `favicon.svg` derives from `04-app-icon-green.svg`.
+The shared lockup is `frontend/src/components/Brand.tsx` (theme-aware mark +
+wordmark); login, the app header and the workspace all use it. The live
+Postgres database keeps its `StudyCompanion` name — renaming it would orphan
+existing data, so only product-facing names changed.
 
 ## Troubleshooting
 - **LM Studio `/embeddings` 404** → load an embedding model (e.g. *nomic-embed-text*) in LM Studio, or point `EMBEDDING_BASE_URL` at an OpenAI-compatible embedding server.
@@ -310,7 +327,8 @@ unseen examples. Studio renders LaTeX in questions, options, explanations and ca
 The learning profile shows overall mastery as a single percentage; the
 post-quiz assessment report is the one place weak topics are named, with
 likely misconceptions and what to study next. Citation chips open the source
-viewer jumped to the exact page or media timestamp. Mind maps render a topics
+in the sidebar reader with the cited lines highlighted (page marker fallback
+guarantees landing on the cited page). Mind maps render a topics
 star or, when prerequisite links exist, a dependency flow built from the
 project's topic graph. Studio also offers slide decks and a heuristic study
 schedule (weakest-first, expanding revisits) alongside summaries and guides.

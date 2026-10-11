@@ -1,7 +1,7 @@
 import { useTheme } from "../lib/theme";
 
 /**
- * Noteslyt brand lockup.
+ * NotesLyt brand lockup.
  *
  * Mark (theme-aware): `02-app-icon-black.svg` on dark surfaces,
  * `03-app-icon-white.svg` on light surfaces. Pass `src` to pin a specific
@@ -33,7 +33,7 @@ export const BRAND_LOCKUP_LIGHT_SRC = "/07-logo-light-bg.svg?v=2";
 export function BrandMark({
   size = 28,
   rounded,
-  alt = "Noteslyt",
+  alt = "NotesLyt",
   src,
   srcDark = BRAND_MARK_DARK_SRC,
   srcLight = BRAND_MARK_LIGHT_SRC,

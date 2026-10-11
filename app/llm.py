@@ -19,11 +19,12 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import math
 import re
 from typing import Any, Callable, Protocol, TypeVar
 
 import httpx
-from openai import BadRequestError, OpenAI
+from openai import BadRequestError, InternalServerError, OpenAI
 from pydantic import BaseModel
 
 from .config import Settings
@@ -193,26 +194,74 @@ class Embedder(Protocol):
 
     def embed_audio(self, audio: bytes, mime: str) -> list[float]: ...
 
+    def embed_video(self, video: bytes, mime: str) -> list[float]: ...
+
 
 class OpenAICompatibleEmbedder:
     """Calls an OpenAI-style /embeddings endpoint (OpenAI, LM Studio, vLLM, ...)."""
 
-    def __init__(self, base_url: str, api_key: str, model: str, batch_size: int = 64):
+    def __init__(self, base_url: str, api_key: str, model: str, batch_size: int = 64,
+                 max_input_chars: int = 1500):
         self._client = OpenAI(base_url=base_url, api_key=api_key)
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.batch_size = batch_size
+        self.max_input_chars = max_input_chars
         self.name = f"openai-compatible:{model}"
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        vectors: list[list[float]] = []
-        for i in range(0, len(texts), self.batch_size):
-            batch = [t if t.strip() else " " for t in texts[i : i + self.batch_size]]
-            response = self._client.embeddings.create(model=self.model, input=batch)
+        # Expand over-long inputs into sub-pieces first: endpoints reject a
+        # single input past their token/batch ceiling (llama-server 500s past
+        # its physical batch), which would otherwise fail the whole batch.
+        expanded: list[str] = []
+        owner: list[int] = []
+        for i, t in enumerate(texts):
+            parts = _split_long(t, self.max_input_chars) if len(t) > self.max_input_chars else [t]
+            for p in parts:
+                owner.append(i)
+                expanded.append(p)
+        piece_vecs: list[list[float]] = []
+        for i in range(0, len(expanded), self.batch_size):
+            batch = [t if t.strip() else " " for t in expanded[i : i + self.batch_size]]
+            try:
+                response = self._client.embeddings.create(model=self.model, input=batch)
+            except (BadRequestError, InternalServerError) as exc:
+                if not _is_too_large_error(exc):
+                    raise
+                # Even a pre-split piece can overflow a tiny server batch
+                # (dense scripts pack more tokens per character): halve each
+                # piece recursively and mean-pool instead of failing the batch.
+                for t in batch:
+                    piece_vecs.append(self._embed_small(t, depth=0))
+                continue
             # The API may return items out of order; sort by index to be safe.
-            vectors.extend(item.embedding for item in sorted(response.data, key=lambda d: d.index))
-        return vectors
+            piece_vecs.extend(item.embedding for item in sorted(response.data, key=lambda d: d.index))
+        grouped: dict[int, list[list[float]]] = {}
+        for o, v in zip(owner, piece_vecs):
+            grouped.setdefault(o, []).append(v)
+        return [_mean_pool(grouped[i]) for i in range(len(texts))]
+
+    def _embed_small(self, text: str, depth: int) -> list[float]:
+        """Embed one piece, halving past endpoint length limits (then pooling)."""
+        if depth > 6 or len(text) <= 64:
+            # Small enough to blame the endpoint, not the input: let it raise.
+            response = self._client.embeddings.create(
+                model=self.model, input=[text if text.strip() else " "]
+            )
+            return list(response.data[0].embedding)
+        mid = len(text) // 2
+        # Split near the middle on a sentence/line boundary when possible.
+        cut = -1
+        for m in re.finditer(r"\n+|(?<=[.!?।])\s+", text):
+            if m.start() <= mid:
+                cut = m.end()
+            else:
+                break
+        cut = cut if cut > 0 else mid
+        halves = [text[:cut], text[cut:]]
+        nonblank = [h for h in halves if h.strip()] or [" "]
+        return _mean_pool([self._embed_small(h, depth + 1) for h in nonblank])
 
     def _post_media(self, content: list[dict], timeout: float, what: str) -> list[float]:
         """POST one multimodal embedding request in llama.cpp's nested shape.
@@ -259,6 +308,82 @@ class OpenAICompatibleEmbedder:
             180.0,
             "audio",
         )
+
+    def embed_video(self, video: bytes, mime: str) -> list[float]:
+        """Send one video clip for encoding into the shared space.
+
+        Verified live on embeddinggemma-2 + mmproj under llama-server (2 s
+        clip: 768-d, determinism 1.0, cross-modal 0.62 with its description).
+        Token cost is steep (~500 tokens/s at 640 px), so only short clips fit
+        the server batch — longer inputs 500 and the caller falls back.
+        """
+        fmt = mime.split("/")[-1].lower() or "mp4"
+        data_b64 = base64.b64encode(video).decode("ascii")
+        return self._post_media(
+            [{"type": "input_video", "input_video": {"data": data_b64, "format": fmt}}],
+            300.0,
+            "video",
+        )
+
+def _split_long(text: str, budget: int) -> list[str]:
+    """Split over-long input on paragraph/sentence boundaries (≤ budget chars).
+
+    Falls back to hard cuts for runs without boundaries (dense tables, URLs).
+    Devanagari danda counts as a sentence end for Hindi-heavy chunks.
+    """
+    if len(text) <= budget:
+        return [text]
+    pieces: list[str] = []
+    current = ""
+    for part in re.split(r"(\n+|(?<=[.!?।])\s+)", text):
+        if not part:
+            continue
+        if not current.strip() or len(current) + len(part) <= budget:
+            current += part
+        else:
+            pieces.append(current)
+            current = part
+    if current:
+        pieces.append(current)
+    out: list[str] = []
+    for p in pieces:
+        while len(p) > budget:
+            out.append(p[:budget])
+            p = p[budget:]
+        if p.strip():
+            out.append(p)
+    return out or [text[:budget]]
+
+
+def _is_too_large_error(exc: Exception) -> bool:
+    """True when the endpoint refused an input for length (not auth/quota)."""
+    detail = str(exc).lower()
+    code = str(getattr(exc, "code", "") or "").lower()
+    return (
+        "too large" in detail
+        or "context_length_exceeded" in code
+        or "max_tokens" in detail
+        or ("batch" in detail and ("large" in detail or "size" in detail or "exceed" in detail))
+    )
+
+
+def _mean_pool(vecs: list[list[float]]) -> list[float]:
+    """Average sub-piece vectors into one L2-normalized vector per input."""
+    if len(vecs) == 1:
+        return [float(x) for x in vecs[0]]
+    dim = len(vecs[0])
+    avg = [0.0] * dim
+    for v in vecs:
+        if len(v) != dim:
+            raise ValueError(f"Cannot pool vectors of mixed widths {[len(x) for x in vecs]}.")
+        for j, x in enumerate(v):
+            avg[j] += x
+    n = len(vecs)
+    avg = [x / n for x in avg]
+    norm = math.sqrt(sum(x * x for x in avg))
+    if norm > 0:
+        avg = [x / norm for x in avg]
+    return avg
 
 
 def verify_native_support(embedder: Embedder) -> None:
@@ -337,7 +462,8 @@ def build_embedder(settings: Settings) -> Embedder:
         from .llama_embed import ManagedEmbedder, get_embedding_manager
 
         return ManagedEmbedder(get_embedding_manager(), settings.embedding_model,
-                               settings.embedding_batch_size)
+                               settings.embedding_batch_size, settings.embedding_max_input_chars)
     base_url = settings.resolved_embedding_base_url
     api_key = settings.resolved_embedding_api_key
-    return OpenAICompatibleEmbedder(base_url, api_key, settings.embedding_model, settings.embedding_batch_size)
+    return OpenAICompatibleEmbedder(base_url, api_key, settings.embedding_model,
+                                    settings.embedding_batch_size, settings.embedding_max_input_chars)

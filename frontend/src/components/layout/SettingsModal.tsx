@@ -51,8 +51,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     getProfileLevels().then(setLevels).catch(() => undefined);
     refreshEngine();
     try {
-      setAutoIndex(localStorage.getItem("studyspace:autoindex") !== "off");
-      setDefaultModel(localStorage.getItem("studyspace:model") ?? "default");
+      setAutoIndex(localStorage.getItem("noteslyt:autoindex") !== "off");
+      setDefaultModel(localStorage.getItem("noteslyt:model") ?? "default");
     } catch {
       /* ignore */
     }
@@ -97,7 +97,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               onChange={(v) => {
                 setDefaultModel(v);
                 try {
-                  localStorage.setItem("studyspace:model", v);
+                  localStorage.setItem("noteslyt:model", v);
                 } catch {
                   /* ignore */
                 }
@@ -120,7 +120,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <Toggle checked={autoIndex} onChange={(v) => {
               setAutoIndex(v);
               try {
-                localStorage.setItem("studyspace:autoindex", v ? "on" : "off");
+                localStorage.setItem("noteslyt:autoindex", v ? "on" : "off");
               } catch {
                 /* ignore */
               }
