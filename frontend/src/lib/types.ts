@@ -183,6 +183,17 @@ export interface ParsedContent {
   chars: number;
 }
 
+/** `GET /sources/{id}/segments` — timestamped transcript chunks, oldest first. */
+export interface SourceSegment {
+  locator_kind: string;
+  locator_value: string;
+  heading: string;
+  text: string;
+  start_ts: number | null;
+  end_ts: number | null;
+  chunk_index: number;
+}
+
 /** URL the browser streams an uploaded original from. */
 export function sourceFileUrl(id: string): string {
   return `${API_BASE}/sources/${id}/file`;
@@ -224,7 +235,8 @@ export interface ChatMessageOut {
 
 /** UI-only viewer target: a source plus the cited locator to jump to.
  * `nonce` bumps on every open so re-clicking the same citation re-seeks.
- * For segments, `end` bounds playback to the cited clip [start, end]. */
+ * For segments, `end` bounds playback to the cited clip [start, end].
+ * `snippet` is the cited chunk text, used to highlight the exact lines. */
 export interface ViewerTarget {
   sourceId: string;
   kind?: string;

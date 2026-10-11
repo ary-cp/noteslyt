@@ -2,6 +2,7 @@ import { Suspense, lazy, memo, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import rehypeRaw from "rehype-raw";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { AlertTriangle, Check, Copy, FileText, Maximize2, RefreshCw, Send, Square } from "lucide-react";
@@ -59,7 +60,7 @@ export const MarkdownBody = memo(function MarkdownBody({
     <div className="md">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        rehypePlugins={[rehypeRaw, rehypeKatex]}
         components={{
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           code(props: any) {
@@ -116,31 +117,6 @@ export const MarkdownBody = memo(function MarkdownBody({
 
 /* ---------------- message ---------------- */
 
-function CitationChips({ citations, sources, onOpen }: { citations: ChatCitation[]; sources: SourceOut[]; onOpen: (sourceId: string | null, locator?: CitationLocator) => void }) {
-  if (!citations.length) return null;
-  return (
-    <div className="mt-3 border-t border-[var(--border)] pt-2.5">
-      <p className="mb-1.5 text-xs font-medium text-[var(--text-muted)]">Sources</p>
-      <div className="grid gap-1">
-        {citations.map((c, i) => (
-          <button
-            key={`${c.source_id}-${i}`}
-            type="button"
-            title={c.snippet || "Open cited passage"}
-            onClick={() => onOpen(c.source_id, { kind: c.locator_kind, value: c.locator_value, end: c.end_ts, snippet: c.snippet })}
-            className="flex cursor-pointer items-center gap-2 rounded-[7px] border border-[var(--border)] bg-[var(--surface-secondary)] px-2.5 py-[7px] text-left text-[13px] transition-colors hover:border-[var(--border-strong)]"
-          >
-            <span className="shrink-0 font-mono text-[12px] font-semibold text-[var(--accent)]">[^{i + 1}]</span>
-            <span className="min-w-0 flex-1 truncate">
-              {sources.find((source) => source.id === c.source_id)?.filename ?? c.heading ?? "Source"}
-              <span className="text-[var(--text-muted)]"> · {citationLabel(c.locator_kind, c.locator_value)}</span>
-            </span>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 const ChatMessage = memo(function ChatMessage({ msg, sources, onOpenSource }: { msg: ChatMessageOut; sources: SourceOut[]; onOpenSource: (id: string | null, locator?: CitationLocator) => void }) {
   if (msg.role === "user") {
@@ -163,7 +139,6 @@ const ChatMessage = memo(function ChatMessage({ msg, sources, onOpenSource }: { 
       )}
       <MarkdownBody text={linkedAnswer} citations={msg.citations} sources={sources} onOpenCitation={onOpenSource} />
       <MessageActions content={msg.content} />
-      <CitationChips citations={msg.citations} sources={sources} onOpen={onOpenSource} />
     </div>
   );
 });

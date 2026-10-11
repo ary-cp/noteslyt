@@ -31,6 +31,7 @@ import type {
   QuizResponse,
   SendMessageResponse,
   SourceOut,
+  SourceSegment,
   SourceUploadAccepted,
   StudioJob,
   TokenResponse,
@@ -219,6 +220,10 @@ export const getSource = (id: string): Promise<SourceOut> => request(`/sources/$
 
 export const getSourceContent = (id: string): Promise<ParsedContent> =>
   request(`/sources/${id}/content`);
+
+/** Timestamped transcript segments for audio/video, oldest first. */
+export const listSourceSegments = (id: string): Promise<SourceSegment[]> =>
+  request(`/sources/${id}/segments`);
 
 export const deleteSource = async (id: string): Promise<void> => {
   await request(`/sources/${id}`, { method: "DELETE" });

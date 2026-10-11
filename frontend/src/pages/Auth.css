@@ -109,32 +109,26 @@
 .auth-brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 
-.auth-logo {
-  width: 32px;
-  height: 32px;
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(5, 150, 105, 0.3));
-  border: 1px solid rgba(16, 185, 129, 0.4);
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.auth-logo-img {
+  width: 52px;
+  height: 52px;
+  border-radius: 13px;
+  flex-shrink: 0;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
+}
+
+.auth-name-accent {
   color: var(--auth-accent);
-  box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
-}
-
-.auth-logo svg {
-  width: 18px;
-  height: 18px;
 }
 
 .auth-name {
-  font-size: 1.05rem;
-  font-weight: 600;
+  font-size: 1.65rem;
+  font-weight: 700;
   color: #fff;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
 }
 
 .auth-head { margin-bottom: 4px; }

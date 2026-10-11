@@ -1871,7 +1871,7 @@ export function TestConsole() {
       <header className="border-b border-line bg-surface px-5 py-3">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-2">
           <div>
-            <h1 className="text-sm font-semibold">Study Companion — backend test bench</h1>
+            <h1 className="text-sm font-semibold">Noteslyt — backend test bench</h1>
             <p className="text-[11px] text-ink-muted">
               manual harness for the finished API (auth · projects · ingestion · tenancy) · not the product UI ·{" "}
               <span className="font-mono">{API_BASE}</span>

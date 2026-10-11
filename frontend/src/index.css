@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* ============================================================
-   StudySpace — theme tokens. ONE restrained accent, no gradients.
+   Noteslyt — theme tokens. ONE restrained accent, no gradients.
    Dark is default. Light overrides via [data-theme="light"].
    ============================================================ */
 
@@ -293,6 +293,30 @@ button, input, textarea, select { font-family: inherit; }
   100% { box-shadow: 0 0 0 3px transparent; }
 }
 .page-flash { animation: page-flash 1.6s ease-out forwards; }
+
+/* Cited-text highlight inside the pdf.js text layer. */
+.pdf-cite-mark {
+  background: rgba(16, 185, 129, 0.38);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.65);
+}
+[data-theme="light"] .pdf-cite-mark { background: rgba(16, 185, 129, 0.32); }
+
+/* Cited-lines highlight inside parsed markdown — pulses once, then stays. */
+@keyframes md-cite-flash {
+  0% { background: rgba(16, 185, 129, 0.75); }
+  100% { background: rgba(16, 185, 129, 0.32); }
+}
+.md-cite-mark {
+  background: rgba(16, 185, 129, 0.32);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.55);
+  animation: md-cite-flash 1.6s ease-out;
+}
 
 /* ---------- flashcard 3d flip ---------- */
 .flip-inner { transform-style: preserve-3d; transition: transform 220ms ease; }

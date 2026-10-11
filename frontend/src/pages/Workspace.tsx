@@ -2,15 +2,11 @@ import type * as React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
-  ArrowLeft,
-  BookMarked,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Moon,
   Search,
   Settings as SettingsIcon,
-  Sun,
 } from "lucide-react";
 import {
   createChat,
@@ -28,12 +24,13 @@ import { useToast } from "../lib/toast";
 import { useTheme } from "../lib/theme";
 import { useDebounced, useMediaQuery } from "../lib/utils";
 import { IconButton } from "../components/ui/Button";
+import { BRAND_LOCKUP_DARK_SRC, BRAND_LOCKUP_LIGHT_SRC } from "../components/Brand";
 import { ContextMenu, Popover, type CtxItem } from "../components/ui/Menu";
 import { Modal } from "../components/ui/Modal";
 import { SourcesPanel } from "../features/sources/SourcesPanel";
 import { ChatPanel } from "../features/chat/ChatPanel";
 import { StudioPanel } from "../features/studio/StudioPanel";
-import { SourceViewerDrawer } from "../features/viewer/SourceViewerDrawer";
+import { SourceReader } from "../features/viewer/SourceReader";
 import { CommandPalette } from "../components/layout/CommandPalette";
 import { SettingsModal } from "../components/layout/SettingsModal";
 
@@ -46,6 +43,18 @@ export interface WorkspaceCtx {
   refreshSources: () => Promise<void>;
   refreshChats: () => Promise<void>;
 }
+
+/**
+ * Handoff for the sidebar reader across the Workspace remount.
+ *
+ * Opening a source navigates to /project/:id/source/:sid, and App remounts
+ * Workspace on that URL change (route key) — discarding the in-flight
+ * setReader state, including the citation locator. openSource therefore
+ * stashes the full target here; the fresh instance picks it up in its
+ * useState initializer. Guarded by project+source so a stale entry can
+ * never open the wrong document; cleared on closeReader.
+ */
+let pendingReader: { projectId: string; target: ViewerTarget } | null = null;
 
 export default function Workspace({
   initialChatId,
@@ -77,10 +86,26 @@ export default function Workspace({
   const [switcherAnchor, setSwitcherAnchor] = useState({ x: 0, y: 0 });
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
+  const [sourceSidebarWidth, setSourceSidebarWidth] = useState(300);
+  const [studioSidebarWidth, setStudioSidebarWidth] = useState(330);
   const [mobileTab, setMobileTab] = useState<"sources" | "chat" | "studio">("chat");
-  const [viewer, setViewer] = useState<ViewerTarget | null>(
-    initialSourceId ? { sourceId: initialSourceId, nonce: 0 } : null,
-  );
+  // Sidebar reader: opening a source (or clicking a citation) shows its
+  // parsed text in the left sidebar — no right-side popup.
+  const [reader, setReader] = useState<ViewerTarget | null>(() => {
+    if (
+      pendingReader &&
+      pendingReader.projectId === projectId &&
+      pendingReader.target.sourceId === initialSourceId
+    ) {
+      return pendingReader.target;
+    }
+    return initialSourceId ? { sourceId: initialSourceId, nonce: 0 } : null;
+  });
+  useEffect(() => {
+    // The initializer above consumed the handoff (if any); drop it so later
+    // mounts start clean instead of reopening a stale citation.
+    pendingReader = null;
+  }, []);
   const [ctx, setCtx] = useState<{ x: number; y: number; items: CtxItem[] } | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [palette, setPalette] = useState(false);
@@ -245,16 +270,52 @@ export default function Workspace({
   const openSource = useCallback(
     (id: string | null, locator?: CitationLocator) => {
       if (!id) return;
-      if (!locator && viewer?.sourceId === id) return;
-      const query = new URLSearchParams();
-      if (activeChatId) query.set("chat", activeChatId);
-      if (locator) {
-        query.set("kind", locator.kind); query.set("value", locator.value);
-        if (locator.end != null) query.set("end", String(locator.end));
-      }
-      navigate(`/project/${projectId}/source/${id}?${query}`, { state: { snippet: locator?.snippet } });
+      const next: ViewerTarget = { sourceId: id, kind: locator?.kind, value: locator?.value, end: locator?.end, snippet: locator?.snippet, nonce: Date.now() };
+      pendingReader = { projectId, target: next };
+      setReader(next);
+      navigate(`/project/${projectId}/source/${id}`);
+      if (isMobile) setMobileTab("sources");
     },
-    [navigate, projectId, activeChatId, viewer?.sourceId],
+    [navigate, projectId, isMobile],
+  );
+
+  const closeReader = useCallback(() => {
+    pendingReader = null;
+    setReader(null);
+    navigate(`/project/${projectId}${activeChatId ? `/chat/${activeChatId}` : ""}`, { replace: true });
+  }, [navigate, projectId, activeChatId]);
+
+  const resizeSidebar = (side: "sources" | "studio", clientX: number) => {
+    if (side === "sources") setSourceSidebarWidth(Math.min(520, Math.max(220, clientX)));
+    else setStudioSidebarWidth(Math.min(560, Math.max(240, window.innerWidth - clientX)));
+  };
+
+  const resizeHandle = (side: "sources" | "studio", value: number) => (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={`Resize ${side === "sources" ? "sources" : "studio"} sidebar`}
+      aria-valuenow={value}
+      tabIndex={0}
+      title="Drag to resize"
+      className="group relative z-10 hidden w-1.5 shrink-0 cursor-col-resize touch-none items-center justify-center hover:bg-[var(--accent)]/20 focus-visible:bg-[var(--accent)]/20 md:flex"
+      onPointerDown={(event) => {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        resizeSidebar(side, event.clientX);
+      }}
+      onPointerMove={(event) => {
+        if (event.buttons === 1) resizeSidebar(side, event.clientX);
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const delta = event.key === "ArrowRight" ? 16 : -16;
+        if (side === "sources") setSourceSidebarWidth((width) => Math.min(520, Math.max(220, width + delta)));
+        else setStudioSidebarWidth((width) => Math.min(560, Math.max(240, width - delta)));
+      }}
+    >
+      <span className="h-10 w-0.5 rounded-full bg-[var(--border)] group-hover:bg-[var(--accent)]" />
+    </div>
   );
 
   const removeChat = useCallback(async (chat: ChatOut) => {
@@ -330,40 +391,43 @@ export default function Workspace({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* workspace top bar */}
-      <div className="flex h-[54px] shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--sidebar-bg)] px-3">
-        <Link to="/" aria-label="Back to projects" className="inline-flex h-8 w-8 items-center justify-center rounded-[7px] text-[var(--text-secondary)] hover:bg-[var(--surface-secondary)] hover:text-[var(--text-primary)]">
-          <ArrowLeft size={16} />
-        </Link>
-        <button
-          ref={switcherBtn}
-          type="button"
-          onClick={(e) => {
-            setSwitcherAnchor({ x: e.clientX - 120, y: e.currentTarget.getBoundingClientRect().bottom + 6 });
-            setSwitcherOpen(true);
-          }}
-          className="flex min-w-0 cursor-pointer items-center gap-2 rounded-[7px] px-2 py-1.5 hover:bg-[var(--surface-secondary)]"
-          aria-haspopup="dialog"
+      {/* workspace top bar — full brand lockup doubles as the dashboard home link */}
+      <div className="flex h-[58px] shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--sidebar-bg)] px-3">
+        <Link
+          to="/"
+          aria-label="Noteslyt home — back to projects"
+          title="Back to projects"
+          className="shrink-0 rounded-[7px] hover:opacity-90"
         >
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] bg-[var(--accent)] text-[11px] font-bold text-white">
-            {(project?.title ?? "…").slice(0, 1).toUpperCase()}
+          <img
+            src={resolved === "dark" ? BRAND_LOCKUP_DARK_SRC : BRAND_LOCKUP_LIGHT_SRC}
+            alt="Noteslyt"
+            draggable={false}
+            style={{ height: 50, width: "auto", display: "block", borderRadius: 6 }}
+          />
+        </Link>
+        <div className="ml-auto flex min-w-0 items-center gap-1">
+          <button
+            ref={switcherBtn}
+            type="button"
+            onClick={(e) => {
+              setSwitcherAnchor({ x: e.clientX - 120, y: e.currentTarget.getBoundingClientRect().bottom + 6 });
+              setSwitcherOpen(true);
+            }}
+            className="flex min-w-0 cursor-pointer items-center gap-2 rounded-[7px] px-2 py-1.5 hover:bg-[var(--surface-secondary)]"
+            aria-haspopup="dialog"
+          >
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] bg-[var(--accent)] text-[11px] font-bold text-white">
+              {(project?.title ?? "…").slice(0, 1).toUpperCase()}
+            </span>
+            <span className="max-w-[180px] truncate text-sm font-semibold">{project?.title ?? "Loading…"}</span>
+            <ChevronDown size={14} className="shrink-0 text-[var(--text-muted)]" />
+          </button>
+          <span className="hidden max-w-[200px] truncate text-[13px] text-[var(--text-muted)] md:inline">
+            {chats.find((c) => c.id === activeChatId)?.title ?? "New chat"}
           </span>
-          <span className="max-w-[180px] truncate text-sm font-semibold">{project?.title ?? "Loading…"}</span>
-          <ChevronDown size={14} className="shrink-0 text-[var(--text-muted)]" />
-        </button>
-        <span className="hidden truncate text-[13px] text-[var(--text-muted)] md:inline">
-          {chats.find((c) => c.id === activeChatId)?.title ?? "New chat"}
-        </span>
-        <span className="ml-2 hidden items-center gap-1.5 rounded-full border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-secondary)] lg:inline-flex">
-          <BookMarked size={12} />
-          {selectedIds.size} of {sources.length} sources
-        </span>
-        <div className="ml-auto flex items-center gap-1">
           <IconButton label="Search (Ctrl+K)" onClick={onSearch}>
             <Search size={16} />
-          </IconButton>
-          <IconButton label={resolved === "dark" ? "Light mode" : "Dark mode"} onClick={toggle}>
-            {resolved === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </IconButton>
           <IconButton label="Settings" onClick={onSettings}>
             <SettingsIcon size={16} />
@@ -392,9 +456,31 @@ export default function Workspace({
       <div className="flex min-h-0 flex-1">
         {(
           <aside
-            className={`${isMobile ? "flex-1" : "w-[300px] shrink-0"} ${leftVisible ? "flex" : "hidden"} min-h-0 flex-col border-r border-[var(--border)] bg-[var(--sidebar-bg)]`}
-            aria-label="Sources and chats"
+            className={`${isMobile ? "flex-1" : "shrink-0"} flex min-h-0 flex-col border-r border-[var(--border)] bg-[var(--sidebar-bg)]`}
+            style={!isMobile ? { width: sourceSidebarWidth, flexBasis: sourceSidebarWidth } : undefined}
+            aria-label={reader ? "Source reader" : "Sources and chats"}
           >
+            {(() => {
+              const open = reader ? sources.find((s) => s.id === reader.sourceId) ?? null : null;
+              if (reader && open) {
+                return <SourceReader source={open} target={reader} onBack={closeReader} />;
+              }
+              if (reader) {
+                return (
+                  <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+                    <p className="text-sm font-medium">Source not available</p>
+                    <p className="text-[13px] text-[var(--text-secondary)]">It may have been removed from this project.</p>
+                    <button
+                      type="button"
+                      onClick={closeReader}
+                      className="mt-1 h-8 cursor-pointer rounded-[7px] border border-[var(--border)] px-3 text-[13px] font-medium hover:bg-[var(--surface-secondary)]"
+                    >
+                      Back to sources
+                    </button>
+                  </div>
+                );
+              }
+              return (
             <SourcesPanel
               sources={sources}
               chats={chats}
@@ -435,11 +521,15 @@ export default function Workspace({
                 void refreshChats();
               }}
             />
+              );
+            })()}
           </aside>
         )}
 
-        {(
-          <main className={`${chatVisible ? "flex" : "hidden"} min-w-0 flex-1 flex-col bg-[var(--main-bg)]`} aria-label="Chat">
+        {leftVisible && !isMobile && resizeHandle("sources", sourceSidebarWidth)}
+
+        {chatVisible && (
+          <main className="flex min-w-0 flex-1 flex-col bg-[var(--main-bg)]" aria-label="Chat">
             {!leftOpen && !isMobile && (
               <button type="button" onClick={() => setLeftOpen(true)} aria-label="Show sources" className="absolute mt-2 ml-2 cursor-pointer rounded-md border border-[var(--border)] bg-[var(--surface)] p-1 text-[var(--text-secondary)]">
                 <ChevronRight size={14} />
@@ -466,8 +556,11 @@ export default function Workspace({
         )}
 
         {rightVisible && (
+          <>
+          {!isMobile && resizeHandle("studio", studioSidebarWidth)}
           <aside
-            className={`${isMobile ? "flex-1" : "w-[330px] shrink-0"} flex min-h-0 flex-col border-l border-[var(--border)] bg-[var(--sidebar-bg)]`}
+            className={`${isMobile ? "flex-1" : "shrink-0"} flex min-h-0 flex-col border-l border-[var(--border)] bg-[var(--sidebar-bg)]`}
+            style={!isMobile ? { width: studioSidebarWidth, flexBasis: studioSidebarWidth } : undefined}
             aria-label="Studio"
           >
             {!rightOpen && !isMobile ? null : null}
@@ -481,6 +574,7 @@ export default function Workspace({
               }}
             />
           </aside>
+          </>
         )}
       </div>
 
@@ -517,16 +611,6 @@ export default function Workspace({
 
       {ctx && <ContextMenu x={ctx.x} y={ctx.y} items={ctx.items} onClose={() => setCtx(null)} />}
 
-      <SourceViewerDrawer
-        target={viewer}
-        docked={!isMobile && leftVisible}
-        sources={sources}
-        onClose={() => {
-          setViewer(null);
-          navigate(`/project/${projectId}${activeChatId ? `/chat/${activeChatId}` : ""}`, { replace: true });
-        }}
-        onRemove={(id) => void removeSource(id)}
-      />
 
       <CommandPalette
         open={palette}
