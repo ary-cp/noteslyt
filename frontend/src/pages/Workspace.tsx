@@ -1,6 +1,6 @@
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ChevronDown,
   ChevronLeft,
@@ -65,7 +65,6 @@ export default function Workspace({
 }) {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
-  const location = useLocation();
   const { push } = useToast();
   const { resolved, toggle } = useTheme();
   const isTablet = useMediaQuery("(max-width: 1100px)");
@@ -168,15 +167,7 @@ export default function Workspace({
 
   useEffect(() => {
     if (initialChatId) setActiveChatId(initialChatId);
-    if (!initialSourceId) { setViewer(null); return; }
-    const query = new URLSearchParams(location.search);
-    const chat = query.get("chat");
-    if (chat) setActiveChatId(chat);
-    const end = query.get("end");
-    setViewer({ sourceId: initialSourceId, kind: query.get("kind") ?? undefined,
-      value: query.get("value") ?? undefined, end: end !== null && Number.isFinite(Number(end)) ? Number(end) : null,
-      snippet: (location.state as { snippet?: string } | null)?.snippet, nonce: Date.now() });
-  }, [initialChatId, initialSourceId, location.key, location.search, location.state]);
+  }, [initialChatId]);
 
   useEffect(() => {
     const refresh = () => { void refreshChats(); };
@@ -485,7 +476,6 @@ export default function Workspace({
               sources={sources}
               chats={chats}
               activeChatId={activeChatId}
-              openSourceId={viewer?.sourceId}
               selectedIds={selectedIds}
               query={sourceQuery}
               debouncedQuery={debouncedQuery}
