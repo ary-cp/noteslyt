@@ -151,6 +151,10 @@ class Transcriber:
         self.base_url = base_url
         self.language = language
         self.name = f"openai-compatible:{model}"
+        # Remembered server quirk (see transcribe): once verbose_json without
+        # a language fails, skip it on every later call instead of replaying
+        # a doomed request (+ the SDK's own retries) per audio piece.
+        self._needs_language = False
 
     def _create(self, audio_path: Path, response_format: str, language: str | None):
         with audio_path.open("rb") as fh:
@@ -180,6 +184,50 @@ class Transcriber:
         if preferred:
             formats += [fmt for fmt in ("json", "text") if fmt != preferred]
         for index, fmt in enumerate(formats):
+        fallback_lang = self.language or "en"
+        if self._needs_language:
+            # Known quirk of this endpoint: verbose_json requires a language.
+            # Go straight to the working params — no wasted round trips.
+            try:
+                result = self._create(audio_path, "verbose_json", fallback_lang)
+            except Exception:
+                result = self._transcribe_with_timestamps(audio_path, fallback_lang)
+            return self._to_segments(result, audio_path)
+        try:
+            result = self._create(audio_path, "verbose_json", self.language)
+        except Exception as exc:
+            # Some self-hosted engines (e.g. whisper.cpp-style servers like
+            # LM Studio's local STT) answer 501 to `verbose_json` without an
+            # explicit `language`: "Send the 'language' parameter, or use
+            # response_format 'json' or 'text'." Retry with timestamps intact
+            # first (verbose_json + language, then srt/vtt), and only use
+            # plain `json`/`text` as a last resort (redistributed over the
+            # audio duration so citations still get [m:ss] timeframes).
+            msg = str(exc).lower()
+            retryable = (
+                "verbose_json" in msg
+                or "language" in msg
+                or "501" in msg
+                or "not implemented" in msg
+            )
+            if not retryable:
+                raise
+            self._needs_language = True
+            try:
+                result = self._create(audio_path, "verbose_json", fallback_lang)
+            except Exception:
+                result = self._transcribe_with_timestamps(audio_path, fallback_lang)
+        return self._to_segments(result, audio_path)
+
+    def _transcribe_with_timestamps(self, audio_path: Path, language: str):
+        """Fallback chain that preserves per-segment timestamps.
+
+        Order: `srt` → `vtt` (both carry `start --> end` cues and are widely
+        supported, including by servers that reject `verbose_json`), then
+        plain `json` (no timestamps — kept as a single segment).
+        """
+        last_exc: Exception | None = None
+        for fmt in ("srt", "vtt", "json"):
             try:
                 result = self._create(audio_path, fmt, self.language)
             except Exception as exc:
