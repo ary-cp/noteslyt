@@ -415,6 +415,10 @@ class LocalEmbeddingServer:
         with self._lock:
             if self.is_running():
                 return
+            # Only one vendored engine stays resident: loading the embedding
+            # model unloads the transcription server first so the two never
+            # share memory (mirrors audio_cpp._unload_peer_embedder).
+            self._unload_peer_transcriber()
             weights, mmproj = self.ensure_model_files()
             cmd = self._server_command(weights, mmproj)
             log.warning("Starting local embedding server (%s)…", weights.name)
@@ -453,6 +457,24 @@ class LocalEmbeddingServer:
         """Mark activity (resets the idle-unload clock). Call before each batch."""
         self._last_used = time.monotonic()
         self._start_idle_thread()
+
+    @staticmethod
+    def _unload_peer_transcriber() -> None:
+        """Unload the transcription server if resident, freeing memory for embeddings.
+
+        Lazy import (audio_cpp imports this module at top level). No-op when
+        the transcription backend was never initialized (cloud mode or a
+        process without the app lifespan).
+        """
+        try:
+            from .audio_cpp import get_transcription_manager
+
+            peer = get_transcription_manager()
+        except (RuntimeError, ImportError):
+            return
+        if peer.is_running():
+            log.warning("Unloading transcription server to free memory for the embedding model.")
+            peer.stop()
 
     def _start_idle_thread(self) -> None:
         if self._idle_thread is not None or self.settings.embedding_idle_unload_s <= 0:

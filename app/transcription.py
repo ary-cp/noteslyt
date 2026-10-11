@@ -255,7 +255,19 @@ def build_transcriber(settings: Settings) -> Transcriber:
     unset (handy when one server hosts both), but a Groq chat model with OpenAI
     Whisper — or Groq chat + Groq Whisper while embeddings sit on OpenAI — is
     just three env vars.
+
+    In `TRANSCRIPTION_MODE=local` the vendored audio.cpp server is used
+    instead: the manager wakes it on every call (downloading the engine +
+    model on first boot), and the OpenAI-compatible client points at it.
     """
+    if settings.transcription_mode == "local":
+        from .audio_cpp import LocalTranscriber, get_transcription_manager
+
+        return LocalTranscriber(  # type: ignore[return-value]
+            get_transcription_manager(),
+            settings.transcription_local_model_id,
+            settings.transcription_language,
+        )
     base_url = settings.resolved_transcription_base_url
     api_key = settings.resolved_transcription_api_key
     return Transcriber(base_url, api_key, settings.transcription_model, settings.transcription_language)
