@@ -58,7 +58,7 @@ function ProjectRoute({ view }: { view: "workspace" | "chat" | "source" }) {
   void projectId;
   return (
     <Workspace
-      key={`${projectId}-${chatId ?? "none"}-${sourceId ?? "none"}`}
+      key={projectId}
       initialChatId={chatId}
       initialSourceId={sourceId}
     />

@@ -5,8 +5,8 @@ import remarkMath from "remark-math";
 import rehypeRaw from "rehype-raw";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { AlertTriangle, Check, Copy, FileText, Maximize2, Send, Square } from "lucide-react";
-import { createChat, getChat, listChats, renameChat, streamMessage } from "../../lib/api";
+import { AlertTriangle, Check, Copy, FileText, Maximize2, RefreshCw, Send, Square } from "lucide-react";
+import { ChatStreamError, createChat, getChat, renameChat, streamMessage } from "../../lib/api";
 import type { ChatCitation, ChatMessageOut, CitationLocator, SourceOut } from "../../lib/types";
 import { useToast } from "../../lib/toast";
 import { ErrorState } from "../../components/ui/Feedback";
@@ -117,6 +117,7 @@ export const MarkdownBody = memo(function MarkdownBody({
 
 /* ---------------- message ---------------- */
 
+
 const ChatMessage = memo(function ChatMessage({ msg, sources, onOpenSource }: { msg: ChatMessageOut; sources: SourceOut[]; onOpenSource: (id: string | null, locator?: CitationLocator) => void }) {
   if (msg.role === "user") {
     return (
@@ -133,7 +134,7 @@ const ChatMessage = memo(function ChatMessage({ msg, sources, onOpenSource }: { 
     <div className="group/msg min-w-0">
       {msg.grounded === false && (
         <p className="mb-2 inline-flex items-center gap-1.5 rounded-[7px] border border-[var(--warning)]/30 bg-[var(--warning-soft)] px-2.5 py-1 text-[13px] text-[var(--warning)]">
-          <AlertTriangle size={13} /> Not in your sources — answered from general knowledge.
+          <AlertTriangle size={13} /> No supported answer found in the selected sources.
         </p>
       )}
       <MarkdownBody text={linkedAnswer} citations={msg.citations} sources={sources} onOpenCitation={onOpenSource} />
@@ -182,6 +183,7 @@ export function ChatPanel({
   selectedCount,
   totalCount,
   onChatCreated,
+  onChatUpdated,
   onOpenSource,
   onNeedSources,
 }: {
@@ -193,6 +195,7 @@ export function ChatPanel({
   selectedCount: number;
   totalCount: number;
   onChatCreated: (id: string) => void;
+  onChatUpdated: () => void;
   onOpenSource: (id: string | null, locator?: CitationLocator) => void;
   onNeedSources: () => void;
 }) {
@@ -202,41 +205,61 @@ export function ChatPanel({
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [sendError, setSendError] = useState("");
+  const [failedQuestion, setFailedQuestion] = useState("");
   const [draft, setDraft] = useState("");
   const [model, setModel] = useState<"default" | "precise" | "explanatory">("default");
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
-  const abortRef = useRef(false);
+  const controllerRef = useRef<AbortController | null>(null);
+  const loadedChatRef = useRef<string | null>(null);
+  const createdChatRef = useRef<string | null>(null);
+  const nearBottom = useRef(true);
+  const [refreshTick, setRefreshTick] = useState(0);
+  useEffect(() => () => controllerRef.current?.abort(), []);
 
   const hasReady = sources.some((s) => s.status === "ready");
 
   useEffect(() => {
+    if (createdChatRef.current === chatId && chatId) { createdChatRef.current = null; loadedChatRef.current = chatId; return; }
+    controllerRef.current?.abort();
+    controllerRef.current = null;
+    setSending(false);
+    let live = true;
+    if (loadedChatRef.current !== chatId) {
+      setMessages([]); nearBottom.current = true; loadedChatRef.current = chatId;
+    }
     if (!chatId) {
-      setMessages([]);
-      setTitle("New chat");
-      setError("");
+      setMessages([]); setTitle("New chat"); setError(""); setLoading(false);
       return;
     }
     setLoading(true);
     setError("");
+    setSendError("");
     getChat(chatId)
       .then((d) => d.total > d.messages.length ? getChat(chatId, 200, Math.max(0, d.total - 200)) : d)
-      .then((d) => {
-        setMessages(d.messages);
-        setTitle(d.chat.title);
-      })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setLoading(false));
-  }, [chatId]);
+      .then((d) => { if (live) { setMessages(d.messages); setTitle(d.chat.title); } })
+      .catch((e: unknown) => { if (live) setError(e instanceof Error ? e.message : String(e)); })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [chatId, refreshTick]);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages, sending]);
+    if (nearBottom.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [messages, sending, loading]);
+
+  useEffect(() => {
+    const refresh = () => {
+      if (!controllerRef.current && !loading && chatId) setRefreshTick((n) => n + 1);
+    };
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [chatId, loading]);
 
   const send = async (text: string) => {
     const content = text.trim();
-    if (!content || sending) return;
+    if (!content || controllerRef.current || loading) return;
     if (!hasReady) {
       push("Add a source first", { detail: "The AI answers from your project files.", tone: "warning" });
       onNeedSources();
@@ -247,13 +270,24 @@ export function ChatPanel({
       onNeedSources();
       return;
     }
+    setSendError("");
+    setFailedQuestion("");
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    setSending(true);
+    nearBottom.current = true;
     let id = chatId;
     if (!id) {
       try {
         const c = await createChat(projectId);
+        if (controller.signal.aborted) return;
         id = c.id;
+        createdChatRef.current = c.id;
         onChatCreated(c.id);
       } catch (e) {
+        if (controller.signal.aborted) return;
+        controllerRef.current = null;
+        setSending(false);
         push("Could not start chat", { detail: e instanceof Error ? e.message : String(e), tone: "error" });
         return;
       }
@@ -278,26 +312,58 @@ export function ChatPanel({
     setMessages((prev) => [...prev, optimistic, streaming]);
     setDraft("");
     setSending(true);
-    abortRef.current = false;
+
+    let buffered = "";
+    let frame: number | null = null;
+    const flush = () => {
+      frame = null;
+      const text = buffered; buffered = "";
+      if (text && !controller.signal.aborted) setMessages((prev) => prev.map((m) => m.id === streamingId ? { ...m, content: m.content + text } : m));
+    };
     try {
       const res = await streamMessage(id, content, (token) => {
-        if (!abortRef.current) {
-          setMessages((prev) => prev.map((m) => m.id === streamingId ? { ...m, content: m.content + token } : m));
-        }
-      }, model, selectedSourceIds);
-      if (abortRef.current) return;
+        buffered += token;
+        if (frame === null) frame = window.requestAnimationFrame(flush);
+      }, model, selectedSourceIds, controller.signal);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      flush();
+      if (controller.signal.aborted) return;
       setMessages((prev) => prev.map((m) => m.id === streamingId
         ? { ...m, content: res.answer, citations: res.citations, grounded: res.grounded }
         : m));
       if (res.chat_title) setTitle(res.chat_title);
-      // refresh chat list titles elsewhere via polling parent? best-effort:
-      listChats(projectId).catch(() => undefined);
+      onChatUpdated();
     } catch (e) {
-      if (!abortRef.current) push("Generation failed", { detail: e instanceof Error ? e.message : String(e), tone: "error" });
-      setMessages((prev) => prev.filter((m) => m.id !== optimistic.id && m.id !== streamingId));
-      setDraft(content);
+      if (controller.signal.aborted) return;
+      // A transport error can follow a successfully persisted answer. Reconcile
+      // by the new user turn, never remove already-visible streamed text.
+      for (let attempt = 0; attempt < (e instanceof ChatStreamError ? 1 : 10) && !controller.signal.aborted; attempt++) {
+        try {
+          const first = await getChat(id);
+          const saved = first.total > first.messages.length ? await getChat(id, 200, Math.max(0, first.total - 200)) : first;
+          if (controller.signal.aborted) return;
+          const match = [...saved.messages].reverse().find((m) => m.role === "user" && m.content === content && new Date(m.created_at).getTime() >= new Date(optimistic.created_at).getTime() - 2000);
+          const userIndex = match ? saved.messages.indexOf(match) : -1;
+          if (userIndex >= 0 && saved.messages.slice(userIndex + 1).some((m) => m.role === "assistant")) {
+            setMessages(saved.messages); setTitle(saved.chat.title); onChatUpdated(); return;
+          }
+        } catch { /* The next attempt can recover a transient network failure. */ }
+        if (!(e instanceof ChatStreamError) && attempt < 9 && !controller.signal.aborted) await new Promise<void>((resolve) => {
+          const finish = () => { clearTimeout(timer); controller.signal.removeEventListener("abort", finish); resolve(); };
+          const timer = window.setTimeout(finish, 2000);
+          controller.signal.addEventListener("abort", finish, { once: true });
+        });
+      }
+      if (controller.signal.aborted) return;
+      setSendError(e instanceof Error ? e.message : "The response could not be completed.");
+      setFailedQuestion(content);
+      setMessages((prev) => prev.filter((m) => m.id !== streamingId || m.content.trim()));
     } finally {
-      setSending(false);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+        setSending(false);
+      }
     }
   };
 
@@ -315,22 +381,30 @@ export function ChatPanel({
         <span className="hidden text-xs text-[var(--text-muted)] sm:inline">
           Using {selectedCount} of {totalCount} sources
         </span>
+        <button type="button" aria-label="Refresh conversation" title="Fetch latest messages and chats"
+          disabled={sending || loading} onClick={() => { setRefreshTick((n) => n + 1); onChatUpdated(); }}
+          className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-[var(--surface-secondary)] disabled:opacity-40">
+          <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+        </button>
         <button type="button" onClick={() => void rename()} className="cursor-pointer rounded-md px-2 py-1 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-secondary)] hover:text-[var(--text-primary)]">
           Rename
         </button>
       </div>
 
       {/* messages */}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5" aria-live="polite">
+      <div ref={scrollRef} onScroll={() => {
+        const el = scrollRef.current;
+        if (el) nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+      }} className="min-h-0 flex-1 overflow-y-auto px-4 py-5" aria-live="polite">
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-6">
-          {loading ? (
+          {loading && messages.length === 0 ? (
             <div className="grid gap-4">
               {[0, 1, 2].map((i) => (
                 <div key={i} className="h-20 animate-pulse rounded-[8px] bg-[var(--surface-secondary)]" />
               ))}
             </div>
           ) : error ? (
-            <ErrorState body={error} onRetry={() => window.location.reload()} />
+            <ErrorState body={error} onRetry={() => setRefreshTick((n) => n + 1)} />
           ) : messages.length === 0 && !sending ? (
             <div className="flex flex-col items-center pt-10 text-center">
               <span className="mb-4 flex h-11 w-11 items-center justify-center rounded-[10px] border border-[var(--border)] bg-[var(--surface)] text-[var(--text-secondary)]">
@@ -361,15 +435,20 @@ export function ChatPanel({
           ) : (
             messages.map((m) => <ChatMessage key={m.id} msg={m} sources={sources} onOpenSource={onOpenSource} />)
           )}
+          {!sending && (sendError || (!loading && messages.at(-1)?.role === "user")) && (
+            <div role="alert" className="rounded-lg border border-[var(--danger)]/30 bg-[var(--danger-soft)] p-3 text-sm">
+              <p className="font-medium">Reply could not be completed</p>
+              <p className="mt-1 whitespace-pre-wrap break-words text-[var(--text-secondary)]">{sendError || "No saved reply was found for the last question. Refresh to check again, or put the question back in the composer to resend."}</p>
+              <button type="button" className="mt-2 rounded border border-[var(--border-strong)] px-2 py-1" onClick={() => setDraft(failedQuestion || messages.at(-1)?.content || "")}>Put question back in composer</button>
+            </div>
+          )}
           {sending && (
             <div className="flex items-center gap-2 text-[var(--text-muted)]" aria-label="Generating">
               <span className="dot" /><span className="dot" /><span className="dot" />
               <span className="ml-1 text-[13px]">
                 {selectedSources.length > 0 ? `Reading ${selectedSources.length} source${selectedSources.length > 1 ? "s" : ""}…` : "Thinking…"}
               </span>
-              <button type="button" onClick={() => { abortRef.current = true; setSending(false); }} className="ml-2 inline-flex cursor-pointer items-center gap-1 rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--surface-secondary)]">
-                <Square size={11} /> Stop
-              </button>
+
             </div>
           )}
         </div>
@@ -425,12 +504,18 @@ export function ChatPanel({
             <span className="ml-auto hidden text-xs text-[var(--text-muted)] sm:block">Shift+Enter for a new line</span>
             <button
               type="button"
-              onClick={() => void send(draft)}
-              disabled={!draft.trim() || sending}
-              aria-label="Send message"
+              onClick={() => {
+                if (sending) {
+                  controllerRef.current?.abort(); controllerRef.current = null; setSending(false);
+                  push("Response stopped", { detail: "You can refresh to check saved messages.", tone: "info" });
+                } else void send(draft);
+              }}
+              disabled={!sending && (!draft.trim() || loading)}
+              aria-label={sending ? "Stop response" : "Send message"}
+              title={sending ? "Stop response" : "Send message"}
               className="ml-auto inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-[7px] bg-[var(--accent)] text-white transition-opacity hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-40 sm:ml-0"
             >
-              <Send size={15} />
+              {sending ? <Square size={15} fill="currentColor" /> : <Send size={15} />}
             </button>
           </div>
         </div>
@@ -451,6 +536,7 @@ export function ChatPanel({
                     .then(() => {
                       setTitle(renameValue.trim());
                       setRenameOpen(false);
+                      onChatUpdated();
                       push("Chat renamed", { tone: "success" });
                     })
                     .catch((err: unknown) => push("Rename failed", { detail: err instanceof Error ? err.message : String(err), tone: "error" }));
@@ -471,6 +557,7 @@ export function ChatPanel({
                     .then(() => {
                       setTitle(renameValue.trim());
                       setRenameOpen(false);
+                      onChatUpdated();
                       push("Chat renamed", { tone: "success" });
                     })
                     .catch((err: unknown) => push("Rename failed", { detail: err instanceof Error ? err.message : String(err), tone: "error" }));

@@ -247,7 +247,9 @@ class LocalEmbeddingServer:
 
     def __init__(self, settings) -> None:
         self.settings = settings
-        self.root = Path(settings.embedding_local_dir).expanduser()
+        # The child process runs inside this directory. Resolve paths in the
+        # parent's cwd before launch so relative paths aren't prefixed twice.
+        self.root = Path(settings.embedding_local_dir).expanduser().resolve()
         self.engine_dir = self.root / "engine"
         self.models_dir = self.root / "models"
         self.logs_dir = self.root / "logs"
@@ -284,8 +286,8 @@ class LocalEmbeddingServer:
     def model_files(self) -> tuple[Path, Path]:
         """Resolve (weights, mmproj), honouring explicit user paths first."""
         s = self.settings
-        weights = Path(s.embedding_local_model_path).expanduser() if s.embedding_local_model_path else None
-        mmproj = Path(s.embedding_local_mmproj_path).expanduser() if s.embedding_local_mmproj_path else None
+        weights = Path(s.embedding_local_model_path).expanduser().resolve() if s.embedding_local_model_path else None
+        mmproj = Path(s.embedding_local_mmproj_path).expanduser().resolve() if s.embedding_local_mmproj_path else None
         if weights is None:
             weights = self.models_dir / s.embedding_local_model_file
         if mmproj is None:

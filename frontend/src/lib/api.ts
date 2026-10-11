@@ -70,7 +70,12 @@ export class ApiError extends Error {
 
 let bearer: string | null = typeof localStorage === "undefined" ? null : localStorage.getItem(TOKEN_KEY);
 
+const previewBlobs = new Map<string, Blob>();
+const previewRequests = new Map<string, Promise<Blob>>();
+
 export function setToken(token: string | null): void {
+  previewBlobs.clear();
+  previewRequests.clear();
   bearer = token;
   try {
     if (token) localStorage.setItem(TOKEN_KEY, token);
@@ -220,7 +225,11 @@ export const getSourceContent = (id: string): Promise<ParsedContent> =>
 export const listSourceSegments = (id: string): Promise<SourceSegment[]> =>
   request(`/sources/${id}/segments`);
 
-export const deleteSource = (id: string): Promise<void> => request(`/sources/${id}`, { method: "DELETE" });
+export const deleteSource = async (id: string): Promise<void> => {
+  await request(`/sources/${id}`, { method: "DELETE" });
+  previewBlobs.delete(id);
+  previewRequests.delete(id);
+};
 
 export const listTopics = (projectId: string): Promise<TopicSummary[]> =>
   request(`/projects/${projectId}/topics`);
@@ -254,17 +263,20 @@ export const deleteChat = (id: string): Promise<void> =>
 export const sendMessage = (id: string, content: string): Promise<SendMessageResponse> =>
   request(`/chats/${id}/messages`, json({ content }));
 
+export class ChatStreamError extends Error {}
+
 export async function streamMessage(
   id: string,
   content: string,
   onToken: (token: string) => void,
   responseStyle: "default" | "precise" | "explanatory" = "default",
   sourceIds?: string[],
+  signal?: AbortSignal,
 ): Promise<SendMessageResponse> {
   const headers = new Headers({ "Content-Type": "application/json", Accept: "text/event-stream" });
   if (bearer) headers.set("Authorization", `Bearer ${bearer}`);
   const response = await fetch(`${API_BASE}/chats/${id}/messages/stream`, {
-    method: "POST", headers, body: JSON.stringify({ content, response_style: responseStyle, source_ids: sourceIds }),
+    method: "POST", headers, signal, body: JSON.stringify({ content, response_style: responseStyle, source_ids: sourceIds }),
   });
   if (!response.ok) {
     let detail = response.statusText;
@@ -279,20 +291,27 @@ export async function streamMessage(
   const decoder = new TextDecoder();
   let pending = "";
   let final: SendMessageResponse | null = null;
-  while (true) {
-    const { value, done } = await reader.read();
-    pending += decoder.decode(value, { stream: !done });
-    const events = pending.split("\n\n");
-    pending = events.pop() ?? "";
-    for (const event of events) {
-      const dataLine = event.split("\n").find((line) => line.startsWith("data: "));
-      if (!dataLine) continue;
-      const message = JSON.parse(dataLine.slice(6)) as { type: string; value: string | SendMessageResponse };
-      if (message.type === "token" && typeof message.value === "string") onToken(message.value);
-      else if (message.type === "final") final = message.value as SendMessageResponse;
-      else if (message.type === "error") throw new ApiError(String(message.value), 500);
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      pending += decoder.decode(value, { stream: !done });
+      pending = pending.replace(/\r\n/g, "\n");
+      const events = pending.split("\n\n");
+      pending = done ? "" : events.pop() ?? "";
+      for (const event of events) {
+        const dataLine = event.split("\n").find((line) => line.startsWith("data: "));
+        if (!dataLine) continue;
+        const message = JSON.parse(dataLine.slice(6)) as { type: string; value: string | SendMessageResponse };
+        if (message.type === "token" && typeof message.value === "string") onToken(message.value);
+        else if (message.type === "final") final = message.value as SendMessageResponse;
+        else if (message.type === "error") throw new ChatStreamError(String(message.value));
+      }
+      if (final) return final;
+      if (done) break;
     }
-    if (done) break;
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
   if (!final) throw new ApiError("The response stream ended before the answer was finalized.", 500);
   return final;
@@ -349,7 +368,7 @@ export const getReport = (assessmentId: string): Promise<AssessmentReportOut> =>
  * Download the stored original with auth. A plain `<a href>` cannot send the
  * bearer token, so the viewer fetches the bytes and renders a blob URL.
  */
-export const fetchSourceBlob = async (id: string): Promise<Blob> => {
+const downloadSourceBlob = async (id: string): Promise<Blob> => {
   const headers = new Headers();
   if (bearer) headers.set("Authorization", `Bearer ${bearer}`);
   let response: Response;
@@ -371,6 +390,26 @@ export const fetchSourceBlob = async (id: string): Promise<Blob> => {
   }
   return await response.blob();
 };
+
+/** Bounded session cache prevents downloading the same video on every citation. */
+export function fetchSourceBlob(id: string): Promise<Blob> {
+  const cached = previewBlobs.get(id);
+  if (cached) { previewBlobs.delete(id); previewBlobs.set(id, cached); return Promise.resolve(cached); }
+  const pending = previewRequests.get(id);
+  if (pending) return pending;
+  const owner = bearer;
+  const request = downloadSourceBlob(id).then((blob) => {
+    if (owner === bearer && previewRequests.get(id) === request && blob.size <= 128 * 1024 * 1024) {
+      previewBlobs.set(id, blob);
+      while (previewBlobs.size > 3 || [...previewBlobs.values()].reduce((sum, item) => sum + item.size, 0) > 128 * 1024 * 1024) {
+        previewBlobs.delete(previewBlobs.keys().next().value!);
+      }
+    }
+    return blob;
+  }).finally(() => { if (previewRequests.get(id) === request) previewRequests.delete(id); });
+  previewRequests.set(id, request);
+  return request;
+}
 
 // ============================================================ legacy API
 // Pre-tenancy endpoints (document-scoped). Unused while the backend is

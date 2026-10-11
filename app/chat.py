@@ -121,12 +121,19 @@ class ChatService:
         on_chunk: Callable[[str], None] | None = None,
         response_style: str = "default",
         source_ids: list[str] | None = None,
+        defer: Callable[..., None] | None = None,
     ) -> dict:
         """One grounded turn. Raises `ChatNotFoundError` for foreign ids."""
         chat = self.chats.get_owned(chat_id, user_id)
         if chat is None:
             raise ChatNotFoundError(chat_id)
         question = content.strip()
+
+        def after_turn(*args, **kwargs):
+            if defer is None:
+                self._after_turn(*args, **kwargs)
+            else:
+                defer(self._after_turn, *args, **kwargs)
 
         prior = self.chats.recent_messages(chat_id, limit=self.settings.memory_chat_window)
         self.chats.add_message(chat_id, "user", question, [], None)
@@ -146,7 +153,7 @@ class ChatService:
         if not ready_ids:
             log.info("Refusing in chat %s: no selected ready sources in project", chat_id)
             self.chats.add_message(chat_id, "assistant", REFUSAL, [], False)
-            self._after_turn(user_id, chat, question, REFUSAL, [], nudge=False)
+            after_turn(user_id, chat, question, REFUSAL, [], nudge=False)
             return self._payload(chat_id, chat.title, REFUSAL, [], False, [], None)
         query_vec = self.embedder.embed([rewritten])[0]
         chunks = self.store.query(
@@ -157,7 +164,7 @@ class ChatService:
         if not chunks or (best is not None and best > self.settings.max_distance):
             log.info("Refusing in chat %s: best distance %s > %s", chat_id, best, self.settings.max_distance)
             self.chats.add_message(chat_id, "assistant", REFUSAL, [], False)
-            self._after_turn(user_id, chat, question, REFUSAL, [], nudge=False)
+            after_turn(user_id, chat, question, REFUSAL, [], nudge=False)
             return self._payload(chat_id, chat.title, REFUSAL, [], False, [], best)
 
         # 3. Assemble memory with an explicit budget, then generate + audit.
@@ -173,7 +180,7 @@ class ChatService:
         raw = self.llm.chat(messages, on_chunk=on_chunk)
         if _is_refusal(raw):
             self.chats.add_message(chat_id, "assistant", REFUSAL, [], False)
-            self._after_turn(user_id, chat, question, REFUSAL, [], nudge=False)
+            after_turn(user_id, chat, question, REFUSAL, [], nudge=False)
             return self._payload(chat_id, chat.title, REFUSAL, [], False,
                                  _retrieved_labels(chunks), best)
 
@@ -187,7 +194,7 @@ class ChatService:
             )
             if _is_refusal(retry):
                 self.chats.add_message(chat_id, "assistant", REFUSAL, [], False)
-                self._after_turn(user_id, chat, question, REFUSAL, [], nudge=False)
+                after_turn(user_id, chat, question, REFUSAL, [], nudge=False)
                 return self._payload(chat_id, chat.title, REFUSAL, [], False,
                                       _retrieved_labels(chunks), best)
             result = audit_citations(retry, chunks)
@@ -195,7 +202,7 @@ class ChatService:
         if not result.answer.strip() or not result.citations:
             log.warning("Chat model returned no usable answer for %s", chat_id)
             self.chats.add_message(chat_id, "assistant", REFUSAL, [], False)
-            self._after_turn(user_id, chat, question, REFUSAL, [], nudge=False)
+            after_turn(user_id, chat, question, REFUSAL, [], nudge=False)
             return self._payload(chat_id, chat.title, REFUSAL, [], False,
                                  _retrieved_labels(chunks), best)
 
@@ -205,12 +212,12 @@ class ChatService:
         # First exchange names the chat (cheap, no LLM call).
         title = chat.title
         if title == "New chat":
-            title = self._generate_title(question, result.answer)
+            title = (question[:60].strip().rstrip(" .?!") or "New chat") if defer else self._generate_title(question, result.answer)
             self.chats.rename(chat_id, user_id, title)
 
         if did_rewrite:
             log.debug("Rewrote %r → %r", question, rewritten)
-        self._after_turn(user_id, chat, question, result.answer, stored, nudge=True)
+        after_turn(user_id, chat, question, result.answer, stored, nudge=True)
         return self._payload(
             chat_id, title, result.answer, stored, bool(stored),
             [citation_label(c.locator_kind, c.locator_value,
@@ -333,7 +340,7 @@ class ChatService:
             mime = content_type_for(source.filename).split(";")[0]
             data_url = f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
             image_parts.extend([
-                {"type": "text", "text": f"Retrieved image context labeled [Image {chunk.locator_value}]:"},
+                {"type": "text", "text": f"Source filename: {source.filename}. Retrieved image context labeled [Image {chunk.locator_value}]:"},
                 {"type": "image_url", "image_url": {"url": data_url}},
             ])
             if len(image_parts) >= 4:
