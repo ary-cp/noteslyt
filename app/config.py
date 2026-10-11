@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     embedding_api_key: str | None = None    # falls back to llm_api_key
     embedding_model: str = "embeddinggemma-2-GGUF"
     embedding_batch_size: int = 64
+    # Longest single input sent to /embeddings, in characters. Longer chunk
+    # texts are split on sentence boundaries and mean-pooled, because the
+    # endpoint rejects one input over its physical batch (llama-server's
+    # default 512 tokens 500s on ~641-token table chunks; dense scripts run
+    # more tokens per character, so this stays conservative).
+    embedding_max_input_chars: int = 1500
     embedding_dim: int = 768             # must match the model + pgvector column
     # Where vectors come from:
     #   "local" — the default. A vendored llama-server (downloaded to
@@ -86,6 +92,10 @@ class Settings(BaseSettings):
     embedding_local_host: str = "127.0.0.1"
     embedding_local_port: int = 8899
     embedding_local_ctx: int = 8192
+    # Physical batch (llama.cpp -ub/--ubatch-size, default 512): the longest
+    # single input the server accepts. Raised so ordinary chunks embed in one
+    # call; the client still splits anything longer (see above).
+    embedding_local_ubatch_size: int = 2048
     embedding_local_repo: str = "ggml-org/embeddinggemma-2-GGUF"
     embedding_local_model_file: str = "embeddinggemma-2-Q8_0.gguf"
     embedding_local_mmproj_file: str = "mmproj-embeddinggemma-2-Q8_0.gguf"
@@ -121,6 +131,15 @@ class Settings(BaseSettings):
     # (With AUDIO_EMBED_MODE=native, video falls back to soundtrack vectors;
     # VIDEO_EMBED_MODE=native takes precedence for video and uses frames.)
     video_embed_mode: Literal["transcript", "native"] = "transcript"
+    # Middle-clip seconds embedded per segment instead of a still keyframe
+    # (needs VIDEO_EMBED_MODE=native + a video-capable embedding endpoint —
+    # verified live on embeddinggemma-2: a 2 s clip is ~1k tokens). 0 keeps
+    # stills. Clips past the server's batch fall back to the still with a
+    # warning. Measured budget at 480 px: ~330 tokens/s, so ~3 s fits ubatch
+    # 2048 and ~25 s fits 8192 (--video-fps does NOT change /embeddings
+    # sampling in this llama.cpp build — verified identical token counts).
+    video_clip_seconds: float = 0.0
+    video_clip_width: int = 480       # px; aspect preserved, keeps tokens down
 
     # --------------------------------------------------------- Transcription
     # Speech-to-text for lecture videos. Any OpenAI-compatible
@@ -192,6 +211,13 @@ class Settings(BaseSettings):
     max_distance: float = 0.8
     chunk_size: int = 1200         # characters, never crosses a page boundary
     chunk_overlap: int = 200
+    # Visual retrieval: every PDF page is also rendered to PNG and embedded as
+    # an image chunk ([Image N]), so charts/diagrams survive even where the
+    # text parse loses them. Text chunks are untouched — retrieval matches both.
+    # Needs a joint embedding model (embed_image); text-only endpoints record
+    # a warning and ingest text-only. Slides need LibreOffice, else text-only.
+    pdf_page_images: bool = True
+    pdf_page_image_max_pages: int = 200   # per-source render budget (0 = all)
     history_turns: int = 6         # prior messages forwarded to the LLM (legacy RAG)
 
     # ------------------------------------------- Memory assembly (Phase E)

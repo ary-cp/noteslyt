@@ -63,7 +63,7 @@ export function CommandPalette({ open, onClose, onAction, projectId, onOpenCreat
     const chs: Item[] = chats.filter((c) => match(c.title)).slice(0, 5).map((c) => ({ kind: "chat", id: c.id, title: c.title, sub: "chat", projectId }));
     let arts: Item[] = [];
     try {
-      const raw = localStorage.getItem(`studyspace:artifacts:${projectId ?? ""}`);
+      const raw = localStorage.getItem(`noteslyt:artifacts:${projectId ?? ""}`);
       if (raw && q) {
         arts = (JSON.parse(raw) as { id: string; title: string }[])
           .filter((a) => a.title.toLowerCase().includes(q))

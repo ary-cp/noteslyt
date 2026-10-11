@@ -11,7 +11,6 @@ import type { ChatCitation, ChatMessageOut, CitationLocator, SourceOut } from ".
 import { useToast } from "../../lib/toast";
 import { ErrorState } from "../../components/ui/Feedback";
 import { Dropdown } from "../../components/ui/Menu";
-import { SourceTypeIcon } from "../../lib/sourceKind";
 import { citationLabel } from "../../lib/utils";
 
 const MermaidBlock = lazy(() => import("./MermaidBlock"));
@@ -453,21 +452,6 @@ export function ChatPanel({
           )}
         </div>
       </div>
-
-      {/* selected sources strip */}
-      {selectedSources.length > 0 && (
-        <div className="shrink-0 border-t border-[var(--border)] px-4 py-1.5">
-          <div className="mx-auto flex max-w-[760px] items-center gap-1.5 overflow-x-auto">
-            {selectedSources.slice(0, 6).map((s) => (
-              <span key={s.id} className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface)] px-2 py-0.5 text-xs text-[var(--text-secondary)]">
-                <SourceTypeIcon type={s.source_type} size={12} />
-                <span className="max-w-[140px] truncate">{s.filename}</span>
-              </span>
-            ))}
-            {selectedSources.length > 6 && <span className="text-xs text-[var(--text-muted)]">+{selectedSources.length - 6}</span>}
-          </div>
-        </div>
-      )}
 
       {/* input */}
       <div className="shrink-0 px-4 pt-2 pb-4">

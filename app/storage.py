@@ -230,6 +230,38 @@ class FileStorage:
         path = self._path_for(project_id, source_id, filename)
         return path if path.is_file() else None
 
+    # ------------------------------------------------------- page renders
+    # PDF pages (and slides) are rendered to PNGs for visual retrieval. The
+    # dotted name keeps them under storage.delete()'s `{source_id}.*` glob so
+    # removing a source removes its renders too — no orphaned bytes.
+    def page_image_path(self, project_id: str, source_id: str, page_no: int) -> Path:
+        return self._root / str(project_id) / f"{source_id}.page-{int(page_no)}.png"
+
+    def write_page_image(self, project_id: str, source_id: str, page_no: int, data: bytes) -> Path:
+        """Persist one rendered page; parents are created on demand."""
+        path = self.page_image_path(project_id, source_id, page_no)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".part")
+        try:
+            tmp.write_bytes(data)
+            tmp.replace(path)
+        finally:
+            tmp.unlink(missing_ok=True)
+        return path
+
+    def read_page_image(self, project_id: str, source_id: str, page_no: int) -> bytes | None:
+        """Page-render bytes for chat/quiz grounding, or None if absent."""
+        try:
+            page = int(page_no)
+        except (TypeError, ValueError):
+            return None
+        path = self.page_image_path(project_id, source_id, page)
+        try:
+            return path.read_bytes() if path.is_file() else None
+        except OSError:
+            return None
+
+
     def save_stream(self, project_id: str, source_id: str, filename: str, stream, limit_bytes: int) -> StoredFile:
         """Copy an upload in bounded blocks; never retain the whole file in memory."""
         path = self._path_for(project_id, source_id, filename)
@@ -294,3 +326,34 @@ class FileStorage:
                 except OSError:
                     pass
         return total
+
+
+def read_image_chunk_bytes(
+    storage: FileStorage,
+    project_id: str,
+    source: object,
+    locator_kind: str,
+    locator_value: str,
+) -> tuple[bytes, str] | None:
+    """`(bytes, mime)` grounding an image-kind chunk, or None when unavailable.
+
+    PDF/slide page visuals resolve to their rendered PNG; plain image sources
+    resolve to the uploaded file. A missing render is None — never the PDF
+    bytes, which are not an image.
+    """
+    source_type = getattr(source, "source_type", "")
+    if locator_kind == "image" and source_type in ("pdf", "pptx"):
+        try:
+            page_no = int(locator_value)
+        except (TypeError, ValueError):
+            return None
+        data = storage.read_page_image(project_id, getattr(source, "id", ""), page_no)
+        return (data, "image/png") if data is not None else None
+    filename = getattr(source, "filename", "")
+    path = storage.open_for_read(project_id, getattr(source, "id", ""), filename)
+    if path is None:
+        return None
+    try:
+        return path.read_bytes(), content_type_for(filename).split(";")[0]
+    except OSError:
+        return None

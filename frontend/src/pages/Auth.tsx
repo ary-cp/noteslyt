@@ -56,7 +56,7 @@ export default function AuthPage({ mode }: { mode: "login" | "signup" }) {
         <div className="auth-brand">
           <img
             src="/05-app-icon-neon.svg"
-            alt="Noteslyt"
+            alt="NotesLyt"
             className="auth-logo-img"
             width={52}
             height={52}

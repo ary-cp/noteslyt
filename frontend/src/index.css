@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* ============================================================
-   Noteslyt — theme tokens. ONE restrained accent, no gradients.
+   NotesLyt — theme tokens. ONE restrained accent, no gradients.
    Dark is default. Light overrides via [data-theme="light"].
    ============================================================ */
 

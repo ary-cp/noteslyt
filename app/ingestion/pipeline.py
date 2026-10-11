@@ -57,6 +57,10 @@ class IngestionError(RuntimeError):
 # same source re-ingested produces the same chunk ids and upserts in place.
 _CHUNK_NAMESPACE = uuid.UUID("6f1c9a7e-0d3b-5f42-9c81-1f0a2b3c4d5e")
 
+# Image-chunk indices live far above text-chunk indices so the two families
+# never share a deterministic chunk id, whatever the text chunk count is.
+PAGE_IMAGE_INDEX_BASE = 1_000_000
+
 # Parsed-text cap for the viewer ("what the model read"). Beyond this the
 # stored markdown is cut and flagged — chunks/embeddings are unaffected, only
 # the preview stored in `source_contents` is trimmed.
@@ -161,6 +165,15 @@ class IngestionPipeline:
             except Exception:  # noqa: BLE001 — preview is auxiliary, chunks are not
                 log.exception("Could not store parsed text for %s", source.filename)
 
+            # 2c. Page/slide renders -> visual chunks ------------------------
+            # Every PDF page is embedded as an image *in addition* to its text
+            # chunks, so charts and diagrams stay retrievable. Kept separate
+            # from `chunks` until after text embedding (section 4), then
+            # combined 1:1 with their vectors. Never fails the ingest:
+            # render/encode problems become warnings, text still lands.
+            image_chunks, image_vecs = self._embed_page_images(source, path, parsed.units, result)
+            result.chunks = len(chunks) + len(image_chunks)
+
             # 3. Topics (project-level, merged by slug) ---------------------
             self.sources.set_status(
                 source.id, "embedding", f"embedding {len(chunks)} chunks"
@@ -213,6 +226,10 @@ class IngestionPipeline:
                 embeddings = self._embed_audio_native(path, chunks, source, result.warnings)
             else:
                 embeddings = self._embed_with_batches([c.text for c in chunks], source)
+
+            # 4b. Join the visual page vectors with their chunks (1:1) -------
+            chunks = [*chunks, *image_chunks]
+            embeddings = [*embeddings, *image_vecs]
 
             # 5. Tag chunks with their topic ---------------------------------
             chunk_locators = [(c.locator_kind, c.locator_value) for c in chunks]
@@ -474,11 +491,114 @@ class IngestionPipeline:
             )
         return vectors
 
+    def _embed_page_images(
+        self, source: SourceRecord, path: Path, units: list[SourceUnit], result: IngestResult
+    ) -> tuple[list[Chunk], list[list[float]]]:
+        """Render document pages/slides to PNGs and embed one image chunk each.
+
+        Text chunks are untouched — retrieval matches both what a page says
+        and what it shows (charts, diagrams, figures). Never raises: render
+        or encode problems become warnings and the source ingests text-only.
+        PNGs persist via FileStorage (auto-cleaned with the source); only
+        vectors reach pgvector. Chunk indices sit above PAGE_IMAGE_INDEX_BASE
+        so re-ingests upsert the same rows whatever the text chunk count is.
+        """
+        empty: tuple[list[Chunk], list[list[float]]] = ([], [])
+        if not self.settings.pdf_page_images or source.source_type not in ("pdf", "pptx"):
+            return empty
+        label = "page" if source.source_type == "pdf" else "slide"
+        want = "page" if source.source_type == "pdf" else "slide"
+        numbers: list[int] = []
+        for u in units:
+            if u.locator_kind != want:
+                continue
+            try:
+                numbers.append(int(u.locator_value))
+            except (TypeError, ValueError):
+                continue
+        numbers = sorted(set(numbers))
+        if not numbers:
+            return empty
+        max_pages = self.settings.pdf_page_image_max_pages
+        if max_pages > 0 and len(numbers) > max_pages:
+            result.warnings.append(
+                f"Page-image budget reached ({max_pages} pages); remaining pages are text-only."
+            )
+            numbers = numbers[:max_pages]
+        try:
+            from .page_images import render_pages
+            rendered = render_pages(path, source.source_type, numbers)
+        except Exception as exc:  # noqa: BLE001 — text still ingests
+            result.warnings.append(f"Page images skipped: {exc}")
+            return empty
+        if not rendered:
+            result.warnings.append("Page rendering produced no images; text-only ingest.")
+            return empty
+        embed_image = getattr(self.embedder, "embed_image", None)
+        if embed_image is None:
+            result.warnings.append(
+                "Page images skipped: the embedding provider has no image input. "
+                "Serve a joint model (e.g. embeddinggemma-2-GGUF + mmproj) from llama.cpp."
+            )
+            return empty
+        from ..storage import FileStorage
+        storage = FileStorage(self.settings.uploads_dir)
+        chunks: list[Chunk] = []
+        vectors: list[list[float]] = []
+        skipped: list[int] = []
+        consec_fail = 0
+        for page_no, png, width, height in rendered:
+            try:
+                storage.write_page_image(source.project_id, source.id, page_no, png)
+                vec = embed_image(png, "image/png")
+            except Exception as exc:  # noqa: BLE001 — one bad page skips itself
+                skipped.append(page_no)
+                consec_fail += 1
+                log.warning("Page image %d skipped for %s: %s", page_no, source.filename, exc)
+                if consec_fail >= 3:
+                    result.warnings.append(
+                        "Page images stopped after 3 consecutive failures "
+                        "(the endpoint may not support image inputs); text still indexed."
+                    )
+                    break
+                continue
+            if len(vec) != self.settings.embedding_dim:
+                skipped.append(page_no)
+                consec_fail += 1
+                log.warning("Page image %d width %d != EMBEDDING_DIM=%d; skipped.",
+                            page_no, len(vec), self.settings.embedding_dim)
+                if consec_fail >= 3:
+                    result.warnings.append(
+                        "Page images stopped after 3 consecutive width mismatches; text still indexed."
+                    )
+                    break
+                continue
+            consec_fail = 0
+            chunks.append(Chunk(
+                text=f"Visual rendering of {label} {page_no} ({width} × {height} px). "
+                     f"Charts, diagrams and figures on this {label} are visible in the attached image.",
+                chunk_index=PAGE_IMAGE_INDEX_BASE + page_no,
+                heading=f"{label.title()} {page_no}",
+                locator_kind="image",
+                locator_value=str(page_no),
+            ))
+            vectors.append([float(x) for x in vec])
+        if skipped:
+            shown = ", ".join(str(n) for n in skipped[:10])
+            more = f" (+{len(skipped) - 10} more)" if len(skipped) > 10 else ""
+            result.warnings.append(f"Page images skipped for {label} {shown}{more}; text still indexed.")
+        return chunks, vectors
+
     def _embed_video_native(
         self, path: Path, chunks: list, source: SourceRecord, warnings: list
     ) -> list[list[float]]:
         """
         One keyframe vector per chunk, taken at the chunk's midpoint.
+
+        With VIDEO_CLIP_SECONDS set, a middle clip of that length is embedded
+        as video instead (needs a video-capable endpoint); anything the clip
+        path cannot handle — missing method, cut failure, batch overflow —
+        falls back to the still with a warning, so enabling it is safe.
 
         Chunks without timestamps — or whose frame cannot be read (midpoint
         past the file duration) — fall back to a text embedding, recorded
@@ -486,7 +606,7 @@ class IngestionPipeline:
         engine — prove it first with `uv run python scripts/probe_multimodal.py`,
         then set VIDEO_EMBED_MODE=native and re-ingest the corpus.
         """
-        from .video_frames import extract_frame
+        from .video_frames import extract_frame, slice_clip
 
         embed_image = getattr(self.embedder, "embed_image", None)
         if embed_image is None:
@@ -494,12 +614,30 @@ class IngestionPipeline:
                 "The configured embedding provider does not support image inputs. "
                 "Use a joint vision-text embedding model, or keep VIDEO_EMBED_MODE=transcript."
             )
+        embed_video = getattr(self.embedder, "embed_video", None)
+        clip_seconds = float(self.settings.video_clip_seconds or 0.0)
+        if clip_seconds > 0 and embed_video is None:
+            log.warning("VIDEO_CLIP_SECONDS is set but the embedder has no video input; still frames used.")
+            clip_seconds = 0.0
         vectors: list[list[float]] = []
+        clip_tries = 0
+        clip_fallbacks = 0
         for c in chunks:
             label = f"{c.locator_kind} {c.locator_value}"
             try:
                 if c.start_ts is not None and c.end_ts is not None and c.end_ts > c.start_ts:
                     mid = (c.start_ts + c.end_ts) / 2.0
+                    if clip_seconds > 0:
+                        clip_tries += 1
+                        try:
+                            start = max(mid - clip_seconds / 2.0, 0.0)
+                            clip = slice_clip(path, start, clip_seconds,
+                                              self.settings.video_clip_width)
+                            vectors.append(embed_video(clip, "video/mp4"))
+                            continue
+                        except Exception as exc:  # noqa: BLE001 — still frame covers it
+                            clip_fallbacks += 1
+                            log.warning("Video clip at %.1fs skipped for %s: %s", mid, source.filename, exc)
                     try:
                         frame = extract_frame(path, mid, self.settings.video_frame_width)
                     except Exception as exc:
@@ -520,6 +658,12 @@ class IngestionPipeline:
                 f"Video embedding width {sorted(wrong)} does not match EMBEDDING_DIM={expected}. "
                 f"Set EMBEDDING_DIM to your model's output width, then re-embed the "
                 f"corpus with uv run python scripts/re_embed.py (use --check first)."
+            )
+        if clip_tries and clip_fallbacks == clip_tries:
+            warnings.append(
+                f"All {clip_tries} video clips fell back to still frames "
+                "(clip too long for the server batch, or no video input) — "
+                "lower VIDEO_CLIP_SECONDS or raise --ubatch-size."
             )
         return vectors
 

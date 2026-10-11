@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Study Companion: FastAPI backend at repo root (`app/`) and production Vite/React
+NotesLyt: FastAPI backend at repo root (`app/`) and production Vite/React
 frontend in `frontend/`. Treat both as active product code: keep API contracts
 typed in `frontend/src/lib/types.ts` and `api.ts`, and verify frontend changes
 with `npm run build`.
@@ -93,6 +93,19 @@ profiles across separate projects and reports mastery gain, question repetition
   filename is kept in the `sources` row.
 - `app/storage.py` owns extension→type→MIME mapping. Do not re-derive it elsewhere.
 
+## Branding
+
+- Product name is **NotesLyt**. The live Postgres database keeps its
+  `StudyCompanion` name (existing data); do not rename it.
+- Logo suite in `frontend/public/` (served statically; the folder must stay
+  lowercase `public/` for Vite). `favicon.svg` derives from
+  `04-app-icon-green.svg`.
+- Shared lockup: `frontend/src/components/Brand.tsx` — theme-aware mark
+  (`02-app-icon-black.svg` on dark, `03-app-icon-white.svg` on light),
+  wordmark "Notes" in `var(--text-primary)` + "lyt" in emerald. Reuse it for
+  any new header/login surface instead of inventing logos.
+- Browser storage keys are `noteslyt:*`; renaming them logs users out.
+
 ## Architecture rules
 
 - **All SQL lives in `app/repo/`.** Routers and services never build queries.
@@ -124,6 +137,13 @@ profiles across separate projects and reports mastery gain, question repetition
   (`app/ingestion/registry.py`); images are indexed with the configured
   multimodal embedding endpoint without generating captions.
   Unregistered types (doc/ppt/xls/zip/…) are refused at upload with a reason.
+- Every PDF page is additionally rendered to PNG (`app/ingestion/page_images.py`,
+  stored via `FileStorage.page_image_*`, auto-cleaned with the source) and
+  embedded as an `image`-kind chunk (`[Image N]`) next to the text chunks —
+  retrieval matches both. Chunk indices sit above `PAGE_IMAGE_INDEX_BASE` so
+  re-ingests upsert stably. Text-only endpoints ingest text-only with a
+  warning; slides need LibreOffice (`soffice`), else text-only. Disable with
+  `PDF_PAGE_IMAGES=false`.
 
 ## Gotchas
 

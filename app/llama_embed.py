@@ -52,7 +52,7 @@ _GITHUB_API = "https://api.github.com/repos/{repo}/releases?per_page=30"
 
 # ================================================================== releases
 def _github_json(url: str, timeout: int = 30) -> Any:
-    req = urllib.request.Request(url, headers={"User-Agent": "study-companion/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "noteslyt/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8", errors="ignore"))
 
@@ -150,7 +150,7 @@ def download_file(url: str, dest: Path, label: str = "") -> None:
     """Stream-download with MB progress on the log line. Atomic via rename."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.parent / f".dl-{dest.name}-{os.getpid()}"
-    req = urllib.request.Request(url, headers={"User-Agent": "study-companion/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "noteslyt/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=300) as resp, tmp.open("wb") as out:
             total = int(resp.headers.get("Content-Length") or 0)
@@ -382,7 +382,7 @@ class LocalEmbeddingServer:
             return False
         try:
             req = urllib.request.Request(f"{self.base_url[:-3]}/health",
-                                         headers={"User-Agent": "study-companion/1.0"})
+                                         headers={"User-Agent": "noteslyt/1.0"})
             with urllib.request.urlopen(req, timeout=5) as resp:
                 return resp.status == 200
         except Exception:
@@ -400,6 +400,7 @@ class LocalEmbeddingServer:
             "--embedding",
             "--pooling", "mean",
             "--ctx-size", str(s.embedding_local_ctx),
+            "--ubatch-size", str(s.embedding_local_ubatch_size),
             "--host", s.embedding_local_host,
             "--port", str(s.embedding_local_port),
         ]
@@ -428,7 +429,7 @@ class LocalEmbeddingServer:
                 raise RuntimeError("Local embedding server exited during startup — see logs/llama-server.log.")
             try:
                 req = urllib.request.Request(
-                    f"{self.base_url[:-3]}/health", headers={"User-Agent": "study-companion/1.0"})
+                    f"{self.base_url[:-3]}/health", headers={"User-Agent": "noteslyt/1.0"})
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     # /health is 200 while still loading — only "ok" means the
                     # model (and mtmd encoders) are actually ready. Returning
@@ -538,11 +539,13 @@ class LocalEmbeddingServer:
 class ManagedEmbedder:
     """OpenAI-compatible embedder pointed at the managed server, with wake-on-API."""
 
-    def __init__(self, manager: LocalEmbeddingServer, model: str, batch_size: int = 64) -> None:
+    def __init__(self, manager: LocalEmbeddingServer, model: str, batch_size: int = 64,
+                 max_input_chars: int = 1500) -> None:
         from .llm import OpenAICompatibleEmbedder
 
         self._manager = manager
-        self._inner = OpenAICompatibleEmbedder(manager.base_url, "local", model, batch_size)
+        self._inner = OpenAICompatibleEmbedder(manager.base_url, "local", model, batch_size,
+                                               max_input_chars)
         self.name = f"llama-local:{model}"
 
     def _wake(self) -> None:
@@ -560,6 +563,10 @@ class ManagedEmbedder:
     def embed_audio(self, audio: bytes, mime: str) -> list[float]:
         self._wake()
         return self._inner.embed_audio(audio, mime)
+
+    def embed_video(self, video: bytes, mime: str) -> list[float]:
+        self._wake()
+        return self._inner.embed_video(video, mime)
 
 
 # ================================================================ singleton

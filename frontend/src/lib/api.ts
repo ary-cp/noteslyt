@@ -57,7 +57,7 @@ function apiOrigin(): string {
   return API_BASE || (typeof window !== "undefined" ? window.location.origin : "same origin");
 }
 
-export const TOKEN_KEY = "study-companion:token";
+export const TOKEN_KEY = "noteslyt:token";
 
 export class ApiError extends Error {
   constructor(

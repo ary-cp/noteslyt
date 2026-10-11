@@ -1,5 +1,5 @@
 """
-Study Companion API — composition root.
+NotesLyt API — composition root.
 
     uvicorn app.main:app --reload --port 8000
 
@@ -46,7 +46,7 @@ from .transcription import build_transcriber
 from .vectorstore import VectorStore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-log = logging.getLogger("study-companion")
+log = logging.getLogger("noteslyt")
 
 
 async def _studio_failure_cleanup(studio: StudioRepo, db: Database) -> None:
@@ -188,7 +188,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Study Companion API",
+    title="NotesLyt API",
     version="1.0.0",
     description="Source-cited RAG tutor + adaptive assessment over your own lecture PDFs.",
     lifespan=lifespan,

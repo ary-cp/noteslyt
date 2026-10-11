@@ -41,7 +41,7 @@ from app.migration_runner import (
 )
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Apply Study Companion SQL migrations.")
+    parser = argparse.ArgumentParser(description="Apply NotesLyt SQL migrations.")
     parser.add_argument("--status", action="store_true", help="report state and exit")
     parser.add_argument("--reset", action="store_true", help="drop all app tables first")
     args = parser.parse_args()

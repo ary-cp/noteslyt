@@ -327,18 +327,24 @@ class ChatService:
         image_parts: list[dict] = []
         seen: set[str] = set()
         for chunk in chunks:
-            if chunk.locator_kind != "image" or chunk.source_id in seen:
+            if chunk.locator_kind != "image":
                 continue
-            seen.add(chunk.source_id)
+            key = f"{chunk.source_id}:{chunk.locator_value}"
+            if key in seen:
+                continue
+            seen.add(key)
             source = self.sources.get(chunk.source_id)
             if source is None:
                 continue
-            path = self.storage.open_for_read(source.project_id, source.id, source.filename)
-            if path is None:
-                log.warning("Retrieved image source %s is missing from storage", source.id)
+            from .storage import read_image_chunk_bytes
+            found = read_image_chunk_bytes(
+                self.storage, source.project_id, source, chunk.locator_kind, chunk.locator_value
+            )
+            if found is None:
+                log.warning("Retrieved image %s is missing from storage", key)
                 continue
-            mime = content_type_for(source.filename).split(";")[0]
-            data_url = f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+            data, mime = found
+            data_url = f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
             image_parts.extend([
                 {"type": "text", "text": f"Source filename: {source.filename}. Retrieved image context labeled [Image {chunk.locator_value}]:"},
                 {"type": "image_url", "image_url": {"url": data_url}},

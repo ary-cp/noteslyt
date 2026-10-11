@@ -146,6 +146,13 @@ export function SourceReader({
   const [error, setError] = useState("");
 
   const citedPage = target?.kind === "page" ? parsePage(target.value) : null;
+  // Image-kind citations from rendered documents carry the page number as
+  // their value — anchor the reader to that page's marker line.
+  const citedImagePage =
+    target?.kind === "image" && (source.source_type === "pdf" || source.source_type === "pptx")
+      ? parsePage(target.value)
+      : null;
+  const anchorPage = citedPage ?? citedImagePage;
   const citedTime = target?.kind === "segment" ? (target.value ? parseTimestamp(target.value) : null) : null;
   const citedEnd =
     target?.kind === "segment" && target.end != null && citedTime !== null && target.end > citedTime
@@ -305,7 +312,7 @@ export function SourceReader({
               <CitedMarkdown
                 text={markdown}
                 snippet={target?.snippet ?? null}
-                page={citedPage}
+                page={anchorPage}
                 nonce={target?.nonce ?? 0}
                 jumpTick={0}
               />
@@ -314,7 +321,7 @@ export function SourceReader({
                 source={source}
                 kind={kind}
                 url={blobUrl}
-                page={citedPage}
+                page={anchorPage}
                 time={citedTime}
                 stopAt={citedEnd}
                 seekKey={target?.nonce ?? 0}
