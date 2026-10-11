@@ -593,7 +593,10 @@ class IngestionPipeline:
         self, path: Path, chunks: list, source: SourceRecord, warnings: list
     ) -> list[list[float]]:
         """
-        One keyframe vector per chunk, taken at the chunk's midpoint.
+        One video-clip vector per chunk, covering the chunk's own timeframe
+        (10 s parts by default) — transcript text stays the chunk text, so
+        retrieval matches what was said and what was shown. A set
+        VIDEO_CLIP_SECONDS narrows the clip to a middle slice instead.
 
         With VIDEO_CLIP_SECONDS set, a middle clip of that length is embedded
         as video instead (needs a video-capable endpoint); anything the clip
@@ -627,17 +630,24 @@ class IngestionPipeline:
             try:
                 if c.start_ts is not None and c.end_ts is not None and c.end_ts > c.start_ts:
                     mid = (c.start_ts + c.end_ts) / 2.0
+                    # True video RAG: the whole ~10 s part is embedded as one
+                    # clip (transcript text stays the chunk text). A set
+                    # VIDEO_CLIP_SECONDS narrows it to a middle slice instead.
                     if clip_seconds > 0:
-                        clip_tries += 1
-                        try:
-                            start = max(mid - clip_seconds / 2.0, 0.0)
-                            clip = slice_clip(path, start, clip_seconds,
-                                              self.settings.video_clip_width)
-                            vectors.append(embed_video(clip, "video/mp4"))
-                            continue
-                        except Exception as exc:  # noqa: BLE001 — still frame covers it
-                            clip_fallbacks += 1
-                            log.warning("Video clip at %.1fs skipped for %s: %s", mid, source.filename, exc)
+                        start = max(mid - clip_seconds / 2.0, 0.0)
+                        duration = clip_seconds
+                    else:
+                        start = max(c.start_ts, 0.0)
+                        duration = c.end_ts - c.start_ts
+                    clip_tries += 1
+                    try:
+                        clip = slice_clip(path, start, duration,
+                                          self.settings.video_clip_width)
+                        vectors.append(embed_video(clip, "video/mp4"))
+                        continue
+                    except Exception as exc:  # noqa: BLE001 — still frame covers it
+                        clip_fallbacks += 1
+                        log.warning("Video clip at %.1fs skipped for %s: %s", mid, source.filename, exc)
                     try:
                         frame = extract_frame(path, mid, self.settings.video_frame_width)
                     except Exception as exc:

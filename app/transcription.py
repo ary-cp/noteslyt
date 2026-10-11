@@ -147,6 +147,11 @@ class Transcriber:
 
     def __init__(self, base_url: str, api_key: str, model: str, language: str | None = None):
         self._client = OpenAI(base_url=base_url, api_key=api_key)
+        # The no-language probe below is expected to fail on strict servers
+        # (one 501 teaches us the endpoint's quirk); it must not pay the SDK's
+        # retries, or one probe looks like three identical errors in the log.
+        # Everything else keeps resilient retries for transient failures.
+        self._probe_client = self._client.with_options(max_retries=0)
         self.model = model
         self.base_url = base_url
         self.language = language
@@ -156,7 +161,8 @@ class Transcriber:
         # a doomed request (+ the SDK's own retries) per audio piece.
         self._needs_language = False
 
-    def _create(self, audio_path: Path, response_format: str, language: str | None):
+    def _create(self, audio_path: Path, response_format: str, language: str | None, *, retries: bool = True):
+        client = self._client if retries else self._probe_client
         with audio_path.open("rb") as fh:
             kwargs: dict = {
                 "model": self.model,
@@ -165,7 +171,7 @@ class Transcriber:
             }
             if language:
                 kwargs["language"] = language
-            return self._client.audio.transcriptions.create(**kwargs)
+            return client.audio.transcriptions.create(**kwargs)
 
     def transcribe(self, audio_path: Path) -> list[Segment]:
         fallback_lang = self.language or "en"
@@ -178,7 +184,7 @@ class Transcriber:
                 result = self._transcribe_with_timestamps(audio_path, fallback_lang)
             return self._to_segments(result, audio_path)
         try:
-            result = self._create(audio_path, "verbose_json", self.language)
+            result = self._create(audio_path, "verbose_json", self.language, retries=False)
         except Exception as exc:
             # Some self-hosted engines (e.g. whisper.cpp-style servers like
             # LM Studio's local STT) answer 501 to `verbose_json` without an

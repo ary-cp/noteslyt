@@ -76,11 +76,14 @@ def _platform_keywords() -> list[str]:
     cuda = shutil.which("nvidia-smi") is not None
     if system == "windows":
         arch = "arm64" if machine in {"arm64", "aarch64"} else "x64"
-        keys = [f"win-cuda-12-x64", "win-cuda-x64", "cuda"] if cuda else []
+        # Versioned first: releases name them win-cuda-12.4-x64, which the
+        # bare "win-cuda-x64" fragment never matches (and bare "cuda" alone
+        # loses the score sum to win-cpu-x64 + cpu — serve CPU on NVIDIA).
+        keys = [f"win-cuda-12", "win-cuda", "cuda"] if cuda else []
         return keys + [f"win-cpu-{arch}", "cpu", "win-vulkan-x64", "vulkan"]
     if system == "linux":
         arch = "arm64" if machine in {"arm64", "aarch64"} else "x64"
-        keys = ["ubuntu-cuda-x64", "cuda"] if cuda else []
+        keys = ["ubuntu-cuda-12", "ubuntu-cuda", "cuda"] if cuda else []
         return keys + [f"ubuntu-{arch}", "vulkan", "cpu"]
     if system == "darwin":
         return ["macos-arm64", "arm64"] if machine in {"arm64", "aarch64"} else ["macos-x64", "x64"]
@@ -401,6 +404,8 @@ class LocalEmbeddingServer:
             "--pooling", "mean",
             "--ctx-size", str(s.embedding_local_ctx),
             "--ubatch-size", str(s.embedding_local_ubatch_size),
+            "--video-fps", str(s.embedding_local_video_fps),
+            "--batch-size", str(s.embedding_local_batch_size),
             "--host", s.embedding_local_host,
             "--port", str(s.embedding_local_port),
         ]

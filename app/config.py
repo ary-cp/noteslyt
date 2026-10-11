@@ -94,8 +94,18 @@ class Settings(BaseSettings):
     embedding_local_ctx: int = 8192
     # Physical batch (llama.cpp -ub/--ubatch-size, default 512): the longest
     # single input the server accepts. Raised so ordinary chunks embed in one
-    # call; the client still splits anything longer (see above).
+    # call; the client still splits anything longer (see above). Note the
+    # server caps ubatch at the logical batch below, so raise both together.
     embedding_local_ubatch_size: int = 2048
+    # Video sampling rate for the embedding endpoint (llama.cpp --video-fps).
+    # Default 1.0: at 1 fps a 20 s clip costs ~1.7k tokens (~84/frame at
+    # 320 px), fitting ubatch 2048; at 4.0 the same clip costs ~6.6k.
+    # Still overrideable via EMBEDDING_LOCAL_VIDEO_FPS.
+    embedding_local_video_fps: float = 1.0
+    # Logical batch (llama.cpp -b/--batch-size, default 2048): upper bound for
+    # ubatch. Raise only alongside ubatch — it reserves compute buffers and
+    # costs RAM whether used or not.
+    embedding_local_batch_size: int = 2048
     embedding_local_repo: str = "ggml-org/embeddinggemma-2-GGUF"
     embedding_local_model_file: str = "embeddinggemma-2-Q8_0.gguf"
     embedding_local_mmproj_file: str = "mmproj-embeddinggemma-2-Q8_0.gguf"
@@ -131,15 +141,22 @@ class Settings(BaseSettings):
     # (With AUDIO_EMBED_MODE=native, video falls back to soundtrack vectors;
     # VIDEO_EMBED_MODE=native takes precedence for video and uses frames.)
     video_embed_mode: Literal["transcript", "native"] = "transcript"
+    # Video is broken into short parts carrying BOTH signals: each part's
+    # transcript text plus one embedded video clip of the same timeframe, so
+    # retrieval matches what was said and what was shown. Parts stay ~10 s
+    # so one clip fits the embedding batch (see VIDEO_CLIP_* below).
+    video_segment_seconds: float = 10.0
     # Middle-clip seconds embedded per segment instead of a still keyframe
-    # (needs VIDEO_EMBED_MODE=native + a video-capable embedding endpoint —
-    # verified live on embeddinggemma-2: a 2 s clip is ~1k tokens). 0 keeps
-    # stills. Clips past the server's batch fall back to the still with a
-    # warning. Measured budget at 480 px: ~330 tokens/s, so ~3 s fits ubatch
-    # 2048 and ~25 s fits 8192 (--video-fps does NOT change /embeddings
-    # sampling in this llama.cpp build — verified identical token counts).
+    # (needs VIDEO_EMBED_MODE=native + a video-capable embedding endpoint).
+    # 0 keeps stills. Proven recipe for full ~10 s parts in one vector:
+    # EMBEDDING_LOCAL_VIDEO_FPS=1.0, VIDEO_CLIP_SECONDS=10 (or 0 for the
+    # whole part — same thing at 10 s parts), VIDEO_CLIP_WIDTH=720 max
+    # (≈1.7k tokens: 10 frames × ~169/frame, fits ubatch 2048, ~2 s on GPU).
+    # Wider input is downscaled to the width; narrower passes through, so
+    # small originals never pay upscaling tokens. Oversize clips fall back
+    # to the still with a warning naming the fix.
     video_clip_seconds: float = 0.0
-    video_clip_width: int = 480       # px; aspect preserved, keeps tokens down
+    video_clip_width: int = 720        # max width px; downscale-only, never upscale
 
     # --------------------------------------------------------- Transcription
     # Speech-to-text for lecture videos. Any OpenAI-compatible
