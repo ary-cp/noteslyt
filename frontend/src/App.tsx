@@ -1,6 +1,6 @@
 import type * as React from "react";
 /**
- * StudySpace — AI learning workspace.
+ * Noteslyt — AI learning workspace.
  *
  * Routes:
  *   /            → dashboard

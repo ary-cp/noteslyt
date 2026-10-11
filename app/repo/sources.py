@@ -57,6 +57,23 @@ class SourceRepo(Repo):
             (project_id, project_id, source_ids, per_source),
         )
 
+    def list_segments(self, source_id: str, user_id: str) -> list[dict[str, Any]]:
+        """Timed chunks for the viewer's transcript rail, ownership-checked.
+
+        Only chunks with a start timestamp (transcribed audio/video
+        segments), oldest first. The join on projects proves the caller owns
+        the source, so an id from another learner yields no rows.
+        """
+        return self._fetch_all(
+            "select c.locator_kind,c.locator_value,c.heading,"
+            "substring(c.text,1,600) as text,c.start_ts,c.end_ts,c.chunk_index "
+            "from chunks c join sources s on s.id=c.source_id "
+            "join projects p on p.id=s.project_id "
+            "where c.source_id=%s and p.user_id=%s and c.start_ts is not null "
+            "order by c.start_ts, c.chunk_index limit 1000",
+            (source_id, user_id),
+        )
+
     def save_content(self, source_id: str, markdown: str, truncated: bool = False) -> None:
         """Persist the parser's markdown for the viewer ("what the model read").
 
