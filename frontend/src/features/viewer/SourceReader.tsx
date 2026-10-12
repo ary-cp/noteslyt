@@ -7,7 +7,7 @@
  * the cited block. Audio/video pin a compact player above the transcript.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Download, FileText } from "lucide-react";
 import { fetchSourceBlob, getSourceContent } from "../../lib/api";
 import type { SourceOut, ViewerTarget } from "../../lib/types";
@@ -20,6 +20,8 @@ import {
   scrollElIntoView,
   spliceCiteMarkers,
 } from "../../lib/highlight";
+import MediaPane from "./MediaPane";
+const PdfPane = lazy(() => import("./PdfPane"));
 import { MarkdownBody } from "../chat/ChatPanel";
 
 /** "3" → 3; anything else → null (never trust a locator into navigation). */
@@ -27,21 +29,6 @@ function parsePage(value?: string): number | null {
   if (value == null) return null;
   const n = Number(value);
   return Number.isInteger(n) && n >= 1 ? n : null;
-}
-
-function seekMedia(el: HTMLMediaElement | null, time: number) {
-  if (!el) return;
-  const apply = () => {
-    try {
-      el.currentTime =
-        Number.isFinite(el.duration) && el.duration > 0 ? Math.min(time, Math.max(0, el.duration - 0.25)) : time;
-    } catch {
-      /* metadata not ready — the loadedmetadata listener below retries */
-    }
-    void el.play().catch(() => undefined);
-  };
-  if (el.readyState >= 1) apply();
-  else el.addEventListener("loadedmetadata", apply, { once: true });
 }
 
 /**
@@ -97,39 +84,6 @@ function CitedMarkdown({
   );
 }
 
-/** Compact player pinned above the transcript; seeks on every citation. */
-function MediaPlayer({
-  kind,
-  url,
-  time,
-  stopAt,
-  seekKey,
-}: {
-  kind: "video" | "audio";
-  url: string;
-  time: number | null;
-  stopAt: number | null;
-  seekKey: number;
-}) {
-  const ref = useRef<HTMLVideoElement & HTMLAudioElement>(null);
-  useEffect(() => {
-    if (time !== null) seekMedia(ref.current, time);
-  }, [url, time, seekKey]);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || stopAt === null || time === null || stopAt <= time) return;
-    const onTime = () => {
-      if (el.currentTime >= stopAt) el.pause();
-    };
-    el.addEventListener("timeupdate", onTime);
-    return () => el.removeEventListener("timeupdate", onTime);
-  }, [url, time, stopAt, seekKey]);
-  if (kind === "video") {
-    return <video ref={ref} src={url} controls preload="metadata" className="w-full rounded-[8px] border border-[var(--border)]" />;
-  }
-  return <audio ref={ref} src={url} controls preload="metadata" className="w-full" />;
-}
-
 export function SourceReader({
   source,
   target,
@@ -165,16 +119,15 @@ export function SourceReader({
         ? citationLabel(target.kind, target.value)
         : "";
 
-  // Parsed / Original tabs (pdf + audio/video have both views). Every fresh
-  // citation returns to the parsed text with the cited lines highlighted.
+  // Parsed / Original tabs (pdf + audio/video have both views). Citations open the original at the cited page or playback position.
   const hasOriginal = kind === "pdf" || kind === "video" || kind === "audio";
-  const [tab, setTab] = useState<"parsed" | "original">("parsed");
+  const [tab, setTab] = useState<"parsed" | "original">(hasOriginal ? "original" : "parsed");
   const prevTarget = useRef(target?.nonce ?? -1);
   useEffect(() => {
     const n = target?.nonce ?? -1;
     if (prevTarget.current === n) return;
     prevTarget.current = n;
-    setTab("parsed");
+    setTab(hasOriginal ? "original" : "parsed");
   });
 
   useEffect(() => {
@@ -286,7 +239,7 @@ export function SourceReader({
           ) : (
             <ReaderLoading label="Loading document…" />
           )
-        ) : markdown !== null ? (
+        ) : markdown !== null || hasOriginal ? (
           <div>
             {hasOriginal && (
               <div className="mb-3 flex gap-1 border-b border-[var(--border)]" role="tablist" aria-label="Source view">
@@ -308,25 +261,13 @@ export function SourceReader({
                 ))}
               </div>
             )}
-            {tab === "parsed" || !hasOriginal ? (
-              <CitedMarkdown
-                text={markdown}
-                snippet={target?.snippet ?? null}
-                page={anchorPage}
-                nonce={target?.nonce ?? 0}
-                jumpTick={0}
-              />
-            ) : (
-              <OriginalPane
-                source={source}
-                kind={kind}
-                url={blobUrl}
-                page={anchorPage}
-                time={citedTime}
-                stopAt={citedEnd}
-                seekKey={target?.nonce ?? 0}
-              />
-            )}
+            <div hidden={tab !== "parsed" && hasOriginal}>
+              <CitedMarkdown text={markdown ?? ""} snippet={target?.snippet ?? null} page={anchorPage} nonce={target?.nonce ?? 0} jumpTick={0} />
+            </div>
+            {hasOriginal && <div hidden={tab !== "original"}>
+              <OriginalPane key={source.id} source={source} kind={kind} url={blobUrl} page={anchorPage} time={citedTime} stopAt={citedEnd}
+                seekKey={target?.nonce ?? 0} active={tab === "original"} markdown={markdown ?? ""} snippet={target?.snippet} />
+            </div>}
           </div>
         ) : (
           <div className="rounded-[8px] border border-[var(--border)] p-4 text-sm text-[var(--text-secondary)]">
@@ -346,43 +287,13 @@ export function SourceReader({
 }
 
 /** Original file view inside the sidebar: PDF page, media player. */
-function OriginalPane({
-  source,
-  kind,
-  url,
-  page,
-  time,
-  stopAt,
-  seekKey,
-}: {
-  source: SourceOut;
-  kind: "pdf" | "video" | "audio";
-  url: string | null;
-  page: number | null;
-  time: number | null;
-  stopAt: number | null;
-  seekKey: number;
+function OriginalPane({ source, kind, url, page, time, stopAt, seekKey, active, markdown, snippet }: {
+  source: SourceOut; kind: "pdf" | "video" | "audio"; url: string | null; page: number | null;
+  time: number | null; stopAt: number | null; seekKey: number; active: boolean; markdown: string; snippet?: string;
 }) {
   if (!url) return <ReaderLoading label="Loading file…" />;
-  if (kind === "pdf") {
-    const src = page !== null ? `${url}#page=${page}` : url;
-    return (
-      <iframe
-        key={`${source.id}-${page ?? "all"}-${seekKey}`}
-        src={src}
-        title={source.filename}
-        className="h-[60vh] w-full rounded-[8px] border border-[var(--border)] bg-white"
-      />
-    );
-  }
-  return (
-    <div>
-      <MediaPlayer kind={kind} url={url} time={time} stopAt={stopAt} seekKey={seekKey} />
-      <p className="mt-2 text-xs text-[var(--text-muted)]">
-        {source.duration_s ? `${formatDuration(source.duration_s)} · ` : ""}Original {kind} — seek follows citations.
-      </p>
-    </div>
-  );
+  if (kind === "pdf") return <Suspense fallback={<ReaderLoading label="Opening PDF…" />}><PdfPane url={url} page={page} seekKey={seekKey} jumpTick={0} /></Suspense>;
+  return <MediaPane title={source.filename} active={active} url={url} video={kind === "video"} time={time} stopAt={stopAt} seekKey={seekKey} jumpTick={0} markdown={markdown} snippet={snippet} />;
 }
 
 function ReaderLoading({ label }: { label: string }) {

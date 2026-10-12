@@ -1,15 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Play, Pause, Volume2, VolumeX, Maximize, SkipBack, SkipForward } from "lucide-react";
+import { Play, Pause, Volume2, VolumeX, Maximize, SkipBack, SkipForward, Headphones, Captions, PictureInPicture2, Search, SlidersHorizontal, ChevronDown } from "lucide-react";
 import { formatDuration } from "../../lib/utils";
 
 import { transcriptSegments } from "./transcript";
 
-export default function MediaPane({ active, url, video, time, stopAt, seekKey, jumpTick, markdown, snippet }: {
-  active: boolean; url: string; video: boolean; time: number | null; stopAt: number | null;
+export default function MediaPane({ title, active, url, video, time, stopAt, seekKey, jumpTick, markdown, snippet }: {
+  title: string; active: boolean; url: string; video: boolean; time: number | null; stopAt: number | null;
   seekKey: number; jumpTick: number; markdown: string; snippet?: string;
 }) {
   const ref = useRef<HTMLVideoElement & HTMLAudioElement>(null);
   const player = useRef<HTMLDivElement>(null);
+  const previousVolume = useRef(1);
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const transcript = useRef<HTMLDivElement>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [transcriptOpen, setTranscriptOpen] = useState(true);
+  const [remaining, setRemaining] = useState(false);
+  const [sleepMinutes, setSleepMinutes] = useState(0);
+  useEffect(() => {
+    if (!sleepMinutes) return;
+    const timer = window.setTimeout(() => { ref.current?.pause(); setSleepMinutes(0); }, sleepMinutes * 60_000);
+    return () => window.clearTimeout(timer);
+  }, [sleepMinutes]);
+  const [captions, setCaptions] = useState(false);
+  const [follow, setFollow] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [buffered, setBuffered] = useState(0);
   const clipEnd = useRef<number | null>(null);
   const [playing, setPlaying] = useState(false);
   const [waiting, setWaiting] = useState(false);
@@ -25,6 +42,16 @@ export default function MediaPane({ active, url, video, time, stopAt, seekKey, j
     if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
     else void player.current?.requestFullscreen().catch(() => setError("Fullscreen is unavailable in this browser."));
   }
+  async function pictureInPicture() {
+    try {
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else await ref.current?.requestPictureInPicture();
+    } catch { setError("Picture-in-picture is unavailable for this video."); }
+  }
+  function toggleMute() {
+    if (volume > 0) { previousVolume.current = volume; changeVolume(0); }
+    else changeVolume(previousVolume.current || 1);
+  }
   function changeVolume(value: number) {
     setVolume(value);
     if (ref.current) { ref.current.volume = value; ref.current.muted = value === 0; }
@@ -36,6 +63,14 @@ export default function MediaPane({ active, url, video, time, stopAt, seekKey, j
   const [error, setError] = useState("");
   const segments = useMemo(() => transcriptSegments(markdown), [markdown]);
   const validEnd = time !== null && stopAt !== null && stopAt > time ? stopAt : null;
+
+  const activeIndex = segments.findIndex((segment, i) => position >= segment.start && position < (segment.end ?? segments[i + 1]?.start ?? duration));
+  useEffect(() => {
+    if (!follow || query) return;
+    const box = transcript.current;
+    const row = box?.querySelector<HTMLElement>('[aria-current="true"]');
+    if (box && row) box.scrollTo({ top: row.offsetTop - box.offsetTop - box.clientHeight / 3, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }, [activeIndex, follow, query]);
 
   function seek(value: number, play = false) {
     const el = ref.current;
@@ -52,7 +87,7 @@ export default function MediaPane({ active, url, video, time, stopAt, seekKey, j
     const apply = () => {
       clipEnd.current = validEnd;
       setClip(validEnd !== null);
-      seek(time, true);
+      seek(time, activeRef.current);
     };
     if (el.readyState >= 1) apply();
     else el.addEventListener("loadedmetadata", apply, { once: true });
@@ -63,7 +98,10 @@ export default function MediaPane({ active, url, video, time, stopAt, seekKey, j
 
   const mediaProps = {
     ref, src: url, controls: false, preload: "metadata", className: "max-h-[40vh] w-full rounded-lg bg-black object-contain",
-    onPlay: () => setPlaying(true),
+    onPlay: () => { setPlaying(true); setError(""); },
+    onVolumeChange: () => setVolume(ref.current?.muted ? 0 : ref.current?.volume ?? 1),
+    onRateChange: () => setSpeed(ref.current?.playbackRate ?? 1),
+    onProgress: () => { const el = ref.current; if (el?.buffered.length) setBuffered(el.buffered.end(el.buffered.length - 1)); },
     onPause: () => setPlaying(false),
     onWaiting: () => setWaiting(true),
     onCanPlay: () => setWaiting(false),
@@ -94,33 +132,55 @@ export default function MediaPane({ active, url, video, time, stopAt, seekKey, j
       if (e.key === " " || e.key.toLowerCase() === "k") { e.preventDefault(); togglePlayback(); }
       if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); fullPlayback(); seek(position + (e.key === "ArrowLeft" ? -5 : 5)); }
       if (e.key.toLowerCase() === "f") fullscreen();
-      if (e.key.toLowerCase() === "m") changeVolume(volume ? 0 : 1);
+      if (e.key.toLowerCase() === "m") toggleMute();
     }}>
+      {!video && <div className="audio-cover">
+        <span className={`audio-disc ${playing ? "is-playing" : ""}`}><Headphones size={32} /></span>
+        <span className="text-[10px] font-semibold uppercase tracking-[.2em] text-emerald-300">Audio source</span>
+        <h3 className="max-w-full break-words text-center text-base font-semibold">{title}</h3>
+        <span className="font-mono text-2xl tabular-nums text-white/90">{formatDuration(position)} <span className="text-sm text-white/40">/ {formatDuration(duration)}</span></span>
+        <p className="text-xs text-white/50">{waiting ? "Buffering…" : playing ? "Now playing" : "Ready to listen"}</p>
+      </div>}
       <div className="relative">
-        {video ? <video {...mediaProps} playsInline /> : <audio {...mediaProps} />}
+        {video ? <video {...mediaProps} playsInline /> : <audio {...mediaProps} className="hidden" />}
+        {video && captions && activeIndex >= 0 && <div className="pointer-events-none absolute inset-x-3 bottom-3 text-center"><span className="inline-block max-h-28 overflow-hidden rounded-md bg-black/80 px-3 py-2 text-sm leading-relaxed text-white">{segments[activeIndex].text}</span></div>}
         {video && !playing && <button type="button" aria-label="Play video" onClick={togglePlayback} className="absolute left-1/2 top-1/2 flex h-14 w-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-black/60 text-white shadow-lg"><Play size={24} fill="currentColor" /></button>}
         {waiting && <span role="status" className="absolute right-3 top-3 rounded bg-black/70 px-2 py-1 text-xs">Buffering…</span>}
       </div>
       {error && <p role="alert" className="p-2 text-sm text-[var(--danger)]">{error}</p>}
       <div className="relative mx-1 mt-3 h-5" title={time !== null ? `Highlighted citation starts at ${formatDuration(time)}` : "Seek through source"}>
         <div className="absolute inset-x-0 top-2 h-1 rounded bg-[var(--border)]" />
+        {duration > 0 && <div className="absolute left-0 top-2 h-1 rounded bg-white/20" style={{ width: `${Math.min(100, buffered / duration * 100)}%` }} />}
         {time !== null && duration > 0 && <div aria-label="Cited range" className="absolute top-1 h-3 rounded bg-[var(--accent)]/50" style={{ left: `${Math.min(time / duration, 1) * 100}%`, width: `${Math.max(0.5, (Math.min(validEnd ?? time + 1, duration) - Math.min(time, duration)) / duration * 100)}%` }} />}
-        <input aria-label="Playback position" type="range" min={0} max={duration || 1} step={0.1} value={position} disabled={!duration}
+        <input aria-label="Playback position" aria-valuetext={`${formatDuration(position)} of ${formatDuration(duration)}`} type="range" min={0} max={duration || 1} step={0.1} value={position} disabled={!duration}
           onChange={(e) => { fullPlayback(); seek(Number(e.target.value)); }} className="media-timeline absolute inset-0 w-full cursor-pointer" style={{ background: `linear-gradient(to right, #34d399 ${duration ? position / duration * 100 : 0}%, transparent 0)` }} />
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
         <button type="button" aria-label={playing ? "Pause playback" : "Play playback"} onClick={togglePlayback} className="rounded-lg bg-white/10 p-2 hover:bg-white/20">{playing ? <Pause size={18} /> : <Play size={18} />}</button>
-        <span className="mr-auto font-mono text-white/75">{formatDuration(position)} / {formatDuration(duration)}</span>
+        <button type="button" aria-label={remaining ? "Show elapsed time" : "Show remaining time"} onClick={() => setRemaining((v) => !v)} className="mr-auto rounded px-1 font-mono tabular-nums text-white/65">{remaining ? `−${formatDuration(Math.max(0, duration - position))}` : formatDuration(position)} / {formatDuration(duration)}</button>
         <button type="button" disabled={!duration} onClick={() => { fullPlayback(); seek(position - 10); }} className="rounded border border-[var(--border)] px-2 py-1" aria-label="Back ten seconds" title="Back 10 seconds"><SkipBack size={15} /></button>
         <button type="button" disabled={!duration} onClick={() => { fullPlayback(); seek(position + 10); }} className="rounded border border-[var(--border)] px-2 py-1" aria-label="Forward ten seconds" title="Forward 10 seconds"><SkipForward size={15} /></button>
-        <button type="button" aria-label={volume ? "Mute" : "Unmute"} onClick={() => changeVolume(volume ? 0 : 1)} className="rounded p-1.5">{volume ? <Volume2 size={16} /> : <VolumeX size={16} />}</button>
-        <input aria-label="Volume" title="Volume" type="range" min={0} max={1} step={.05} value={volume} onChange={(e) => changeVolume(Number(e.target.value))} className="w-16 accent-emerald-400" />
-        <select aria-label="Playback speed" defaultValue="1" onChange={(e) => { if (ref.current) ref.current.playbackRate = Number(e.target.value); }} className="rounded border border-white/15 bg-[#101216] px-2 py-1">
-          {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}
-        </select>
+        <button type="button" aria-label={volume ? "Mute" : "Unmute"} onClick={() => toggleMute()} className="rounded p-1.5">{volume ? <Volume2 size={16} /> : <VolumeX size={16} />}</button>
+        <button type="button" aria-label="Playback settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((v) => !v)} className="rounded p-1.5"><SlidersHorizontal size={16} /></button>
+        {video && <button type="button" aria-label="Toggle captions" aria-pressed={captions} disabled={!segments.length} onClick={() => setCaptions((v) => !v)} className="rounded p-1.5 disabled:opacity-30"><Captions size={17} /></button>}
+        {video && document.pictureInPictureEnabled && <button type="button" aria-label="Picture in picture" onClick={() => void pictureInPicture()} className="rounded p-1.5"><PictureInPicture2 size={17} /></button>}
         {video && <button type="button" aria-label="Fullscreen video" onClick={fullscreen} className="rounded p-1.5"><Maximize size={16} /></button>}
       </div>
-      <p className="mt-2 text-[10px] text-white/40">Space / K: play · ← →: seek · M: mute{video ? " · F: fullscreen" : ""}</p>
+      {settingsOpen && <div className="viewer-reveal mt-3 space-y-3 border-t border-white/10 pt-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs"><span className="text-white/50">Volume & speed</span>
+        <input aria-label="Volume" title="Volume" type="range" min={0} max={1} step={.05} value={volume} onChange={(e) => changeVolume(Number(e.target.value))} className="w-16 accent-emerald-400" />
+        <select aria-label="Playback speed" value={speed} onChange={(e) => { if (ref.current) ref.current.playbackRate = Number(e.target.value); }} className="rounded border border-white/15 bg-[#101216] px-2 py-1">
+          {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}
+        </select>
+        </div>
+        <label className="flex items-center justify-between gap-2 text-xs text-white/60">Sleep timer
+          <select aria-label="Sleep timer" value={sleepMinutes} onChange={(e) => setSleepMinutes(Number(e.target.value))} className="rounded border border-white/10 bg-[#101216] px-2 py-1">
+            <option value={0}>Off</option>{[5, 15, 30, 60].map((n) => <option key={n} value={n}>{n} minutes</option>)}
+          </select>
+        </label>
+        <p className="text-[10px] text-white/40">Space / K: play · ← →: seek · M: mute{video ? " · F: fullscreen" : ""}</p>
+      </div>}
+      {sleepMinutes > 0 && <p role="status" className="mt-2 text-[10px] text-white/50">Sleep timer on · playback will pause automatically</p>}
     </div>
     {time !== null && <div className="rounded-lg border border-[var(--accent-border)] bg-[var(--accent-soft)] p-3 text-sm">
       <div className="flex flex-wrap items-center gap-2">
@@ -132,11 +192,13 @@ export default function MediaPane({ active, url, video, time, stopAt, seekKey, j
       {snippet && <p className="mt-2 whitespace-pre-wrap text-[var(--text-secondary)]">{snippet}</p>}
       {clip && <p className="mt-2 text-xs text-[var(--text-muted)]">Playback pauses at the end of this section.</p>}
     </div>}
-    <section aria-label="Video source transcript">
-      <h3 className="mb-2 text-sm font-semibold">Source transcript</h3>
+    <section aria-label="Source transcript" className="rounded-xl border border-[var(--border)] p-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><button type="button" aria-expanded={transcriptOpen} onClick={() => setTranscriptOpen((v) => !v)} className="flex items-center gap-2 text-sm font-medium">Transcript <span className="text-xs text-[var(--text-muted)]">{segments.length}</span><ChevronDown size={14} className={`transition-transform ${transcriptOpen ? "" : "-rotate-90"}`} /></button>
+      <button type="button" aria-pressed={follow} onClick={() => setFollow((v) => !v)} className={`rounded-full border px-2 py-1 text-[11px] ${follow ? "border-[var(--accent-border)] text-[var(--accent)]" : "border-[var(--border)] text-[var(--text-muted)]"}`}>Follow playback</button></div>
+      <div hidden={!transcriptOpen}>
       {segments.length > 0 ? <>
-        <input aria-label="Search transcript" placeholder="Search transcript…" value={query} onChange={(e) => setQuery(e.target.value)} className="mb-2 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm" />
-        <div className="space-y-1">{segments.map((segment, index) => {
+        <label className="relative block"><Search size={14} className="absolute left-3 top-3 text-[var(--text-muted)]" /><input aria-label="Search transcript" placeholder="Search transcript…" value={query} onChange={(e) => setQuery(e.target.value)} className="mb-2 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] py-2 pr-3 pl-9 text-sm" /></label>
+        <div ref={transcript} className="relative max-h-[360px] space-y-1 overflow-y-auto">{segments.map((segment, index) => {
           if (!segment.text.toLowerCase().includes(query.toLowerCase())) return null;
           const end = segment.end ?? segments[index + 1]?.start ?? duration;
           const active = position >= segment.start && position < end;
@@ -150,6 +212,7 @@ export default function MediaPane({ active, url, video, time, stopAt, seekKey, j
         })}</div>
         {query && !segments.some((segment) => segment.text.toLowerCase().includes(query.toLowerCase())) && <p className="text-sm text-[var(--text-muted)]">No matching passages.</p>}
       </> : <p className="text-sm text-[var(--text-muted)]">{markdown ? "No timestamped transcript is available. Open Text content to read the extracted source." : "Transcript will appear once transcription is available."}</p>}
+      </div>
     </section>
   </div>;
 }
