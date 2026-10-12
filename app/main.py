@@ -140,10 +140,10 @@ async def lifespan(app: FastAPI):
 
     # Embedding width auto-detect (EMBEDDING_DIM unset): probe wins, then the
     # last known width (live column, else ground truth), so offline reboots
-    # keep working. A fresh install with no reachable endpoint boots anyway —
-    # the setup wizard collects the endpoint first thing after signup.
+    # keep working. If this is a fresh database and the endpoint is not set up
+    # yet, keep the API available so the learner can configure it in the UI.
     if settings.embedding_dim is None:
-        from .drift import last_known_width, setup_completed
+        from .drift import last_known_width
         from .migration_runner import probe_model_dim
 
         probed = probe_model_dim(settings)
@@ -155,18 +155,12 @@ async def lifespan(app: FastAPI):
             if known is not None:
                 settings.embedding_dim = known
                 log.warning("Embedding  : endpoint unreachable, trusting last-known width %d", known)
-            elif not setup_completed(db):
-                log.warning(
-                    "Embedding  : no endpoint yet and no stored width — starting "
-                    "unresolved so first-run setup can collect it. Ingestion "
-                    "waits for the wizard."
-                )
             else:
-                raise RuntimeError(
-                    "Could not determine the embedding width: EMBEDDING_DIM is unset, "
-                    f"the endpoint ({settings.resolved_embedding_base_url}, "
-                    f"model={settings.embedding_model}) is unreachable, and no stored "
-                    "width exists. Set EMBEDDING_DIM or start the endpoint."
+                log.warning(
+                    "Embedding  : no reachable endpoint or stored width — "
+                    "starting unresolved so the app remains available for "
+                    "configuration. Embedding-dependent actions will wait "
+                    "until a working endpoint and width are configured."
                 )
     # Drift no longer refuses to boot (Phase 3, experimental): a model swap
     # without re-embedding degrades vector routes to 409 with the fix, while

@@ -134,6 +134,31 @@ The product UI is the project dashboard and study workspace. Build it with
 `npm run build` so FastAPI can serve it at `http://localhost:8000/`.
 The optional backend test console lives at `/console`.
 
+### Desktop app (Tauri)
+
+The desktop app wraps the same React workspace and starts the FastAPI backend
+for you. It keeps the existing `.env` provider/database configuration and
+uses the same backend features as the browser app. Install Rust and the Tauri
+Windows prerequisites (including WebView2), then run:
+
+```powershell
+uv sync
+cd frontend
+npm install
+npm run tauri:dev
+```
+
+The first launch may take a little longer while the API starts. To create a
+Windows installer, run `npm run tauri:build` from `frontend`. The build uses
+PyInstaller to bundle the FastAPI backend and its Python runtime, then includes
+that backend, migrations and frontend assets in the installer. Target machines
+do not need Python or `uv`. The app uses local SQLite by default; AI features
+still need reachable model endpoints and any required provider credentials.
+Installed builds keep their database and uploads in a `data` folder beside the
+installed app when that folder is writable. Windows-protected install folders
+fall back to the current user's app-data directory. Packaged builds use port
+8765 so they do not attach to a development server on port 8000.
+
 ### 5 · Providers (`.env`)
 
 Every AI capability has its **own** base URL, API key and model, so you can mix
