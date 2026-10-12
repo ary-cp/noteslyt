@@ -1,4 +1,4 @@
-![logo](frontend\public\01-primary-logo.svg)
+![logo](frontend/public/01-primary-logo.svg)
 
 <center> <h1> NotesLyt — source-cited AI tutor + adaptive assessment</h1> </center>
 
