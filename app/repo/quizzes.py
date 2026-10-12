@@ -6,13 +6,14 @@ no scope parameter) inherits its security boundary entirely from this row.
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
 from pgvector import Vector
 from psycopg.types.json import Json
 
-from .base import Repo, to_record, to_records
+from .base import Repo, parse_times, to_record, to_records
 from .models import AnswerRecord, AssessmentRecord, QuestionRecord, QuizRecord
 
 _QUIZ_FIELDS = ("id", "project_id", "user_id", "topic_id", "created_at")
@@ -102,6 +103,10 @@ class QuizRepo(Repo):
         out: list[list[float]] = []
         for r in rows:
             vec = r["stem_embedding"]
+            if isinstance(vec, str):
+                # SQLite backend: JSON text.
+                out.append([float(x) for x in json.loads(vec)])
+                continue
             # pgvector returns its own Vector wrapper — normalize to floats.
             to_list = getattr(vec, "to_list", None)
             vals = to_list() if callable(to_list) else list(vec)
@@ -150,12 +155,23 @@ class QuizRepo(Repo):
 
     # ------------------------------------------------------- assessments
     def find_assessment_for_quiz(self, quiz_id: str, user_id: str) -> AssessmentRecord | None:
-        row = self._fetch_one(
+        # Containment is evaluated in Python (portable): assessment sets per
+        # user are tiny, and neither backend needs a JSON operator.
+        rows = self._fetch_all(
             "select id, project_id, user_id, label, quiz_ids, report, created_at from assessments "
-            "where user_id = %s and quiz_ids @> jsonb_build_array(%s::text)",
-            (user_id, quiz_id),
+            "where user_id = %s",
+            (user_id,),
         )
-        return to_record(AssessmentRecord, row)
+        for r in rows:
+            ids = r["quiz_ids"]
+            if isinstance(ids, str):
+                try:
+                    ids = json.loads(ids)
+                except ValueError:
+                    continue
+            if quiz_id in (ids or []):
+                return to_record(AssessmentRecord, r)
+        return None
 
     def create_assessment(
         self, project_id: str, user_id: str, label: str,
@@ -192,8 +208,9 @@ class QuizRepo(Repo):
             "order by z.created_at desc limit %s",
             (user_id, user_id, user_id, project_id, limit),
         )
-        return [
-            {**r, "id": str(r["id"]),
-             "topic_id": str(r["topic_id"]) if r["topic_id"] else None}
-            for r in rows
-        ]
+        out = []
+        for r in rows:
+            parse_times(r, "created_at")
+            out.append({**r, "id": str(r["id"]),
+                        "topic_id": str(r["topic_id"]) if r["topic_id"] else None})
+        return out

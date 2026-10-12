@@ -23,9 +23,34 @@ Auth + tenancy over HTTP (needs a running server, and `AUTH_SECRET_KEY` set):
 
     uv run python scripts/verify_auth.py          # must print AUTH + TENANCY VERIFIED
 
-These two are the primary backend checks. Together they
+Settings layer over HTTP (needs a running server + migrated DB):
+
+    uv run python scripts/verify_settings.py     # must print SETTINGS VERIFIED
+
+Re-embed layer, in-process (creates + drops a scratch `noteslyt_p3test` DB):
+
+    uv run python scripts/verify_reembed.py      # must print REEMBED VERIFIED
+
+SQLite + Chroma layer, in-process (temporary DATA_DIR, no Postgres):
+
+    uv run python scripts/verify_sqlite.py       # must print SQLITE VERIFIED
+
+First-run setup, in-process (needs a PostgreSQL DSN in DATABASE_URL; creates
++ drops scratch `noteslyt_sutest*` DBs):
+
+    uv run python scripts/verify_setup.py        # must print SETUP VERIFIED
+
+These six are the primary backend checks. Together they
 cover migrations, argon2 auth, token handling, ownership, project-scoped retrieval,
-the tenancy guarantee, cascade deletes and the retrieval gate.
+the tenancy guarantee, cascade deletes, the retrieval gate, the admin
+settings layer (first-user-admin, locked-vs-editable keys, encrypted secrets,
+hot-reload, drift status), the drift lifecycle (non-blocking degraded boot,
+409 guards with revert hints, background re-embed job + force, ground-truth
+tracking in `system_meta`), backend parity (SQLite+Chroma matches Postgres
+semantics: CRUD, project-scoped retrieval, tenancy, drift, job, overlay,
+cascade clearing both homes), and first-run setup (fresh DBs need onboarding,
+upgrades are backfilled complete by migration 0009, complete endpoint is
+admin-only).
 
 HTTP smoke test — `uv run python scripts/smoke_test.py`. For a zero-key run start
 `uv run python scripts/mock_llm.py` first and set
@@ -41,6 +66,17 @@ Frontend — `frontend/` is the production UI. Run `npm run build` before shippi
 the FastAPI app serves `frontend/dist` (or `frontend/build`) on the same port
 when present. `src/harness/TestConsole.tsx` remains a developer test console.
 `scripts/verify_console_flow.py` replays its HTTP sequence against a running server.
+Admin server settings live in `src/components/layout/AdminSettings.tsx`
+(rendered inside `SettingsModal` for `is_admin` users only); the drift banner
+is `src/components/layout/DriftBanner.tsx` (polls `GET /system/settings/status`,
+refreshes immediately on any drift-409 via the `noteslyt:drift-change` event).
+Secrets are write-only in the UI — the API never returns plaintext.
+First-run onboarding is `src/components/layout/SetupWizard.tsx` (rendered from
+`App.tsx` when an admin signs in with setup incomplete; `GET/POST
+/system/setup/*`, flag in `system_meta`, backfilled by migration 0009).
+Model pickers auto-list via admin-only `POST /system/models`
+(`{base_url, api_key?}` in the body — never GET, so keys stay out of URL
+logs; bare hosts retry with `/v1`).
 
 Evaluation — `eval/` needs the same running server + mock as the smoke test:
 
@@ -57,13 +93,23 @@ profiles across separate projects and reports mastery gain, question repetition
 
 ## Auth
 
-- `AUTH_SECRET_KEY` is **required**; the app refuses to boot without it. Generate
-  with `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+- `AUTH_SECRET_KEY` signs our HS256 session tokens **and** derives the settings-key
+  encryption. When unset, the server generates one and appends it to `.env`
+  (gitignored) at boot instead of refusing to start; a too-short key still
+  fails loudly. Generate manually with
+  `python -c "import secrets; print(secrets.token_urlsafe(48))"` if you prefer.
 - We issue our own HS256 JWTs (`app/deps.py`) instead of using an external identity
   provider, so the same code runs on a plain local Postgres with nothing else
   installed (plan.md D3).
 - Send `Authorization: Bearer <token>` on every route except `/health`,
   `/auth/signup`, `/auth/login`, `/profile/levels`.
+- The first registered user is admin (`users.is_admin`; backfilled to the earliest
+  user by migration 0008). Admin-only routes use `require_admin` (403, not 404 —
+  the admin surface is not a secret). `GET /system/settings` never returns secret
+  plaintext; `PATCH /system/settings` refuses env-locked keys with 422 and
+  hot-reloads AI clients via `app/services.py:build_ai_services` (shared by boot
+  and PATCH so they cannot diverge). Secrets are Fernet-encrypted (`enc1:`) with
+  a key derived from `AUTH_SECRET_KEY`.
 - Ownership is checked with `require_project` / `require_source`, which raise **404**
   (never 403) for another user's ids so they are not enumerable.
 - `PATCH /profile` uses `ProfileUpdate` (all fields `None` = unchanged). Do not reuse
@@ -72,17 +118,43 @@ profiles across separate projects and reports mastery gain, question repetition
 
 ## Database
 
-- **Local Postgres is the only database.** `DATABASE_URL` points at a Postgres
-  instance on this machine. This submission is not deployed, so there is no
-  hosted-database code path — one DSN, one code path.
-- **pgvector is required.** If `create extension vector` fails, the extension files
-  aren't installed: use the `pgvector/pgvector:pg17` Docker image or the OS package.
-- `DATABASE_URL` is **required**; boot fails loudly without it. There is no in-memory
-  fallback (`plan.md` D2).
-- `EMBEDDING_DIM` must match the `vector(...)` width in `migrations/0001_core.sql`;
-  `scripts/migrate.py` refuses to run if they disagree.
+- **Two backends, one API.** `DATABASE_URL` set (postgresql://…) → local
+  Postgres + pgvector (website). Unset → SQLite + ChromaDB under `DATA_DIR`
+  (desktop default, zero-install); `sqlite:///...` pins an explicit file.
+  `Settings.db_backend` decides; `app/backend.py:create_database` /
+  `create_vector_store` are the only construction sites.
+- **pgvector is required on the Postgres path.** If `create extension vector`
+  fails, the extension files aren't installed: use the `pgvector/pgvector:pg17`
+  Docker image or the OS package.
+- `DATABASE_URL` is **required for Postgres**; boot selects SQLite without it.
+  There is no in-memory fallback (`plan.md` D2).
+- Repo SQL stays `%s`-style: the SQLite cursor wrapper (`app/sqlite_db.py`)
+  translates placeholders/casts/`now()`, and `app/repo/base.py:to_record`
+  rehydrates datetimes/bools/JSON. Truly divergent queries branch on
+  `db.backend` (grep `backend ==`); `match_chunks` and `vector(N)` DDL are
+  Postgres-only (Chroma is dim-flexible, width truth lives in `system_meta`).
+- `EMBEDDING_DIM` is **optional** (experimental branch): unset means auto-detect
+  (one `/embeddings` probe at boot wins; fresh migrations are templated to it).
+  Set it only to pin a website deployment to a known width. Drift (model swap
+  without re-embed) still refuses to boot — see `GET /system/settings/status`.
 - Migrations are plain SQL in `migrations/NNNN_name.sql`, applied in filename order and
   tracked in `schema_migrations`.
+- Drift never blocks boot (experimental): the server starts degraded, vector
+  routes (upload, chat send/stream, quiz/exam/flashcards create, answer) return
+  **409** with re-embed/revert hints (`app/deps.py:require_no_drift`, evaluated
+  fresh per call), and `POST /system/reembed` (admin, 202 + progress) resizes +
+  re-ingests via the shared `app/reembed.py` core (the CLI wraps the same code).
+  Ground truth lives in `system_meta` (written on every ingest + job).
+  `GET /system/settings/status` never probes unless `?probe=true` — probing
+  wakes the embedding server, which evicts a running transcription ingest
+  (single-resident local engines).
+- Native audio/video modes fall back to transcript (loudly, persisted) when the
+  endpoint proves it cannot encode media bytes (`NativeUnsupportedError`:
+  text-signature or HTTP 4xx). Transport errors (5xx/timeouts) still fail boot.
+- Multimodal wire shapes are per-protocol classes in `app/llm.py`
+  (`JinaEmbedder`, `GeminiNativeEmbedder`, both sharing the OpenAI-compatible
+  text path); `EMBEDDING_PROTOCOL` (auto/llama_cpp/jina/gemini, admin-editable)
+  selects the media shape. Text never leaves the compat endpoint.
 
 ## Files
 
@@ -162,6 +234,9 @@ profiles across separate projects and reports mastery gain, question repetition
   column + `match_chunks` and re-ingests every stored file. The mock emits
   `MOCK_EMBEDDING_DIM` (default 1536); ingestion catches model-vs-config drift and
   puts the fix in `sources.status_detail`.
+  On experimental, `EMBEDDING_DIM` may be unset (auto-detect); admin overrides live
+  in the `app_settings` table (explicit env > DB > default — see
+  `app/settings_overlay.py`). Never return secret plaintext from settings endpoints.
 - Citations are stripped server-side unless the locator was actually retrieved —
   preserve this contract. Chunkers must never cross a locator boundary (page/slide/
   segment/sheet) or citations break.

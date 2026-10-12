@@ -24,6 +24,7 @@ from ..deps import (
     get_projects,
     get_sources,
     get_storage,
+    get_store,
     get_topics,
     require_project,
 )
@@ -92,7 +93,7 @@ def list_projects(
     if not owned:
         return []
     ids = [p.id for p in owned]
-    store_counts = _chunk_counts(sources, ids)
+    store_counts = sources.chunk_counts(ids)
     return [
         ProjectListItem(
             **_to_out(p).model_dump(),
@@ -106,18 +107,6 @@ def list_projects(
         )
         for p in owned
     ]
-
-
-def _chunk_counts(sources: SourceRepo, project_ids: list[str]) -> dict[str, int]:
-    """Chunk totals per project in one query rather than one per project."""
-    if not project_ids:
-        return {}
-    with sources.db.connection() as conn:
-        rows = conn.execute(
-            "select project_id, count(*) as n from chunks where project_id = any(%s) group by project_id",
-            (project_ids,),
-        ).fetchall()
-    return {str(r["project_id"]): int(r["n"]) for r in rows}
 
 
 @router.get("/{project_id}", response_model=ProjectOut)
@@ -153,16 +142,22 @@ def delete_project(
     user: CurrentUser,
     projects: Annotated[ProjectRepo, Depends(get_projects)],
     storage: Annotated[FileStorage, Depends(get_storage)],
+    store=Depends(get_store),
 ) -> None:
     """
     Cascade-delete a project and remove its uploaded files.
 
     The database cascade handles sources, chunks, topics, chats and project
     memory; `storage.delete_project` sweeps the bytes off disk, so deleting a
-    project cannot leak disk.
+    project cannot leak disk. Vectors go first (Chroma has no SQL cascade):
+    a failed row delete leaves the row (repairable), never searchable ghosts.
     """
     if not projects.delete(str(project_id), user.id):
         raise HTTPException(status_code=404, detail="Project not found.")
+    try:
+        store.delete_project(str(project_id))
+    except Exception:
+        log.exception("vector cleanup failed for project %s", project_id)
     storage.delete_project(str(project_id))
     log.info("project     : %s deleted %s", user.id, project_id)
 

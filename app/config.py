@@ -75,15 +75,32 @@ class Settings(BaseSettings):
     # default 512 tokens 500s on ~641-token table chunks; dense scripts run
     # more tokens per character, so this stays conservative).
     embedding_max_input_chars: int = 1500
-    embedding_dim: int = 768             # must match the model + pgvector column
+    # Optional pin for the model's output width. None (default) means
+    # auto-detect: one /embeddings probe at boot wins, fresh migrations are
+    # templated to that width, and existing columns are compared against it.
+    # Set it only to lock a website deployment to a known width; desktop
+    # defaults (SQLite/Chroma) never need it since Chroma is dim-flexible.
+    embedding_dim: int | None = None
     # Where vectors come from:
-    #   "local" — the default. A vendored llama-server (downloaded to
-    #             EMBEDDING_LOCAL_DIR on first boot) serves the joint model
-    #             below, with wake-on-API and idle unload. No provider
-    #             endpoint needed; EMBEDDING_*_URL/KEY are ignored.
-    #   "cloud" — classic behaviour: EMBEDDING_BASE_URL/API_KEY/MODEL win.
+    #   "cloud" — the default. EMBEDDING_BASE_URL/API_KEY/MODEL win; nothing
+    #             is downloaded. Pick this with any hosted embeddings endpoint.
+    #   "local" — a vendored llama-server (downloaded to EMBEDDING_LOCAL_DIR
+    #             on first use, NOT at boot) serves the joint model below,
+    #             with wake-on-API and idle unload. EMBEDDING_*_URL/KEY/MODEL
+    #             are ignored in this mode.
     # Scripts without an app lifespan (eval, mocks) must use cloud.
-    embedding_mode: Literal["local", "cloud"] = "local"
+    embedding_mode: Literal["local", "cloud"] = "cloud"
+    # Multimodal wire protocol for image/audio/video vectors. Text ALWAYS
+    # goes through the OpenAI-compatible endpoint (proven everywhere); this
+    # only selects how media bytes are posted:
+    #   "auto"      — llama_cpp shape in local mode and in cloud mode (works
+    #                 against llama-server-shaped endpoints; pure-text cloud
+    #                 endpoints fail native modes loudly at boot).
+    #   "llama_cpp" — nested input_audio/image/video parts (llama-server).
+    #   "jina"      — typed {"image"|"audio"|"video": base64} objects
+    #                 (api.jina.ai, v5-omni models share one space).
+    #   "gemini"    — native embedContent with inline_data parts.
+    embedding_protocol: Literal["auto", "llama_cpp", "jina", "gemini"] = "auto"
     # Vendored engine + weights layout (override the model paths to use your
     # own files instead of the managed download):
     #   <dir>/engine/   llama-server build + BUILD_TAG
@@ -172,9 +189,10 @@ class Settings(BaseSettings):
     #             (whisper-1), or a self-hosted whisper server. TRANSCRIPTION_*
     #             URL/KEY/MODEL win; nothing is downloaded.
     #   "local" — a vendored audio.cpp server (downloaded to
-    #             TRANSCRIPTION_LOCAL_DIR on first boot) serves a local ASR
-    #             model (default Qwen3-ASR-0.6B Q8) with wake-on-API and idle
-    #             unload. TRANSCRIPTION_*_URL/KEY are ignored in this mode;
+    #             TRANSCRIPTION_LOCAL_DIR on first use) serves a local ASR
+    #             model (default MOSS-Transcribe-Diarize Q4_K, with speaker
+    #             labels and timestamps) with wake-on-API and idle unload.
+    #             TRANSCRIPTION_*_URL/KEY are ignored in this mode;
     #             TRANSCRIPTION_MODEL selects the server's model id.
     # Scripts without an app lifespan (eval, mocks) must use cloud.
     transcription_mode: Literal["local", "cloud"] = "cloud"
@@ -192,10 +210,14 @@ class Settings(BaseSettings):
     transcription_local_port: int = 8898
     transcription_local_repo: str = "0xShug0/audio.cpp"
     transcription_local_model_repo: str = "audio-cpp/audio.cpp-gguf"
-    transcription_local_model_file: str = "Qwen3-ASR-0.6B-GGUF/qwen3-asr-0.6b-q8_0.gguf"
+    # MOSS-Transcribe-Diarize Q4_K: transcription + speaker labels + segment
+    # timestamps in one local model (758 MB). Note the official caveat: Q4_K
+    # segment boundaries can drift up to ~680 ms versus FP32 — use the Q8_0
+    # file instead when faithful timing is required.
+    transcription_local_model_file: str = "MOSS-Transcribe-Diarize-GGUF/moss-transcribe-diarize-q4_k.gguf"
     transcription_local_model_path: Path | None = None
-    transcription_local_model_id: str = "qwen3-asr"
-    transcription_local_family: str = "qwen3_asr"
+    transcription_local_model_id: str = "moss-transcribe-diarize"
+    transcription_local_family: str = "moss_transcribe_diarize"
     transcription_idle_unload_s: int = 300   # 0 = keep the server up forever (5 min idle unload)
     # Longest audio slice sent in ONE transcription request, in seconds.
     # Must fit the STT model's encoder window, not just the provider upload
@@ -237,18 +259,19 @@ class Settings(BaseSettings):
     parser: Literal["auto", "firecrawl", "local"] = "auto"
 
     # --------------------------------------------------------------- Database
-    # A single local Postgres instance is the whole story — this submission is
-    # not deployed, so there is no hosted-database code path to maintain.
-    #   DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/StudyCompanion
-    #
-    # It stays a DSN (not hard-coded host/user) so moving the database is a .env
-    # change, and so the same code would work against any Postgres 14+ with
-    # pgvector available.
-    database_url: str | None = None            # DATABASE_URL — required, no default
+    # Two backends, one rule: the relational schema is identical, only the
+    # vector home differs.
+    #   DATABASE_URL set (postgresql://...) -> Postgres + pgvector (website).
+    #   DATABASE_URL unset                  -> SQLite + ChromaDB (desktop
+    #                                          default: zero-install, lives
+    #                                          under DATA_DIR).
+    #   DATABASE_URL=sqlite:///...          -> explicit SQLite file (tests).
+    database_url: str | None = None            # DATABASE_URL — unset means SQLite
     db_pool_min: int = 1
     db_pool_max: int = 10
     db_connect_timeout_s: int = 10
     migrations_dir: Path = Path("./migrations")
+    sqlite_migrations_dir: Path = Path("./migrations/sqlite")
 
     # --------------------------------------------------------------- Storage
     # Uploaded files live on this machine, under DATA_DIR/uploads/<project_id>/.
@@ -308,6 +331,15 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------------ API
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    @field_validator("embedding_dim")
+    @classmethod
+    def _check_embedding_dim(cls, v: int | None) -> int | None:
+        if v is None:
+            return None
+        if int(v) <= 0:
+            raise ValueError(f"EMBEDDING_DIM={v} must be a positive width or unset for auto-detect.")
+        return int(v)
 
     @field_validator("transcription_chunk_s")
     @classmethod
@@ -454,6 +486,12 @@ class Settings(BaseSettings):
                     f"({_redact(self.llm_api_key)}) will be sent there. "
                     f"Set {capability.upper()}_API_KEY to that provider's key."
                 )
+        if self.embedding_mode == "local" and self.embedding_protocol != "auto":
+            warnings.append(
+                f"EMBEDDING_PROTOCOL={self.embedding_protocol} is ignored in "
+                "EMBEDDING_MODE=local — the managed embedder speaks llama.cpp "
+                "natively. Unset it or switch to EMBEDDING_MODE=cloud."
+            )
         return warnings
 
     @property
@@ -480,11 +518,38 @@ class Settings(BaseSettings):
         return errors
 
     @property
+    def db_backend(self) -> str:
+        """'postgres' when DATABASE_URL points at Postgres, else 'sqlite'."""
+        if self.database_url and self.database_url.strip().lower().startswith("sqlite"):
+            return "sqlite"
+        if self.database_url:
+            return "postgres"
+        return "sqlite"
+
+    @property
+    def sqlite_path(self) -> Path:
+        """SQLite file: explicit `sqlite:///...` URL wins, else DATA_DIR."""
+        if self.database_url and self.database_url.strip().lower().startswith("sqlite"):
+            raw = self.database_url.strip()[len("sqlite:"):]
+            while raw.startswith("/"):
+                raw = raw[1:]
+            candidate = Path(raw)
+            if not candidate.is_absolute():
+                candidate = Path.cwd() / candidate
+            return candidate
+        return self.data_dir / "noteslyt.db"
+
+    @property
+    def chroma_dir(self) -> Path:
+        """ChromaDB persistent dir (sqlite backend only)."""
+        return self.data_dir / "chroma"
+
+    @property
     def db_target(self) -> str:
-        """Human-readable DB target for logs/health, e.g. 'localhost:5432/StudyCompanion'."""
-        if not self.database_url:
-            return "unset"
-        parsed = urlparse(self.database_url)
+        """Human-readable DB target for logs/health."""
+        if self.db_backend == "sqlite":
+            return f"sqlite:{self.sqlite_path}"
+        parsed = urlparse(self.database_url or "")
         return f"{parsed.hostname or '?'}:{parsed.port or 5432}/{(parsed.path or '/').lstrip('/') or '?'}"
 
     @property
@@ -531,3 +596,36 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Singleton accessor — `.env` is parsed exactly once per process."""
     return Settings()
+
+
+def ensure_auth_secret_key(settings: Settings, dotenv_path: Path | None = None) -> bool:
+    """Generate + persist `AUTH_SECRET_KEY` when unset. Returns True if generated.
+
+    Sessions AND the settings-key encryption are both rooted in this secret,
+    so it must survive restarts: an ephemeral fallback would log everyone out
+    and orphan every encrypted API key on every boot. `.env` is gitignored,
+    so appending there is safe. Raises RuntimeError only when the file cannot
+    be written — callers fall back to the manual steps in that case.
+    """
+    if settings.auth_secret_key:
+        return False
+    import secrets
+
+    new_secret = secrets.token_urlsafe(48)
+    path = dotenv_path or Path(".env")
+    try:
+        if path.is_file():
+            existing = path.read_text(encoding="utf-8")
+            eol = "" if existing == "" or existing.endswith("\n") else "\n"
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(f"{eol}AUTH_SECRET_KEY={new_secret}\n")
+        else:
+            path.write_text(
+                "# Generated by NotesLyt — do not share, do not commit.\n"
+                f"AUTH_SECRET_KEY={new_secret}\n",
+                encoding="utf-8",
+            )
+    except OSError as exc:
+        raise RuntimeError(f"could not write generated AUTH_SECRET_KEY to {path}: {exc}") from exc
+    settings.auth_secret_key = new_secret
+    return True

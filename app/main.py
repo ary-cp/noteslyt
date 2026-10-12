@@ -6,6 +6,8 @@ NotesLyt API — composition root.
 Architecture at a glance (one module per responsibility):
 
     config.py              .env -> typed Settings (LLM/embeddings/Firecrawl/RAG/BKT/memory)
+    settings_overlay.py    layered config: explicit env > admin DB settings > defaults
+    services.py            build/rebuild AI clients (boot + settings hot-reload share it)
     llm.py                 OpenAI-SDK clients with dynamic base_url + api_key
     ingestion/parsers.py   Firecrawl /v2/parse (per-page markdown) | pdf-inspector/anydoc fallback
     ingestion/chunker.py   locator-aware chunks (never cross a locator => exact citations)
@@ -31,25 +33,19 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import Settings, get_settings
-from .chat import ChatService
-from .db import REEMBED_HINT, Database, describe_embedding_drift
-from .ingestion import IngestionPipeline
-from .llm import LLMClient, build_embedder, verify_native_support
+from .llm import NativeUnsupportedError, verify_native_support
 from .migrations import apply_pending_migrations
-from .quiz import QuizService
-from .repo import ChatRepo, ProjectMemoryRepo, ProjectRepo, QuizRepo, SourceRepo, StudioRepo, TopicRepo, UserRepo
+from .repo import ChatRepo, ProjectRepo, QuizRepo, SourceRepo, StudioRepo, TopicRepo, UserRepo
 from .repo.profile import ProfileRepo
 from .routers import auth, chats, profile, projects, quizzes, sources, system
 from .schemas import DatabaseOut, EndpointOut, HealthResponse, StorageOut
 from .storage import FileStorage
-from .transcription import build_transcriber
-from .vectorstore import VectorStore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("noteslyt")
 
 
-async def _studio_failure_cleanup(studio: StudioRepo, db: Database) -> None:
+async def _studio_failure_cleanup(studio: StudioRepo, db) -> None:
     """Prune failed assessment-generation rows hourly; ready artifacts are retained."""
     while True:
         try:
@@ -71,6 +67,17 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     settings.ensure_dirs()
 
+    # Missing secret? Generate + persist it (sessions and encrypted API keys
+    # are rooted here, so it must survive restarts — see ensure_auth_secret_key).
+    # Only an unwritable `.env` still boots loudly via the check below.
+    from .config import ensure_auth_secret_key
+
+    try:
+        if ensure_auth_secret_key(settings):
+            log.warning("Auth       : AUTH_SECRET_KEY was missing — generated one and saved it to .env")
+    except RuntimeError as exc:
+        log.warning("Auth       : %s", exc)
+
     # Auth problems stop the boot: a server that accepts no logins but looks
     # healthy is worse than one that refuses to start.
     auth_errors = settings.auth_startup_errors()
@@ -84,85 +91,125 @@ async def lifespan(app: FastAPI):
     if migrated:
         log.info("Database   : applied %d pending migration(s): %s", len(migrated), ", ".join(migrated))
 
-    # Fail fast and loudly: an unreachable DB or a missing pgvector extension
-    # should stop the boot, not surface as a 500 on the first request.
-    db = Database(settings)
+    # Fail fast and loudly: an unreachable DB should stop the boot, not
+    # surface as a 500 on the first request. Backend follows DATABASE_URL:
+    # Postgres+pgvector when set, SQLite+Chroma otherwise (desktop default).
+    from .backend import create_database, create_vector_store
 
-    # Same for embedding widths: a model swap (e.g. 1536-d OpenAI -> 768-d
-    # nomic/EmbeddingGemma) without re-embedding fails every ingest at the
-    # Postgres insert. Refuse to boot with the fix instead.
-    drift = describe_embedding_drift(
-        {
-            "EMBEDDING_DIM": settings.embedding_dim,
-            "chunks.embedding": db.embedding_dim(),
-            "questions.stem_embedding": db.vector_width("questions", "stem_embedding"),
-        }
-    )
-    if drift:
-        raise RuntimeError("\n".join(drift) + "\n" + REEMBED_HINT)
-    store = VectorStore(db)
-    llm = LLMClient(settings)                       # chat completions
-    if settings.embedding_mode == "local":
-        # Vendored llama-server backend: downloads the engine + weights on
-        # first boot (loudly logged). The server itself starts lazily on the
-        # first embedding call and unloads after idle (wake-on-API).
-        from .llama_embed import init_embedding_server
+    db = create_database(settings)
 
-        init_embedding_server(settings)
-    if settings.transcription_mode == "local":
-        # Vendored audio.cpp backend: downloads the engine + ASR weights on
-        # first boot (loudly logged). The server itself starts lazily on the
-        # first transcription call and unloads after idle (wake-on-API).
-        # Cloud mode downloads nothing.
-        from .audio_cpp import init_transcription_server
+    # Layered config (Phase 2, experimental): explicit env/.env > admin DB
+    # settings > defaults. Applied BEFORE the width checks below so a DB-pinned
+    # model/dim flows into the probe and the drift guard.
+    from .settings_overlay import apply_db_overrides, locked_keys
 
-        init_transcription_server(settings)
-    embedder = build_embedder(settings)             # vectors (OpenAI-compatible)
-    transcriber = build_transcriber(settings)       # speech-to-text
+    try:
+        sources = apply_db_overrides(settings, db)
+    except RuntimeError as exc:
+        raise RuntimeError(str(exc)) from exc
+    n_db = sum(1 for s in sources.values() if s == "db")
+    if n_db:
+        log.info("Settings   : %d admin override(s) from database, %d locked by env",
+                 n_db, len(locked_keys(settings)))
+
+    store = create_vector_store(settings, db)
+    log.info("Database   : %s backend (%s)", settings.db_backend, settings.db_target)
     storage = FileStorage(settings.uploads_dir)     # local disk
-
-    # Native audio/video vectors are meaningless when the endpoint tokenizes
-    # the data URI as text. Refuse to boot instead of corrupting retrieval —
-    # same philosophy as the embedding-width drift check above.
-    if settings.audio_embed_mode == "native" or settings.video_embed_mode == "native":
-        verify_native_support(embedder)
 
     app.state.settings = settings
     app.state.db = db
     app.state.store = store
-    app.state.llm = llm
-    app.state.embedder = embedder
-    app.state.transcriber = transcriber
     app.state.storage = storage
+    app.state.reembed_job = {"state": "idle"}
     # Repositories — the only place SQL lives (plan.md section 4).
     app.state.users = UserRepo(db)
     app.state.projects = ProjectRepo(db)
     app.state.sources = SourceRepo(db)
     app.state.topics = TopicRepo(db)
     app.state.profiles = ProfileRepo(db)
-    app.state.pipeline = IngestionPipeline(
-        settings, llm, embedder, store, app.state.sources, app.state.topics
-    )
-    # Media parsers only receive (path, settings), so the transcriber built
-    # above is handed to them here (Phase D.18). Scripts that ingest without
-    # a lifespan get a readable "not configured" failure instead.
-    from .ingestion.parsers_media import set_transcriber
-
-    set_transcriber(transcriber)
-    # Phase E: server-side chat over the three memory tiers.
     app.state.chats = ChatRepo(db)
-    app.state.memory = ProjectMemoryRepo(db, p_init=settings.bkt_p_init)
-    app.state.chat = ChatService(
-        settings, llm, embedder, store,
-        app.state.chats, app.state.memory, app.state.topics, app.state.profiles,
-        app.state.sources, storage,
-    )
     app.state.quizzes = QuizRepo(db)
     app.state.studio = StudioRepo(db)
-    app.state.quiz = QuizService(
-        settings, llm, embedder, store, app.state.quizzes,
-        app.state.memory, app.state.topics, app.state.sources, app.state.profiles,
-    )
+    # AI clients + pipeline/memory/chat/quiz (one builder; PATCH reuses it for
+    # hot-reload, so boot and PATCH can never diverge). The local vendored
+    # servers are initialized in here — the width probe below needs them on a
+    # fresh boot, so resolution deliberately happens after this call.
+    from .services import build_ai_services
+
+    build_ai_services(app)
+
+    # Embedding width auto-detect (EMBEDDING_DIM unset): probe wins, then the
+    # last known width (live column, else ground truth), so offline reboots
+    # keep working. A fresh install with no reachable endpoint boots anyway —
+    # the setup wizard collects the endpoint first thing after signup.
+    if settings.embedding_dim is None:
+        from .drift import last_known_width, setup_completed
+        from .migration_runner import probe_model_dim
+
+        probed = probe_model_dim(settings)
+        if probed is not None:
+            settings.embedding_dim = probed
+            log.info("Embedding  : auto-detected width %d from %s", probed, settings.embedding_model)
+        else:
+            known = last_known_width(db)
+            if known is not None:
+                settings.embedding_dim = known
+                log.warning("Embedding  : endpoint unreachable, trusting last-known width %d", known)
+            elif not setup_completed(db):
+                log.warning(
+                    "Embedding  : no endpoint yet and no stored width — starting "
+                    "unresolved so first-run setup can collect it. Ingestion "
+                    "waits for the wizard."
+                )
+            else:
+                raise RuntimeError(
+                    "Could not determine the embedding width: EMBEDDING_DIM is unset, "
+                    f"the endpoint ({settings.resolved_embedding_base_url}, "
+                    f"model={settings.embedding_model}) is unreachable, and no stored "
+                    "width exists. Set EMBEDDING_DIM or start the endpoint."
+                )
+    # Drift no longer refuses to boot (Phase 3, experimental): a model swap
+    # without re-embedding degrades vector routes to 409 with the fix, while
+    # the app, settings and history stay usable behind the re-embed banner.
+    from .drift import compute_drift
+
+    drift_state = compute_drift(settings, db)
+    if drift_state.drift:
+        log.warning("Embedding DRIFT (degraded vector routes): %s", drift_state.detail)
+    app.state.embedding_drift = drift_state
+
+    # Native audio/video vectors are meaningless when the endpoint cannot
+    # encode media bytes (text-only or rejecting cloud endpoints). That used
+    # to refuse the whole boot; instead we fall back to transcript mode loudly
+    # (log + persisted admin override, drift recomputed) so the app stays up
+    # on retrievable text. Genuine transport errors still fail fast.
+    if settings.audio_embed_mode == "native" or settings.video_embed_mode == "native":
+        try:
+            verify_native_support(app.state.embedder)
+        except NativeUnsupportedError as exc:
+            flipped = [k for k in ("audio_embed_mode", "video_embed_mode")
+                       if getattr(settings, k) == "native"]
+            for key in flipped:
+                setattr(settings, key, "transcript")
+            log.error(
+                "Embedding endpoint cannot encode media bytes (%s). Falling back "
+                "to transcript mode for: %s. Serve a joint model "
+                "(e.g. embeddinggemma-2-GGUF + mmproj) from llama.cpp and re-set "
+                "native modes to use it.", exc, ", ".join(flipped))
+            try:
+                from .repo.app_settings import AppSettingsRepo
+
+                repo = AppSettingsRepo(db)
+                for key in flipped:
+                    if key not in locked_keys(settings):
+                        repo.set(key, "transcript")
+            except Exception:
+                log.exception("Could not persist transcript fallback; "
+                              "it applies to this session only")
+            drift_state = compute_drift(settings, db)
+            if drift_state.drift:
+                log.warning("Embedding DRIFT (degraded vector routes): %s", drift_state.detail)
+            app.state.embedding_drift = drift_state
 
     for capability in ("llm", "embedding", "transcription"):
         ep = settings.endpoint(capability)  # type: ignore[arg-type]
@@ -279,8 +326,16 @@ def health() -> HealthResponse:
     transcription = s.endpoint("transcription")
     db_health = app.state.db.health()
     pending = db_health["migrations_pending"]
+    try:
+        from .drift import compute_drift
+
+        drift_detail = compute_drift(s, app.state.db).detail
+    except Exception:
+        drift_detail = getattr(app.state, "embedding_drift", None)
+        drift_detail = drift_detail.detail if drift_detail else ""
+    drifted = bool(drift_detail)
     return HealthResponse(
-        status="degraded" if pending else "ok",
+        status="degraded" if (pending or drifted) else "ok",
         llm_base_url=s.llm_base_url,
         llm_model=s.llm_model,
         embeddings=app.state.embedder.name,
@@ -298,6 +353,7 @@ def health() -> HealthResponse:
         ),
         projects=app.state.db.count("projects"),
         frontend=FRONTEND_DIR,
+        embedding_drift=(drift_detail if drifted else ""),
     )
 
 

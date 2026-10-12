@@ -66,9 +66,17 @@ def main() -> int:
     health = db.health()
     print("server       :", health["server"])
     check("migrations applied", not health["migrations_pending"], str(health["migrations_pending"]))
+    if settings.embedding_dim is None:
+        from app.migration_runner import probe_model_dim
+
+        settings.embedding_dim = probe_model_dim(settings) or db.embedding_dim()
+        print(f"auto-dim       : resolved to {settings.embedding_dim}")
     check("embedding dim agrees with live column", settings.embedding_dim == db.embedding_dim(),
           f"EMBEDDING_DIM={settings.embedding_dim} chunks.embedding={db.embedding_dim()}")
     dim = settings.embedding_dim
+    if dim is None:
+        print("  [FAIL] embedding width unresolvable — start the endpoint or set EMBEDDING_DIM")
+        return 1
 
     users, projects = UserRepo(db), ProjectRepo(db)
     sources, topics = SourceRepo(db), TopicRepo(db)

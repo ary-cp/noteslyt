@@ -17,6 +17,7 @@ import type {
   ChatResponse,
   ChatTurn,
   DocumentInfo,
+  EmbeddingStatus,
   HealthResponse,
   IngestStatus,
   LearnerOut,
@@ -29,7 +30,11 @@ import type {
   ProjectMemory,
   ProjectOut,
   QuizResponse,
+  ReembedJob,
   SendMessageResponse,
+  SettingsOut,
+  SettingsPatchOut,
+  SetupStatus,
   SourceOut,
   SourceSegment,
   SourceUploadAccepted,
@@ -144,6 +149,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       /* non-JSON error body — keep statusText */
     }
     emit({ method, path, status: response.status, ms, ok: false, at: new Date().toISOString() });
+    if (response.status === 409 && detail.includes("Embedding drift")) notifyDrift();
     throw new ApiError(detail, response.status);
   }
   emit({ method, path, status: response.status, ms, ok: true, at: new Date().toISOString() });
@@ -187,6 +193,48 @@ export const getLlamaStatus = (): Promise<LlamaStatus> => request("/system/llama
 export const updateLlamaEngine = (): Promise<{ status: string; detail: string }> =>
   request("/system/llama/update", { method: "POST" });
 
+// ------------------------------------------------------- admin + drift
+/** Full settings view (admin). Secrets are masked — `configured` tells if set. */
+export const getAdminSettings = (): Promise<SettingsOut> => request("/system/settings");
+
+/** Apply overrides (`null` clears back to env/default). Never sends secrets back. */
+export const patchAdminSettings = (body: Record<string, unknown>): Promise<SettingsPatchOut> =>
+  request("/system/settings", json(body, "PATCH"));
+
+/** Drift ground truth for the banner. Any signed-in user; no secrets. */
+export const getEmbeddingStatus = (probe = false): Promise<EmbeddingStatus> =>
+  request(`/system/settings/status${probe ? "?probe=true" : ""}`);
+
+/** Start the background re-embed (admin). `force` re-embeds an in-sync corpus. */
+export const startReembed = (force = false): Promise<ReembedJob> =>
+  request(`/system/reembed${force ? "?force=true" : ""}`, { method: "POST" });
+
+/** Re-embed job progress (any signed-in user — the banner polls this). */
+export const getReembedStatus = (): Promise<ReembedJob> => request("/system/reembed/status");
+
+// ------------------------------------------------------- first-run setup
+/** Onboarding state. Shows the wizard when an admin signs in and setup is open. */
+export const getSetupStatus = (): Promise<SetupStatus> => request("/system/setup/status");
+
+/** Mark first-run setup done (wizard Finish or Skip, admin only). */
+export const completeSetup = (): Promise<{ completed: boolean }> =>
+  request("/system/setup/complete", { method: "POST" });
+
+/** Model ids from an OpenAI-compatible endpoint (onboarding picker, admin only). */
+export const fetchModels = (base_url: string, api_key?: string): Promise<{ models: { id: string }[] }> =>
+  request("/system/models", json({ base_url, api_key: api_key ?? null }));
+
+/** Fired when a request fails with embedding-drift 409 so the banner refreshes now. */
+export const DRIFT_EVENT = "noteslyt:drift-change";
+
+function notifyDrift(): void {
+  try {
+    window.dispatchEvent(new CustomEvent(DRIFT_EVENT));
+  } catch {
+    /* non-DOM environment — tests */
+  }
+}
+
 // --------------------------------------------------------------- projects
 export const listProjects = (): Promise<ProjectListItem[]> => request("/projects");
 
@@ -217,6 +265,14 @@ export const uploadSources = (projectId: string, files: File[]): Promise<SourceU
 };
 
 export const getSource = (id: string): Promise<SourceOut> => request(`/sources/${id}`);
+
+/**
+ * Re-run ingestion for a failed source (202, background). Resumes after the
+ * failure by default — transcription is NOT redone; `fresh=true` re-parses
+ * from the file instead (parser/STT upgrades).
+ */
+export const retrySource = (id: string, fresh = false): Promise<SourceOut> =>
+  request(`/sources/${id}/retry${fresh ? "?fresh=true" : ""}`, { method: "POST" });
 
 export const getSourceContent = (id: string): Promise<ParsedContent> =>
   request(`/sources/${id}/content`);

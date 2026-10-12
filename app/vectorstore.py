@@ -129,6 +129,11 @@ class VectorStore:
         with self._db.transaction() as conn:
             return conn.execute("delete from chunks where source_id = %s", (source_id,)).rowcount
 
+    def delete_project(self, project_id: str) -> None:
+        """Remove a project's vectors (SQL cascade covers this; explicit for symmetry)."""
+        with self._db.transaction() as conn:
+            conn.execute("delete from chunks where project_id = %s", (project_id,))
+
     def count(self, project_id: str | None = None) -> int:
         sql = "select count(*) as n from chunks"
         params: tuple = ()

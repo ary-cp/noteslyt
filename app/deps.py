@@ -160,6 +160,62 @@ async def get_current_user(
 CurrentUser = Annotated[object, Depends(get_current_user)]
 
 
+async def require_admin(user: CurrentUser):
+    """Admin-only gate for operator endpoints (settings, engine updates...).
+
+    403 (not 404) is deliberate: unlike resource ids, the existence of an
+    admin surface is not a secret, and 403 tells a legitimate non-admin user
+    to ask their admin/host instead of retrying. The first registered user is
+    admin; website hosters pin config via `.env` (locked keys) instead.
+    """
+    if not getattr(user, "is_admin", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required.",
+        )
+    return user
+
+
+AdminUser = Annotated[object, Depends(require_admin)]
+
+
+def require_no_drift(request: Request) -> None:
+    """409 when the embedding space drifted (model swap without re-embed).
+
+    Evaluated FRESH on every guarded call (three cheap indexed queries, no
+    probe): a boot-time snapshot would miss drift that appears later (admin
+    edits ground truth only via ingest/job/PATCH, but staleness here fails
+    open into corrupt retrieval — the one failure this guard exists to stop).
+    On DB error the guard allows the request through so the endpoint surfaces
+    the real database error instead of masking it.
+
+    Vector writes AND reads would fail or silently corrupt below this point
+    (wrong-width insert / wrong-space retrieval), so guarded routes refuse
+    with the fix instead: re-embed, or revert to the previous model. Reads
+    (history, topics, files, settings, status) stay open — the app loads and
+    the banner explains.
+    """
+    try:
+        from .drift import compute_drift
+
+        state = compute_drift(request.app.state.settings, request.app.state.db)
+    except Exception:
+        return
+    if state.drift:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Embedding drift: " + (state.detail or "re-embed required."),
+                "reembed": "POST /system/reembed (admin)",
+                "status": "GET /system/settings/status",
+                **({"revert_to": state.revert_to} if state.revert_to else {}),
+            },
+        )
+
+
+NoDrift = Annotated[None, Depends(require_no_drift)]
+
+
 # ================================================ ownership-scoped lookups
 def require_project(projects, project_id: str, user_id: str) -> ProjectRecord:
     """404 unless the project belongs to this user."""

@@ -150,14 +150,23 @@ def newest_binary_release(repo: str) -> dict[str, Any]:
 
 # ================================================================== download
 def download_file(url: str, dest: Path, label: str = "") -> None:
-    """Stream-download with MB progress on the log line. Atomic via rename."""
+    """Stream-download with throttled progress. Atomic via rename.
+
+    Progress logs at most every 10% plus one completion line — the old
+    per-megabyte line spammed ~300 log rows for a single weights file.
+    (A true `\\r` progress bar was considered and rejected: it turns into
+    garbage in log files, and this module stays stdlib-only by design.)
+    """
+    name = label or dest.name
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.parent / f".dl-{dest.name}-{os.getpid()}"
     req = urllib.request.Request(url, headers={"User-Agent": "noteslyt/1.0"})
+    t0 = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=300) as resp, tmp.open("wb") as out:
             total = int(resp.headers.get("Content-Length") or 0)
             done = 0
+            next_mark = 10
             while True:
                 chunk = resp.read(1024 * 1024)
                 if not chunk:
@@ -165,7 +174,13 @@ def download_file(url: str, dest: Path, label: str = "") -> None:
                 out.write(chunk)
                 done += len(chunk)
                 if total:
-                    log.info("%s %.1f/%.1f MB", label or dest.name, done / 1e6, total / 1e6)
+                    pct = done * 100 // total
+                    if pct >= next_mark:
+                        log.info("%s %d%% (%.1f/%.1f MB)", name, min(pct, 100),
+                                 done / 1e6, total / 1e6)
+                        next_mark += 10
+                elif done // (50 * 1024 * 1024) > (done - len(chunk)) // (50 * 1024 * 1024):
+                    log.info("%s %.1f MB downloaded (size unknown)", name, done / 1e6)
     except urllib.error.HTTPError as exc:
         if tmp.exists():
             tmp.unlink()
@@ -181,6 +196,7 @@ def download_file(url: str, dest: Path, label: str = "") -> None:
             tmp.unlink()
         raise RuntimeError(f"Download failed: {url} ({exc})") from exc
     tmp.rename(dest)
+    log.info("%s downloaded (%.1f MB in %.0fs)", name, done / 1e6, time.monotonic() - t0)
 
 
 def extract_archive(archive: Path, destination: Path) -> None:

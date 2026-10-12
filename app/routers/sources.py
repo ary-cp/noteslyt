@@ -32,11 +32,13 @@ from fastapi.responses import FileResponse
 from ..config import Settings
 from ..deps import (
     CurrentUser,
+    NoDrift,
     get_pipeline,
     get_projects,
     get_settings,
     get_sources,
     get_storage,
+    get_store,
     get_topics,
     require_project,
 )
@@ -85,6 +87,8 @@ def _background_ingest(
     pipeline: IngestionPipeline,
     storage: FileStorage,
     source,
+    *,
+    reuse_parsed: bool = False,
 ) -> None:
     """
     Run ingestion for one source.
@@ -92,14 +96,15 @@ def _background_ingest(
     Called via `BackgroundTasks`, so exceptions here cannot reach the client —
     `ingest_source` already records failures on the row, and this is a second
     net so an unexpected error still flips the status rather than leaving the
-    source stuck on 'parsing' forever.
+    source stuck on 'parsing' forever. `reuse_parsed` resumes from the stored
+    parse (retry path); fresh uploads always parse the file.
     """
     try:
         path = storage.open_for_read(source.project_id, source.id, source.filename)
         if path is None:
             pipeline.sources.mark_failed(source.id, "Stored file disappeared before ingestion.")
             return
-        pipeline.ingest_source(source, path)
+        pipeline.ingest_source(source, path, reuse_parsed=reuse_parsed)
     except Exception:  # noqa: BLE001 — background tasks have no caller to tell
         log.exception("background ingest crashed for source %s", source.id)
         try:
@@ -126,6 +131,7 @@ def upload_sources(
     sources: Annotated[SourceRepo, Depends(get_sources)] = None,       # type: ignore[assignment]
     storage: Annotated[FileStorage, Depends(get_storage)] = None,      # type: ignore[assignment]
     pipeline: Annotated[IngestionPipeline, Depends(get_pipeline)] = None,  # type: ignore[assignment]
+    _drift_guard: NoDrift = None,  # type: ignore[assignment]  # 409 while embedding drifted
 ) -> SourceUploadAccepted:
     """
     Accept one or more files into a project and ingest them in the background.
@@ -190,6 +196,58 @@ def upload_sources(
 
     log.info("upload       : %d file(s) queued into project %s", len(accepted), project_id)
     return SourceUploadAccepted(accepted=accepted, rejected=rejected)
+
+
+# =============================================================================
+#  Retry
+# =============================================================================
+@router.post(
+    "/sources/{source_id}/retry",
+    response_model=SourceOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def retry_source(
+    source_id: str,
+    user: CurrentUser,
+    background: BackgroundTasks,
+    sources: Annotated[SourceRepo, Depends(get_sources)] = None,      # type: ignore[assignment]
+    storage: Annotated[FileStorage, Depends(get_storage)] = None,     # type: ignore[assignment]
+    pipeline: Annotated[IngestionPipeline, Depends(get_pipeline)] = None,  # type: ignore[assignment]
+    fresh: bool = False,
+    _drift_guard: NoDrift = None,  # type: ignore[assignment]  # 409 while embedding drifted
+) -> SourceOut:
+    """
+    Re-run ingestion for a failed source and pick up where it failed.
+
+    By default the retry resumes from the stored parse — transcription (and
+    captions) are NOT redone, only the steps after the failure run again
+    (topics, embeddings, storage). `fresh=true` re-parses from the file
+    instead (parser/STT upgrades). Retrying a still-processing or ready
+    source is refused; a foreign id is 404 like everywhere else.
+    """
+    source = sources.get_owned(source_id, user.id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found.")
+    if source.status in ("queued", "parsing", "embedding"):
+        raise HTTPException(
+            status_code=409,
+            detail="This source is still processing — wait for it to settle before retrying.",
+        )
+    if source.status == "ready":
+        raise HTTPException(
+            status_code=422,
+            detail="This source already ingested. Delete and re-upload it to ingest again.",
+        )
+    sources.set_status(
+        source.id, "queued",
+        "retry queued — resuming after the last failure" if not fresh else "retry queued — fresh parse",
+        warnings=[],
+    )
+    background.add_task(_background_ingest, pipeline, storage, source, reuse_parsed=not fresh)
+    log.info("retry        : %s requeued %s (fresh=%s)", user.id, source_id, fresh)
+    row = sources.get(source.id)
+    assert row is not None
+    return _to_out(row)
 
 
 # =============================================================================
@@ -391,18 +449,26 @@ def delete_source(
     user: CurrentUser,
     sources: Annotated[SourceRepo, Depends(get_sources)],
     storage: Annotated[FileStorage, Depends(get_storage)],
+    store=Depends(get_store),
 ) -> None:
     """
     Delete a source, its chunks and its file.
 
     The `topic_sources` links cascade, and chunk rows cascade from the source
     row, so no vectors are orphaned. Topic rows themselves are kept — other
-    sources in the project may still cover them.
+    sources in the project may still cover them. Vectors go first: a failed
+    SQL delete leaves the row (repairable), while the reverse would leave
+    deleted content retrievable.
     """
     source = sources.get_owned(source_id, user.id)
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found.")
     storage.delete(source.project_id, source.id)
+    try:
+        store.delete_source(source.id)
+    except Exception:
+        log.exception("vector cleanup failed for source %s", source.id)
+        raise HTTPException(status_code=500, detail="Could not delete this source. Please retry.")
     if not sources.delete_for_project(source.id, source.project_id):
         raise HTTPException(status_code=404, detail="Source not found.")
     log.info("source       : %s deleted %s", user.id, source_id)

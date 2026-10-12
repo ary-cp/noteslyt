@@ -33,6 +33,7 @@ export function SourcesPanel({
   onClear,
   onOpenSource,
   onRemoveSource,
+  onRetrySource,
   onFiles,
   onNewChat,
   onOpenChat,
@@ -54,6 +55,7 @@ export function SourcesPanel({
   onClear: () => void;
   onOpenSource: (id: string) => void;
   onRemoveSource: (id: string) => void;
+  onRetrySource: (id: string) => void;
   onFiles: (files: File[]) => void;
   onNewChat: () => void;
   onOpenChat: (id: string) => void;
@@ -239,7 +241,7 @@ export function SourcesPanel({
             )}
             {failed.length > 0 && (
               <SourceSection title="Needs attention" count={failed.length}>
-                {failed.map((s) => <SourceRow key={s.id} source={s} opened={openSourceId === s.id} selected={false} onToggle={() => undefined} onOpen={() => onOpenSource(s.id)} onRemove={() => onRemoveSource(s.id)} />)}
+                {failed.map((s) => <SourceRow key={s.id} source={s} opened={openSourceId === s.id} selected={false} onToggle={() => undefined} onOpen={() => onOpenSource(s.id)} onRemove={() => onRemoveSource(s.id)} onRetry={() => onRetrySource(s.id)} />)}
               </SourceSection>
             )}
           </>
@@ -305,6 +307,7 @@ function SourceRow({
   onToggle,
   onOpen,
   onRemove,
+  onRetry,
 }: {
   source: SourceOut;
   opened: boolean;
@@ -312,6 +315,7 @@ function SourceRow({
   onToggle: () => void;
   onOpen: () => void;
   onRemove: () => void;
+  onRetry?: () => void;
 }) {
   const busy = ["queued", "parsing", "embedding"].includes(source.status);
   return (
@@ -357,6 +361,17 @@ function SourceRow({
       >
         <Trash2 size={13} />
       </button>
+      {source.status === "failed" && onRetry && (
+        <button
+          type="button"
+          aria-label={`Retry ${source.filename}`}
+          data-tooltip="Retry — resumes after the failure"
+          onClick={onRetry}
+          className="tooltip-host shrink-0 cursor-pointer rounded-md p-1.5 text-[var(--text-muted)] opacity-0 group-hover:opacity-100 hover:bg-[var(--surface-secondary)] hover:text-[var(--text-primary)] focus:opacity-100"
+        >
+          <RefreshCw size={13} />
+        </button>
+      )}
     </div>
   );
 }

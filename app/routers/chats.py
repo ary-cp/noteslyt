@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 from ..chat import ChatNotFoundError
 from ..deps import (
     CurrentUser,
+    NoDrift,
     get_chats,
     get_chat_service,
     get_projects,
@@ -161,6 +162,7 @@ def send_message(
     chats: Annotated[ChatRepo, Depends(get_chats)],
     service=Depends(get_chat_service),
     settings=Depends(get_settings),
+    _drift_guard: NoDrift = None,  # type: ignore[assignment]  # 409 while embedding drifted
 ) -> SendMessageResponse:
     """Send one message; get a grounded, cited answer. Replaces `POST /chat`."""
     require_chat(chats, chat_id, user.id)
@@ -193,6 +195,7 @@ async def send_message_stream(
     chats: Annotated[ChatRepo, Depends(get_chats)],
     service=Depends(get_chat_service),
     settings=Depends(get_settings),
+    _drift_guard: NoDrift = None,  # type: ignore[assignment]  # 409 while embedding drifted
 ) -> StreamingResponse:
     """Stream generated tokens as SSE, followed by the audited response."""
     require_chat(chats, chat_id, user.id)

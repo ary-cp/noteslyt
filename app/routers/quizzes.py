@@ -18,6 +18,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 
 from ..deps import (
     CurrentUser,
+    NoDrift,
     get_projects,
     get_quiz_service,
     get_quizzes,
@@ -96,6 +97,7 @@ def create_quiz(
     background: BackgroundTasks,
     studio=Depends(get_studio),
     service=Depends(get_quiz_service),
+    _drift_guard: NoDrift = None,  # type: ignore[assignment]  # 409 while embedding drifted
 ) -> StudioJobOut:
     """Queue quiz generation and return its project-scoped Studio job."""
     require_project(projects, str(project_id), user.id)
@@ -113,6 +115,7 @@ def create_exam(
     background: BackgroundTasks,
     studio=Depends(get_studio),
     service=Depends(get_quiz_service),
+    _drift_guard: NoDrift = None,  # type: ignore[assignment]  # 409 while embedding drifted
 ) -> StudioJobOut:
     """Queue mock exam generation."""
     require_project(projects, str(project_id), user.id)
@@ -130,6 +133,7 @@ def create_flashcards(
     background: BackgroundTasks,
     studio=Depends(get_studio),
     service=Depends(get_quiz_service),
+    _drift_guard: NoDrift = None,  # type: ignore[assignment]  # 409 while embedding drifted
 ) -> StudioJobOut:
     """Queue flashcard generation."""
     require_project(projects, str(project_id), user.id)
@@ -181,6 +185,7 @@ def answer_question(
     user: CurrentUser,
     quizzes: Annotated[QuizRepo, Depends(get_quizzes)],
     service=Depends(get_quiz_service),
+    _drift_guard: NoDrift = None,  # type: ignore[assignment]  # 409 while embedding drifted
 ) -> AnswerOut:
     """Grade one answer (index | text | number) with cited feedback + BKT update."""
     require_quiz(quizzes, str(quiz_id), user.id)

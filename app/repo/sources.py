@@ -46,15 +46,18 @@ class SourceRepo(Repo):
     # ------------------------------------------------------- parsed content
     def ready_chunks(self, project_id: str, source_ids: list[str], per_source: int = 4):
         """Bounded, project-scoped context, including images without topic rows."""
+        if not source_ids:
+            return []
+        placeholders = ", ".join(["%s"] * len(source_ids))
         return self._fetch_all(
             "select * from (select c.id,c.source_id,c.text,c.locator_kind,c.locator_value,"
             "c.heading,c.start_ts,c.end_ts,c.chunk_index, row_number() over "
             "(partition by c.source_id order by c.chunk_index) as rn "
             "from chunks c join sources s on s.id=c.source_id "
             "where c.project_id=%s and s.project_id=%s and s.status='ready' "
-            "and c.source_id=any(%s::uuid[])) ranked where rn <= %s "
+            f"and c.source_id in ({placeholders})) ranked where rn <= %s "
             "order by source_id, chunk_index",
-            (project_id, project_id, source_ids, per_source),
+            (project_id, project_id, *source_ids, per_source),
         )
 
     def list_segments(self, source_id: str, user_id: str) -> list[dict[str, Any]]:
@@ -66,7 +69,7 @@ class SourceRepo(Repo):
         """
         return self._fetch_all(
             "select c.locator_kind,c.locator_value,c.heading,"
-            "substring(c.text,1,600) as text,c.start_ts,c.end_ts,c.chunk_index "
+            "substr(c.text,1,600) as text,c.start_ts,c.end_ts,c.chunk_index "
             "from chunks c join sources s on s.id=c.source_id "
             "join projects p on p.id=s.project_id "
             "where c.source_id=%s and p.user_id=%s and c.start_ts is not null "
@@ -202,6 +205,18 @@ class SourceRepo(Repo):
         )
         return {r["status"]: int(r["n"]) for r in rows}
 
+    def chunk_counts(self, project_ids: list[str]) -> dict[str, int]:
+        """Chunk totals per project in one query rather than one per project."""
+        if not project_ids:
+            return {}
+        placeholders = ", ".join(["%s"] * len(project_ids))
+        rows = self._fetch_all(
+            f"select project_id, count(*) as n from chunks "
+            f"where project_id in ({placeholders}) group by project_id",
+            tuple(project_ids),
+        )
+        return {str(r["project_id"]): int(r["n"]) for r in rows}
+
     def claim_pending(self) -> list[SourceRecord]:
         """Queued rows, oldest first. Ingestion drains these."""
         rows = self._fetch_all(
@@ -212,8 +227,8 @@ class SourceRepo(Repo):
     def delete_owned(self, source_id: str, user_id: str) -> bool:
         return (
             self._execute(
-                "delete from sources s using projects p "
-                "where s.id = %s and s.project_id = p.id and p.user_id = %s",
+                "delete from sources where id = %s and project_id in "
+                "(select p.id from projects p where p.user_id = %s)",
                 (source_id, user_id),
             )
             > 0
