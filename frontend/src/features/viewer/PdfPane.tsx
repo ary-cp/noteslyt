@@ -1,11 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { ChevronLeft, ChevronRight, Search, RotateCw, PanelLeft, Minus, Plus, Maximize, Minimize, X, Bookmark } from "lucide-react";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
-pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
+// Bundle the pdf.js worker as a build asset (?url) so the same file is
+// served from /assets when FastAPI hosts frontend/dist on port 8000.
+// The previous `new URL("pdfjs-dist/...", import.meta.url)` form emitted a
+// chunk the dev server rewrote, producing the "Failed to fetch dynamically
+// imported module .../pdf.worker.min-*.mjs" fake-worker fallback in prod.
+pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 type RenderSpec = { page: number; width: number; rotation: number; key: string };
 

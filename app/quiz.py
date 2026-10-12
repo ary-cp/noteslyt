@@ -21,6 +21,7 @@ Every auxiliary LLM failure degrades to a readable `QuizError`, never a bare
 
 from __future__ import annotations
 
+import json
 import logging
 import base64
 from types import SimpleNamespace
@@ -636,8 +637,8 @@ class QuizService:
         if question.qtype == "mcq":
             if isinstance(answer, bool) or not isinstance(answer, int):
                 raise QuizError("MCQ answers must be an option index (integer).")
-            key = (question.answer_key or {}).get("correct_index")
-            options = question.options or []
+            key = _coerce_key(question.answer_key).get("correct_index")
+            options = _coerce_options(question.options)
             if not 0 <= answer < len(options):
                 raise QuizError(f"Option index out of range (0–{len(options) - 1}).")
             correct = answer == key
@@ -655,7 +656,7 @@ class QuizService:
             value = _parse_number(answer)
             if value is None:
                 raise QuizError("Numerical answers must be a number.")
-            key = question.answer_key or {}
+            key = _coerce_key(question.answer_key)
             target = float(key.get("value", 0.0))
             tol = float(key.get("tolerance", self.settings.quiz_default_tolerance))
             unit = str(key.get("unit", ""))
@@ -670,7 +671,7 @@ class QuizService:
         raise QuizError(f"Unknown question type '{question.qtype}'.")
 
     def _grade_short(self, question, answer: str) -> tuple[bool, object, str, list[str]]:
-        key = question.answer_key or {}
+        key = _coerce_key(question.answer_key)
         try:
             data = self.llm.complete_json(
                 RUBRIC_SYSTEM,
@@ -798,6 +799,26 @@ class QuizService:
         return row.id
 
 
+def _coerce_options(value: object) -> list:
+    """Options as a list, tolerating a JSON-text snapshot (SQLite legacy rows)."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return []
+    return list(value) if isinstance(value, list) else []
+
+
+def _coerce_key(value: object) -> dict:
+    """Answer key as a dict, tolerating a JSON-text snapshot."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return {}
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _public_question(record, slug: str) -> dict:
     """Client-safe question: keys stay server-side until grading."""
     return {
@@ -806,7 +827,7 @@ def _public_question(record, slug: str) -> dict:
         "topic_slug": slug,
         "stem": record.stem,
         "qtype": record.qtype,
-        "options": list(record.options or []) if record.qtype == "mcq" else [],
+        "options": _coerce_options(record.options) if record.qtype == "mcq" else [],
         "locator": citation_label(record.locator_kind, record.locator_value),
         "difficulty": record.difficulty,
     }
@@ -897,10 +918,10 @@ def _answer_key(q: dict, remapped_key: int) -> dict:
 
 
 def _expected_answer(question) -> object:
-    key = question.answer_key or {}
+    key = _coerce_key(question.answer_key)
     if question.qtype == "mcq":
         idx = key.get("correct_index")
-        options = question.options or []
+        options = _coerce_options(question.options)
         return options[idx] if isinstance(idx, int) and 0 <= idx < len(options) else None
     if question.qtype == "short_answer":
         return key.get("sample_answer")

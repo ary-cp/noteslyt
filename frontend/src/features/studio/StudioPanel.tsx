@@ -964,24 +964,31 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
       <MarkdownBody text={q.stem} />
       {q.qtype === "mcq" ? (
         <div className="mt-3 grid gap-2">
-          {q.options.map((opt, idx) => (
+          {q.options.map((opt, idx) => {
+            const answered = !!answers[q.id];
+            const isPicked = !answered && picked === idx;
+            return (
             <button
               key={idx}
               onClick={() => setPicked(idx)}
-              disabled={submitting || !!answers[q.id]}
-              aria-pressed={(answers[q.id] ? Number(answers[q.id].given) : picked) === idx}
-              className={`flex cursor-pointer items-center gap-2.5 rounded-[8px] border px-3 py-2.5 text-left text-sm transition-colors ${
+              disabled={submitting || answered}
+              aria-pressed={(answered ? Number(answers[q.id].given) : picked) === idx}
+              className={`flex cursor-pointer items-center gap-2.5 rounded-[8px] border px-3 py-2.5 text-left text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
                 answers[q.id] && opt === answers[q.id].expected ? "border-[var(--accent-border)] bg-[var(--accent-soft)]/50" :
                 answers[q.id] && Number(answers[q.id].given) === idx ? "border-[var(--danger)] bg-[var(--danger-soft)]" :
-                picked === idx && !answers[q.id] ? "border-[var(--border-strong)] bg-[var(--surface-secondary)]" : "border-[var(--border)] hover:border-[var(--border-strong)]"
+                isPicked ? "border-[var(--accent)] bg-[var(--accent-soft)] font-medium shadow-[0_0_0_1px_var(--accent)]" : "border-[var(--border)] hover:border-[var(--border-strong)]"
               }`}
             >
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] border border-[var(--border)] font-mono text-xs">
+              <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] border font-mono text-xs ${
+                isPicked ? "border-[var(--accent)] bg-[var(--accent)] text-white" : "border-[var(--border)]"
+              }`}>
                 {String.fromCharCode(65 + idx)}
               </span>
-              <MarkdownBody text={opt} />
+              <span className="min-w-0 flex-1"><MarkdownBody text={opt} /></span>
+              {isPicked && <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-[var(--accent)]" />}
             </button>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <textarea

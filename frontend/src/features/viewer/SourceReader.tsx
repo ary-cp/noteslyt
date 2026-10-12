@@ -119,15 +119,20 @@ export function SourceReader({
         ? citationLabel(target.kind, target.value)
         : "";
 
-  // Parsed / Original tabs (pdf + audio/video have both views). Citations open the original at the cited page or playback position.
+  // Parsed / Original tabs (pdf + audio/video have both views).
+  // Citation clicks land on parsed text for PDFs (the cited lines are
+  // highlighted there) but keep the original player for audio/video so the
+  // cited timestamp starts playback. Plain source opens follow the same
+  // default: PDFs read best as parsed text, AV as the player.
   const hasOriginal = kind === "pdf" || kind === "video" || kind === "audio";
-  const [tab, setTab] = useState<"parsed" | "original">(hasOriginal ? "original" : "parsed");
+  const defaultTab: "parsed" | "original" = kind === "pdf" ? "parsed" : hasOriginal ? "original" : "parsed";
+  const [tab, setTab] = useState<"parsed" | "original">(defaultTab);
   const prevTarget = useRef(target?.nonce ?? -1);
   useEffect(() => {
     const n = target?.nonce ?? -1;
     if (prevTarget.current === n) return;
     prevTarget.current = n;
-    setTab(hasOriginal ? "original" : "parsed");
+    setTab(defaultTab);
   });
 
   useEffect(() => {

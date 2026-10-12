@@ -93,8 +93,9 @@ class Settings(BaseSettings):
     # Multimodal wire protocol for image/audio/video vectors. Text ALWAYS
     # goes through the OpenAI-compatible endpoint (proven everywhere); this
     # only selects how media bytes are posted:
-    #   "auto"      — llama_cpp shape in local mode and in cloud mode (works
-    #                 against llama-server-shaped endpoints; pure-text cloud
+    #   "auto"      — sniffed from the endpoint host (Google -> gemini,
+    #                 Jina -> jina, anything else -> llama_cpp shape, which
+    #                 works against llama-server-shaped endpoints; pure-text
     #                 endpoints fail native modes loudly at boot).
     #   "llama_cpp" — nested input_audio/image/video parts (llama-server).
     #   "jina"      — typed {"image"|"audio"|"video": base64} objects

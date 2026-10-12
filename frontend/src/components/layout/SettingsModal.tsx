@@ -8,7 +8,6 @@ import {
   FolderOpen,
   Hash,
   MessageSquare,
-  RefreshCw,
   Search,
   Settings as SettingsIcon,
   Sparkles,
@@ -16,8 +15,8 @@ import {
   Upload,
   Volume2,
 } from "lucide-react";
-import { getLlamaStatus, getProfile, getProfileLevels, updateLlamaEngine, updateProfile } from "../../lib/api";
-import type { LlamaStatus, ProfileLevels, ProfileOut } from "../../lib/types";
+import { getProfile, getProfileLevels, updateProfile } from "../../lib/api";
+import type { ProfileLevels, ProfileOut } from "../../lib/types";
 import { useAuth } from "../../lib/auth";
 import { useToast } from "../../lib/toast";
 import { useTheme, type ThemeMode } from "../../lib/theme";
@@ -70,10 +69,6 @@ const STATIC_NAV: { header: string; items: StaticNav[] }[] = [
     header: "Profile",
     items: [{ id: "set-profile", label: "Learning profile", icon: Sparkles, section: "profile" }],
   },
-  {
-    header: "System",
-    items: [{ id: "set-engine", label: "Embedding engine", icon: RefreshCw, section: "engine" }],
-  },
 ];
 
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -90,17 +85,11 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [goals, setGoals] = useState("");
   const [autoIndex, setAutoIndex] = useState(true);
   const [defaultModel, setDefaultModel] = useState("default");
-  const [engine, setEngine] = useState<LlamaStatus | null>(null);
-  const [engineBusy, setEngineBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState("set-appearance");
   const [matchCounts, setMatchCounts] = useState<Record<string, number>>({});
 
   const isAdmin = user?.is_admin === true;
-
-  const refreshEngine = () => {
-    getLlamaStatus().then(setEngine).catch(() => setEngine(null));
-  };
 
   useEffect(() => {
     if (!open) return;
@@ -116,7 +105,6 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       setGoals(p.goals);
     }).catch((e) => { if (activeFlag) setLoadError(e instanceof Error ? e.message : "Could not load profile"); }).finally(() => { if (activeFlag) setLoading(false); });
     getProfileLevels().then(setLevels).catch(() => undefined);
-    refreshEngine();
     try {
       setAutoIndex(localStorage.getItem("noteslyt:autoindex") !== "off");
       setDefaultModel(localStorage.getItem("noteslyt:model") ?? "default");
@@ -140,10 +128,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
   const q = query.trim().toLowerCase();
   const staticMatches = (label: string) => !q || label.toLowerCase().includes(q);
-  // Admins manage the engine inside the Embeddings tab — no separate entry.
-  const staticSections = isAdmin
-    ? STATIC_NAV.map((s) => ({ ...s, items: s.items.filter((i) => i.id !== "set-engine") })).filter((s) => s.items.length > 0)
-    : STATIC_NAV;
+  // Engine updates live in the admin Embeddings tab — regular users never see them.
+  const staticSections = STATIC_NAV;
   const adminGroups = useMemo(
     () => ADMIN_NAV_TABS.filter((g) => !q || (matchCounts[g] ?? 0) > 0 || ADMIN_GROUP_TITLES[g].toLowerCase().includes(q)),
     [q, matchCounts],
@@ -244,63 +230,6 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             </div>
           ) : (
             <p className="text-[13px] text-[var(--text-muted)]">Sign in to edit your learning profile.</p>
-          )}
-        </div>
-      </div>
-      <div id="set-engine">
-        <h3 className="text-[15px] font-semibold">Embedding engine</h3>
-        <div className="mt-2">
-          {engine === null ? (
-            <p className="text-[13px] text-[var(--text-muted)]">Engine status unavailable.</p>
-          ) : engine.mode === "cloud" ? (
-            <p className="text-[13px] text-[var(--text-muted)]">
-              Using the cloud endpoint from <span className="font-mono">EMBEDDING_*</span> env vars.
-              Set <span className="font-mono">EMBEDDING_MODE=local</span> to use the vendored llama.cpp server.
-            </p>
-          ) : (
-            <div className="grid gap-2">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-[13px] font-medium">
-                    Local llama.cpp {engine.build_tag ? `· ${engine.build_tag}` : ""}
-                  </p>
-                  <p className="text-xs text-[var(--text-muted)]">
-                    {engine.installed ? "Installed" : "Not downloaded yet"}
-                    {engine.model_present ? " · model ready" : " · model missing"}
-                    {engine.running ? " · server running" : " · server sleeps until needed"}
-                  </p>
-                  {(engine.update_state !== "idle" || engine.update_message) && (
-                    <p className="mt-1 text-xs text-[var(--text-muted)]">
-                      Update: {engine.update_state}{engine.update_message ? ` — ${engine.update_message}` : ""}
-                    </p>
-                  )}
-                </div>
-                <Button
-                  variant="secondary"
-                  loading={engineBusy}
-                  disabled={engineBusy}
-                  onClick={() => {
-                    setEngineBusy(true);
-                    updateLlamaEngine()
-                      .then(() => {
-                        push("Engine update started", { detail: "This downloads in the background.", tone: "success" });
-                        window.setTimeout(refreshEngine, 5000);
-                      })
-                      .catch((e: unknown) => push("Update failed to start", { detail: e instanceof Error ? e.message : String(e), tone: "error" }))
-                      .finally(() => setEngineBusy(false));
-                  }}
-                >
-                  Update engine
-                </Button>
-              </div>
-              <button
-                type="button"
-                onClick={refreshEngine}
-                className="cursor-pointer self-start text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-              >
-                Refresh status
-              </button>
-            </div>
           )}
         </div>
       </div>
@@ -436,7 +365,7 @@ function StaticTabContent({ id, personalSections }: { id: string; personalSectio
   // personalSections holds every personal tab in order; show only the active one.
   const fragment = personalSections as React.ReactElement<{ children?: React.ReactNode }>;
   const children = Children.toArray(fragment.props.children);
-  const order = ["set-appearance", "set-chat", "set-sources", "set-profile", "set-engine", "set-shortcuts"];
+  const order = ["set-appearance", "set-chat", "set-sources", "set-profile", "set-shortcuts"];
   const index = order.indexOf(id);
   return <>{children[index] ?? null}</>;
 }

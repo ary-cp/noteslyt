@@ -286,8 +286,14 @@ def _mount_frontend(application: FastAPI) -> str:
     directory = get_settings().resolved_frontend_dir
     if directory is None:
         return ""
+    import mimetypes
+
     from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
+
+    # Windows' MIME database commonly misses the .mjs extension. PDF.js loads
+    # its worker as a JavaScript module, and browsers reject text/plain here.
+    mimetypes.add_type("application/javascript", ".mjs")
 
     # Keep API routes registered before frontend routes. Mounting StaticFiles
     # at '/' returns its own 404 for nested React routes, so mount assets only

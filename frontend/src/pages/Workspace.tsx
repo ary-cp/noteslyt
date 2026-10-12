@@ -419,12 +419,9 @@ export default function Workspace({
               setSwitcherAnchor({ x: e.clientX - 120, y: e.currentTarget.getBoundingClientRect().bottom + 6 });
               setSwitcherOpen(true);
             }}
-            className="flex min-w-0 cursor-pointer items-center gap-2 rounded-[7px] px-2 py-1.5 hover:bg-[var(--surface-secondary)]"
+            className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded-[7px] px-2 py-1.5 hover:bg-[var(--surface-secondary)]"
             aria-haspopup="dialog"
           >
-            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] bg-[var(--accent)] text-[11px] font-bold text-white">
-              {(project?.title ?? "…").slice(0, 1).toUpperCase()}
-            </span>
             <span className="max-w-[180px] truncate text-sm font-semibold">{project?.title ?? "Loading…"}</span>
             <ChevronDown size={14} className="shrink-0 text-[var(--text-muted)]" />
           </button>
