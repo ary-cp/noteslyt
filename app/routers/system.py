@@ -1,9 +1,11 @@
 """
-Operator endpoints for the vendored llama.cpp embedding backend.
+Operator endpoints for the vendored llama.cpp embedding backend and the
+vendored audio.cpp transcription backend.
 
 `GET /system/llama` reports engine/model presence, running state and update
 progress. `POST /system/llama/update` refreshes the engine build in the
-background (202 immediately; poll GET for `update_state`).
+background (202 immediately; poll GET for `update_state`). Same shape for
+`/system/audio-cpp` (transcription).
 """
 
 from __future__ import annotations
@@ -52,3 +54,39 @@ def llama_update(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     background.add_task(manager.update_engine)
     return {"status": "started", "detail": "Poll GET /system/llama for update_state."}
+
+
+@router.get("/system/audio-cpp")
+def audio_cpp_status(
+    user: CurrentUser,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict:
+    """audio.cpp engine + ASR model presence, server state, update progress."""
+    if settings.transcription_mode != "local":
+        return {"mode": "cloud", "detail": "TRANSCRIPTION_MODE=cloud — transcripts come from TRANSCRIPTION_*."}
+    from ..audio_cpp import get_transcription_manager
+
+    try:
+        manager = get_transcription_manager()
+    except RuntimeError as exc:
+        return {"mode": "local", "initialized": False, "detail": str(exc)}
+    return {"mode": "local", "initialized": True, **manager.status().as_dict()}
+
+
+@router.post("/system/audio-cpp/update", status_code=202)
+def audio_cpp_update(
+    user: CurrentUser,
+    background: BackgroundTasks,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict:
+    """Download the newest audio.cpp build and swap it in (background)."""
+    if settings.transcription_mode != "local":
+        raise HTTPException(status_code=400, detail="Engine updates apply to TRANSCRIPTION_MODE=local only.")
+    from ..audio_cpp import get_transcription_manager
+
+    try:
+        manager = get_transcription_manager()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    background.add_task(manager.update_engine)
+    return {"status": "started", "detail": "Poll GET /system/audio-cpp for update_state."}

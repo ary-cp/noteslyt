@@ -60,6 +60,9 @@ _CHUNK_NAMESPACE = uuid.UUID("6f1c9a7e-0d3b-5f42-9c81-1f0a2b3c4d5e")
 # Image-chunk indices live far above text-chunk indices so the two families
 # never share a deterministic chunk id, whatever the text chunk count is.
 PAGE_IMAGE_INDEX_BASE = 1_000_000
+# Audio-clip chunks live in their own index band (transcript + audio dual
+# vectors, like PDF page images): re-ingests upsert the same rows.
+AUDIO_CLIP_INDEX_BASE = 2_000_000
 
 # Parsed-text cap for the viewer ("what the model read"). Beyond this the
 # stored markdown is cut and flagged — chunks/embeddings are unaffected, only
@@ -191,6 +194,8 @@ class IngestionPipeline:
             slugs = [t.slug for t in proposed if t.slug in topic_by_slug]
 
             # 4. Embed --------------------------------------------------------
+            audio_chunks: list[Chunk] = []
+            audio_vecs: list[list[float]] = []
             if source.source_type == "image":
                 embed_image = getattr(self.embedder, "embed_image", None)
                 if embed_image is None:
@@ -217,6 +222,18 @@ class IngestionPipeline:
                 # grounding); only the vector space is visual.
                 embeddings = self._embed_video_native(path, chunks, source, result.warnings)
             elif (
+                source.source_type == "audio"
+                and self.settings.audio_embed_mode == "native"
+            ):
+                # Dual-signal audio RAG (mirrors video transcript+clip): every
+                # chunk keeps its transcript-text vector, and one extra chunk
+                # per ~3-min part carries the embedded audio clip of the same
+                # timeframe — retrieval matches what was said AND the sound.
+                embeddings = self._embed_with_batches([c.text for c in chunks], source)
+                audio_chunks, audio_vecs = self._embed_audio_clips(
+                    path, chunks, source, result.warnings
+                )
+            elif (
                 source.source_type in ("audio", "video")
                 and self.settings.audio_embed_mode == "native"
             ):
@@ -228,8 +245,16 @@ class IngestionPipeline:
                 embeddings = self._embed_with_batches([c.text for c in chunks], source)
 
             # 4b. Join the visual page vectors with their chunks (1:1) -------
-            chunks = [*chunks, *image_chunks]
-            embeddings = [*embeddings, *image_vecs]
+            # Audio-clip chunks join the same way (transcript + audio dual
+            # vectors); both families upsert stably via their index bands.
+            chunks = [*chunks, *audio_chunks, *image_chunks]
+            embeddings = [*embeddings, *audio_vecs, *image_vecs]
+            if audio_chunks:
+                result.warnings.append(
+                    f"Embedded {len(audio_chunks)} audio clips (~3 min each) "
+                    "alongside the transcript."
+                )
+            result.chunks = len(chunks)
 
             # 5. Tag chunks with their topic ---------------------------------
             chunk_locators = [(c.locator_kind, c.locator_value) for c in chunks]
@@ -490,6 +515,84 @@ class IngestionPipeline:
                 f"corpus with uv run python scripts/re_embed.py (use --check first)."
             )
         return vectors
+
+    def _embed_audio_clips(
+        self, path: Path, chunks: list, source: SourceRecord, warnings: list
+    ) -> tuple[list, list[list[float]]]:
+        """One extra audio-clip chunk per ~3-min part (dual-signal audio RAG).
+
+        Text chunks keep their transcript vectors (computed by the caller); each
+        unique `[start_ts, end_ts]` window in the chunk list gets one additional
+        chunk whose vector is the embedded audio clip of that same timeframe —
+        the audio mirror of video's transcript+clip parts. Chunk texts carry a
+        transcript excerpt so the viewer/topics stay readable; only the vector
+        space is acoustic.
+
+        Never raises: an unsliceable or unembeddable window is skipped with a
+        warning (its transcript vector already covers the timeframe). Chunk
+        indices sit above AUDIO_CLIP_INDEX_BASE so re-ingests upsert stably.
+        """
+        from .parsers_media import slice_audio_wav
+        from .units import format_timestamp
+
+        embed_audio = getattr(self.embedder, "embed_audio", None)
+        if embed_audio is None:
+            warnings.append(
+                "Audio clips skipped: the embedding provider has no audio input. "
+                "Serve a joint model (e.g. embeddinggemma-2-GGUF + mmproj) from llama.cpp."
+            )
+            return [], []
+        # One clip per unique timeframe (several chunks can share a 3-min part
+        # when the transcript text splits across the char budget).
+        windows: dict[tuple[float, float], list] = {}
+        for c in chunks:
+            if c.start_ts is None or c.end_ts is None or c.end_ts <= c.start_ts:
+                continue
+            key = (round(float(c.start_ts), 2), round(float(c.end_ts), 2))
+            windows.setdefault(key, []).append(c)
+        if not windows:
+            return [], []
+        max_clip_s = max(float(getattr(self.settings, "audio_segment_seconds", 180.0) or 180.0), 15.0)
+        out_chunks: list = []
+        out_vecs: list[list[float]] = []
+        skipped = 0
+        for i, ((start, end), members) in enumerate(sorted(windows.items())):
+            span = end - start
+            clip_end = min(end, start + max_clip_s)
+            label = f"{format_timestamp(start)}–{format_timestamp(clip_end)}"
+            try:
+                wav = slice_audio_wav(path, start, clip_end)
+            except Exception as exc:  # noqa: BLE001 — transcript already covers it
+                skipped += 1
+                log.warning("Audio clip %s skipped for %s: %s", label, source.filename, exc)
+                continue
+            try:
+                vec = embed_audio(wav, "audio/wav")
+            except Exception as exc:  # noqa: BLE001 — transcript already covers it
+                skipped += 1
+                warnings.append(f"Audio clip [{label}] not embedded ({exc}); transcript still indexed.")
+                continue
+            if len(vec) != self.settings.embedding_dim:
+                skipped += 1
+                warnings.append(
+                    f"Audio clip [{label}] width {len(vec)} != "
+                    f"EMBEDDING_DIM={self.settings.embedding_dim}; transcript still indexed."
+                )
+                continue
+            excerpt = " ".join(m.text for m in members)[:400].strip()
+            out_chunks.append(Chunk(
+                text=f"Audio clip [{label}] ({span:.0f}s of sound). {excerpt}",
+                chunk_index=AUDIO_CLIP_INDEX_BASE + i,
+                heading=f"Audio {label}",
+                locator_kind=members[0].locator_kind,
+                locator_value=members[0].locator_value,
+                start_ts=start,
+                end_ts=clip_end,
+            ))
+            out_vecs.append([float(x) for x in vec])
+        if skipped:
+            warnings.append(f"{skipped} audio clip(s) skipped; transcript still indexed.")
+        return out_chunks, out_vecs
 
     def _embed_page_images(
         self, source: SourceRecord, path: Path, units: list[SourceUnit], result: IngestResult

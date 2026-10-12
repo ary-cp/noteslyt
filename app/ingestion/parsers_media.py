@@ -11,8 +11,10 @@ Wiring: parser functions only receive `(path, settings)`, so the lifespan in
 gets a readable failure instead of an `AttributeError`.
 
 Video needs audio first: `ffmpeg` extracts 16 kHz mono WAV, split into
-10-minute pieces so one API call never exceeds the provider's upload limit
-(~25 MB). No `ffmpeg` on PATH → a readable `ParserError`, not a traceback.
+pieces of at most `transcription_chunk_s` seconds (default 5 min) so one API
+call never exceeds the provider's upload limit (~25 MB) *or* the STT model's
+encoder window (Parakeet TDT fails past ~5 min). No `ffmpeg` on PATH → a
+readable `ParserError`, not a traceback.
 
 Grouping: raw Whisper segments are a few seconds each — one unit per segment
 would mean hundreds of embedding calls for a lecture. Segments are merged
@@ -34,6 +36,7 @@ from typing import TYPE_CHECKING
 
 from ..config import Settings
 from ..storage import content_type_for
+from ..transcription import audio_duration_s
 from .parsers import ParserError
 from .units import IMAGE, SEGMENT, ParsedSource, SourceUnit, format_timestamp
 
@@ -46,9 +49,18 @@ log = logging.getLogger(__name__)
 # read like VTT cues instead of minute-long blobs).
 _SEGMENT_TARGET_S = 15.0
 _SEGMENT_TARGET_CHARS = 400
-# One transcription call per chunk of extracted audio (provider upload limits).
-_AUDIO_CHUNK_S = 600
+# Fallback transcription piece size (seconds) when settings carry no
+# `transcription_chunk_s` (scripts, tests). Must fit the STT encoder window.
+_TRANSCRIPTION_CHUNK_S = 300.0
 _WAV_RATE = 16000
+
+
+def transcription_chunk_s(settings: Settings) -> float:
+    """Max audio seconds per transcription request (env-tunable, 1–5+ min)."""
+    try:
+        return max(float(getattr(settings, "transcription_chunk_s", 0.0) or 0.0), 30.0)
+    except (TypeError, ValueError):
+        return _TRANSCRIPTION_CHUNK_S
 
 
 _TRANSCRIBER: Transcriber | None = None
@@ -130,28 +142,54 @@ def slice_audio_wav(source: Path, start_s: float, end_s: float) -> bytes:
     return proc.stdout
 
 
-def _extract_wav_chunks(video: Path, workdir: Path) -> list[Path]:
+def _extract_wav_chunks(media: Path, workdir: Path, chunk_s: float) -> list[Path]:
     """
-    Video → 16 kHz mono WAV pieces of at most `_AUDIO_CHUNK_S` seconds.
+    Media → 16 kHz mono WAV pieces of at most `chunk_s` seconds.
 
     A single ffmpeg call with the segment muxer; pieces are linear so piece `i`
-    starts at `i * _AUDIO_CHUNK_S` seconds.
+    starts at `i * chunk_s` seconds. Works for audio and video inputs alike
+    (`-vn` drops the video track when there is one).
     """
     exe = _ffmpeg()
     pattern = str(workdir / "part-%03d.wav")
     try:
         subprocess.run(
-            [exe, "-y", "-v", "error", "-i", str(video),
+            [exe, "-y", "-v", "error", "-i", str(media),
              "-vn", "-ac", "1", "-ar", str(_WAV_RATE),
-             "-f", "segment", "-segment_time", str(_AUDIO_CHUNK_S), pattern],
+             "-f", "segment", "-segment_time", str(chunk_s), pattern],
             check=True, timeout=1800, capture_output=True,
         )
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or b"").decode(errors="replace")[-400:]
-        raise ParserError(f"Could not extract audio from {video.name}: {tail or exc}") from exc
+        raise ParserError(f"Could not extract audio from {media.name}: {tail or exc}") from exc
     except subprocess.TimeoutExpired as exc:
-        raise ParserError(f"Audio extraction from {video.name} timed out.") from exc
+        raise ParserError(f"Audio extraction from {media.name} timed out.") from exc
     return sorted(workdir.glob("part-*.wav"))
+
+
+def _transcribe_pieces(
+    transcriber: Transcriber,
+    pieces: list[Path],
+    chunk_s: float,
+    filename: str,
+) -> list[Segment]:
+    """Transcribe each WAV piece, shifting segments back onto the file timeline."""
+    segments: list[Segment] = []
+    for i, piece in enumerate(pieces):
+        try:
+            got = transcriber.transcribe(piece)
+        except Exception as exc:
+            raise ParserError(
+                f"Transcription of {filename} (part {i + 1}/{len(pieces)}, "
+                f"~{chunk_s:.0f}s pieces) failed: {exc}. "
+                "If the STT model rejects long inputs, lower TRANSCRIPTION_CHUNK_S."
+            ) from exc
+        offset = i * chunk_s
+        for s in got:
+            s.start += offset
+            s.end += offset
+        segments.extend(got)
+    return segments
 
 
 def group_segments(
@@ -197,13 +235,33 @@ def group_segments(
     return units
 
 
-def parse_audio(path: Path, settings: Settings) -> ParsedSource:  # noqa: ARG001
+def parse_audio(path: Path, settings: Settings) -> ParsedSource:
     transcriber = _require_transcriber()
-    try:
-        segments = transcriber.transcribe(path)
-    except Exception as exc:
-        raise ParserError(f"Transcription of {path.name} failed: {exc}") from exc
-    units = group_segments(segments)
+    chunk_s = transcription_chunk_s(settings)
+    # Long files go in pieces (one request per ~chunk_s seconds) so a lecture
+    # never exceeds the STT encoder window; short files keep the old single
+    # request (no ffmpeg needed). Duration unknown (no ffprobe) → try single,
+    # the model error names TRANSCRIPTION_CHUNK_S when it is too long.
+    duration = audio_duration_s(path)
+    if duration > chunk_s:
+        with tempfile.TemporaryDirectory(prefix="study-audio-") as tmp:
+            pieces = _extract_wav_chunks(path, Path(tmp), chunk_s)
+            if not pieces:
+                raise ParserError(f"No audio stream found in {path.name}.")
+            segments = _transcribe_pieces(transcriber, pieces, chunk_s, path.name)
+    else:
+        try:
+            segments = transcriber.transcribe(path)
+        except Exception as exc:
+            raise ParserError(
+                f"Transcription of {path.name} failed: {exc}. "
+                "If the STT model rejects long inputs, lower TRANSCRIPTION_CHUNK_S."
+            ) from exc
+    # Audio parts are coarse (~3 min) so each part maps to one embeddable
+    # audio clip downstream (transcript + audio dual vectors, like video).
+    # ~180 s of speech is ~2500 chars, so the char target scales with it.
+    window_s = max(float(getattr(settings, "audio_segment_seconds", 180.0) or 180.0), 15.0)
+    units = group_segments(segments, target_s=window_s, target_chars=int(window_s * 14))
     minutes = (units[-1].end_ts or 0.0) / 60.0
     warnings = [f"Transcribed {minutes:.1f} min of audio into {len(units)} segments."]
     return ParsedSource(units=units, parser="whisper", warnings=warnings)
@@ -211,22 +269,13 @@ def parse_audio(path: Path, settings: Settings) -> ParsedSource:  # noqa: ARG001
 
 def parse_video(path: Path, settings: Settings) -> ParsedSource:
     transcriber = _require_transcriber()
+    chunk_s = transcription_chunk_s(settings)
     with tempfile.TemporaryDirectory(prefix="study-video-") as tmp:
         workdir = Path(tmp)
-        pieces = _extract_wav_chunks(path, workdir)
+        pieces = _extract_wav_chunks(path, workdir, chunk_s)
         if not pieces:
             raise ParserError(f"No audio track found in {path.name}.")
-        segments: list[Segment] = []
-        for i, piece in enumerate(pieces):
-            try:
-                got = transcriber.transcribe(piece)
-            except Exception as exc:
-                raise ParserError(f"Transcription of {path.name} (part {i + 1}/{len(pieces)}) failed: {exc}") from exc
-            offset = i * _AUDIO_CHUNK_S
-            for s in got:
-                s.start += offset
-                s.end += offset
-            segments.extend(got)
+        segments = _transcribe_pieces(transcriber, pieces, chunk_s, path.name)
     units = group_segments(
         segments,
         target_s=settings.video_segment_seconds,

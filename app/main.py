@@ -109,6 +109,14 @@ async def lifespan(app: FastAPI):
         from .llama_embed import init_embedding_server
 
         init_embedding_server(settings)
+    if settings.transcription_mode == "local":
+        # Vendored audio.cpp backend: downloads the engine + ASR weights on
+        # first boot (loudly logged). The server itself starts lazily on the
+        # first transcription call and unloads after idle (wake-on-API).
+        # Cloud mode downloads nothing.
+        from .audio_cpp import init_transcription_server
+
+        init_transcription_server(settings)
     embedder = build_embedder(settings)             # vectors (OpenAI-compatible)
     transcriber = build_transcriber(settings)       # speech-to-text
     storage = FileStorage(settings.uploads_dir)     # local disk
@@ -184,6 +192,13 @@ async def lifespan(app: FastAPI):
                 get_embedding_manager().stop()
             except Exception:
                 log.exception("Failed to stop the local embedding server")
+        if settings.transcription_mode == "local":
+            try:
+                from .audio_cpp import get_transcription_manager
+
+                get_transcription_manager().stop()
+            except Exception:
+                log.exception("Failed to stop the local transcription server")
         db.close()
 
 

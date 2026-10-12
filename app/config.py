@@ -27,6 +27,7 @@ from typing import Literal
 from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 
 Capability = Literal["llm", "embedding", "transcription"]
 
@@ -111,7 +112,7 @@ class Settings(BaseSettings):
     embedding_local_mmproj_file: str = "mmproj-embeddinggemma-2-Q8_0.gguf"
     embedding_local_model_path: Path | None = None
     embedding_local_mmproj_path: Path | None = None
-    embedding_idle_unload_s: int = 600   # 0 = keep the server up forever
+    embedding_idle_unload_s: int = 300   # 0 = keep the server up forever (5 min idle unload)
     llama_github_repo: str = "ggml-org/llama.cpp"
     # How audio/video sources are vectorized:
     #   "transcript" — embed the Whisper/transcript text (default; works with any
@@ -130,6 +131,12 @@ class Settings(BaseSettings):
     # Switching modes changes the vector space: re-ingest the corpus
     # (`uv run python scripts/re_embed.py --force`) after switching.
     audio_embed_mode: Literal["transcript", "native"] = "transcript"
+    # Audio is broken into 3-minute parts carrying BOTH signals (mirrors
+    # video): each part's transcript text plus one embedded audio clip of the
+    # same timeframe, so retrieval matches what was said and what it sounded
+    # like. Parts stay ~180 s so one clip fits the transcription + embedding
+    # path; shorter transcript units are grouped up to this window.
+    audio_segment_seconds: float = 180.0
 
     # How lecture-video segments are vectorized:
     #   "transcript" — embed the transcript (+ vision captions when enabled).
@@ -159,12 +166,45 @@ class Settings(BaseSettings):
     video_clip_width: int = 720        # max width px; downscale-only, never upscale
 
     # --------------------------------------------------------- Transcription
-    # Speech-to-text for lecture videos. Any OpenAI-compatible
-    # /audio/transcriptions endpoint: Groq (whisper-large-v3-turbo, free tier),
-    # OpenAI (whisper-1), or a self-hosted whisper.cpp / faster-whisper server.
-    transcription_base_url: str | None = None   # falls back to llm_base_url
-    transcription_api_key: str | None = None    # falls back to llm_api_key
+    # Speech-to-text for lecture audio/video. Two modes, mirroring embeddings:
+    #   "cloud" — the default. Any OpenAI-compatible /audio/transcriptions
+    #             endpoint: Groq (whisper-large-v3-turbo, free tier), OpenAI
+    #             (whisper-1), or a self-hosted whisper server. TRANSCRIPTION_*
+    #             URL/KEY/MODEL win; nothing is downloaded.
+    #   "local" — a vendored audio.cpp server (downloaded to
+    #             TRANSCRIPTION_LOCAL_DIR on first boot) serves a local ASR
+    #             model (default Qwen3-ASR-0.6B Q8) with wake-on-API and idle
+    #             unload. TRANSCRIPTION_*_URL/KEY are ignored in this mode;
+    #             TRANSCRIPTION_MODEL selects the server's model id.
+    # Scripts without an app lifespan (eval, mocks) must use cloud.
+    transcription_mode: Literal["local", "cloud"] = "cloud"
+    transcription_base_url: str | None = None   # falls back to llm_base_url (cloud)
+    transcription_api_key: str | None = None    # falls back to llm_api_key (cloud)
     transcription_model: str = "whisper-large-v3-turbo"
+    # Vendored audio.cpp engine + ASR weights layout (override the model path
+    # to use your own files instead of the managed download):
+    #   <dir>/engine/   audio.cpp build + BUILD_TAG
+    #   <dir>/models/   ASR weights (GGUF directory or single file)
+    #   <dir>/logs/     audiocpp-server.log
+    #   <dir>/server.json  generated server config (host/port/backend/models)
+    transcription_local_dir: Path = Path("./data/audio-cpp")
+    transcription_local_host: str = "127.0.0.1"
+    transcription_local_port: int = 8898
+    transcription_local_repo: str = "0xShug0/audio.cpp"
+    transcription_local_model_repo: str = "audio-cpp/audio.cpp-gguf"
+    transcription_local_model_file: str = "Qwen3-ASR-0.6B-GGUF/qwen3-asr-0.6b-q8_0.gguf"
+    transcription_local_model_path: Path | None = None
+    transcription_local_model_id: str = "qwen3-asr"
+    transcription_local_family: str = "qwen3_asr"
+    transcription_idle_unload_s: int = 300   # 0 = keep the server up forever (5 min idle unload)
+    # Longest audio slice sent in ONE transcription request, in seconds.
+    # Must fit the STT model's encoder window, not just the provider upload
+    # limit: a 10-min piece against Parakeet TDT fails with
+    # "relative position frames exceed maximum" even though 5 min works.
+    # Recipe: test your model directly first, then set this at or below what
+    # worked (60/120/180/300 for 1/2/3/5 min). Applies to video pieces and to
+    # long audio files, which are split into same-sized pieces.
+    transcription_chunk_s: float = 300.0
     # BCP-47 language hint for /audio/transcriptions (e.g. "en"). Unset means
     # auto-detect. Some self-hosted STT engines (whisper.cpp-style) reject
     # `verbose_json` without an explicit language — see app/transcription.py,
@@ -213,8 +253,7 @@ class Settings(BaseSettings):
     # --------------------------------------------------------------- Storage
     # Uploaded files live on this machine, under DATA_DIR/uploads/<project_id>/.
     # No object storage, no CDN — see app/storage.py.
-    data_dir: Path = Path("./data")
-    # Per-type upload ceilings in MB. Video and audio dominate ingest cost
+    data_dir: Path = Path("./data")    # Per-type upload ceilings in MB. Video and audio dominate ingest cost
     # (transcription + embedding), so they get a tighter default than documents.
     max_upload_mb: int = 50            # documents, images, spreadsheets
     max_video_mb: int = 300
@@ -270,6 +309,26 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ API
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
+    @field_validator("transcription_chunk_s")
+    @classmethod
+    def _check_transcription_chunk(cls, v: float) -> float:
+        if not 30.0 <= float(v) <= 1800.0:
+            raise ValueError(
+                f"TRANSCRIPTION_CHUNK_S={v} is outside 30–1800 s. "
+                "Below 30 s wastes calls; above 30 min exceeds every STT encoder window."
+            )
+        return v
+
+    @field_validator("audio_segment_seconds")
+    @classmethod
+    def _check_audio_segment(cls, v: float) -> float:
+        if not 15.0 <= float(v) <= 600.0:
+            raise ValueError(
+                f"AUDIO_SEGMENT_SECONDS={v} is outside 15–600 s. "
+                "Use 60/120/180/300 for 1/2/3/5 min parts."
+            )
+        return v
+
     # ------------------------------------------------------- Frontend bundle
     # When the built frontend exists, the API serves it on the same port, so
     # the whole app is one process: `cd frontend && npm run build`, then run
@@ -322,11 +381,19 @@ class Settings(BaseSettings):
         return self.embedding_api_key or self.llm_api_key
 
     @property
+    def transcription_local_base_url(self) -> str:
+        return f"http://{self.transcription_local_host}:{self.transcription_local_port}/v1"
+
+    @property
     def resolved_transcription_base_url(self) -> str:
+        if self.transcription_mode == "local":
+            return self.transcription_local_base_url
         return self.transcription_base_url or self.llm_base_url
 
     @property
     def resolved_transcription_api_key(self) -> str:
+        if self.transcription_mode == "local":
+            return "local"
         return self.transcription_api_key or self.llm_api_key
 
     def endpoint(self, capability: Capability) -> dict[str, str]:
@@ -340,6 +407,12 @@ class Settings(BaseSettings):
                 "model": self.embedding_model,
             }
         if capability == "transcription":
+            if self.transcription_mode == "local":
+                return {
+                    "base_url": self.transcription_local_base_url,
+                    "api_key": "local",
+                    "model": self.transcription_local_model_id,
+                }
             return {
                 "base_url": self.resolved_transcription_base_url,
                 "api_key": self.resolved_transcription_api_key,
@@ -361,6 +434,12 @@ class Settings(BaseSettings):
                 "EMBEDDING_MODE=local ignores EMBEDDING_BASE_URL/API_KEY/MODEL — "
                 "vectors come from the vendored server. Unset them or switch "
                 "to EMBEDDING_MODE=cloud to avoid confusion."
+            )
+        if self.transcription_mode == "local" and self.transcription_base_url:
+            warnings.append(
+                "TRANSCRIPTION_MODE=local ignores TRANSCRIPTION_BASE_URL/API_KEY — "
+                "transcripts come from the vendored audio.cpp server. Unset them or switch "
+                "to TRANSCRIPTION_MODE=cloud to avoid confusion."
             )
         for capability in ("embedding", "transcription"):
             own_base_url = getattr(self, f"{capability}_base_url")
