@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NotesLyt",
+  "version": "0.1.6",
+  "identifier": "app.noteslyt.desktop",
+  "build": {
+    "beforeDevCommand": {
+      "script": "npm run dev -- --host 127.0.0.1",
+      "cwd": "..",
+      "wait": false
+    },
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": {
+      "script": "npm run build && npm run backend:bundle",
+      "cwd": ".."
+    },
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "NotesLyt",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 640,
+        "url": "loading.html"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../../migrations/": "migrations/",
+      "../dist/": "frontend/dist/",
+      "backend-runtime/": "backend-runtime/"
+    }
+  }
+}

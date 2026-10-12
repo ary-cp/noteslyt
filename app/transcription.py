@@ -91,6 +91,7 @@ def audio_duration_s(path: Path) -> float:
             [ffprobe, "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
             capture_output=True, timeout=60, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return float((proc.stdout or b"").decode().strip() or 0.0)
     except Exception:

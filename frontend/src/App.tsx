@@ -35,6 +35,82 @@ import AuthPage from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 import { TestConsole } from "./harness/TestConsole";
 import { tooltipStyles } from "./components/ui/Tooltip";
+import { API_BASE } from "./lib/api";
+
+function BackendStartupGate({ children }: { children: React.ReactNode }) {
+  const [ready, setReady] = useState(false);
+  const [slow, setSlow] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const startedAt = Date.now();
+    let retryTimer = 0;
+    let slowTimer = 0;
+
+    const check = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/health`, { cache: "no-store" });
+        if (response.ok) {
+          if (!cancelled) setReady(true);
+          return;
+        }
+      } catch {
+        // The local API may still be starting, or the hosted server may be reconnecting.
+      }
+      if (!cancelled) retryTimer = window.setTimeout(() => void check(), 700);
+    };
+
+    slowTimer = window.setTimeout(() => {
+      if (!cancelled && Date.now() - startedAt >= 10_000) setSlow(true);
+    }, 10_000);
+    void check();
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(retryTimer);
+      window.clearTimeout(slowTimer);
+    };
+  }, [retryKey]);
+
+  if (ready) return <>{children}</>;
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-[var(--background)] px-6 text-[var(--text-primary)]">
+      <section className="w-full max-w-sm text-center" aria-live="polite">
+        <div className="mb-8 flex justify-center">
+          <div className="h-12 w-12 animate-pulse rounded-2xl bg-[var(--accent-soft)] p-2 ring-1 ring-[var(--accent-border)]">
+            <img src="/04-app-icon-green.svg" alt="" className="h-full w-full rounded-lg" />
+          </div>
+        </div>
+        <h1 className="text-lg font-semibold">Starting NotesLyt</h1>
+        <p className="mt-2 text-sm text-[var(--text-secondary)]">
+          Preparing your workspace and connecting to the local service…
+        </p>
+        <div className="mx-auto mt-7 h-1.5 w-56 overflow-hidden rounded-full bg-[var(--surface-raised)]">
+          <div className="h-full w-2/5 animate-[startup-progress_1.2s_ease-in-out_infinite] rounded-full bg-[var(--accent)]" />
+        </div>
+        {slow && (
+          <div className="mt-6 text-xs text-[var(--text-muted)]">
+            Still connecting. NotesLyt will continue trying automatically.
+            <button
+              type="button"
+              className="ml-1 cursor-pointer text-[var(--accent)] hover:underline"
+              onClick={() => {
+                setReady(false);
+                setSlow(false);
+                setRetryKey((key) => key + 1);
+              }}
+            >
+              Retry now
+            </button>
+          </div>
+        )}
+      </section>
+      <style>{`@keyframes startup-progress { 0% { transform: translateX(-110%); } 100% { transform: translateX(280%); } }`}</style>
+    </main>
+  );
+}
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, ready } = useAuth();
@@ -243,9 +319,11 @@ export default function App() {
   return (
     <ThemeProvider>
       <ToastProvider>
-        <AuthProvider>
-          <Shell />
-        </AuthProvider>
+        <BackendStartupGate>
+          <AuthProvider>
+            <Shell />
+          </AuthProvider>
+        </BackendStartupGate>
       </ToastProvider>
     </ThemeProvider>
   );

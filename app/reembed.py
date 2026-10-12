@@ -80,20 +80,15 @@ _job_lock = threading.Lock()
 
 # ------------------------------------------------------------------ primitives
 def probe_model_dim_or_raise(settings: Settings) -> int:
-    """Model width wins; RuntimeError (not SystemExit) so the job can report it."""
+    """Require a live width probe; a previous model's width is never a fallback."""
     from .migration_runner import probe_model_dim
 
     probed = probe_model_dim(settings)
     if probed is None:
-        if settings.embedding_dim is not None:
-            log.warning("Reembed    : endpoint unreachable, trusting pinned EMBEDDING_DIM=%d",
-                        settings.embedding_dim)
-            return int(settings.embedding_dim)
         raise RuntimeError(
             "Could not reach the embedding endpoint "
             f"({settings.resolved_embedding_base_url}, model={settings.embedding_model}). "
-            "Start it (or pin EMBEDDING_DIM) before re-embedding — the probe is how "
-            "we know the width."
+            "Start it and retry — the previous model's width cannot be used safely."
         )
     return probed
 
@@ -253,15 +248,28 @@ def run_reembed_job(app: FastAPI, force: bool = False, fresh_parse: bool = False
     try:
         bump(message="probing embedding model")
         model_dim = probe_model_dim_or_raise(settings)
-        if settings.embedding_dim is None:
-            settings.embedding_dim = model_dim
-            log.info("Reembed    : auto-detected width %d", model_dim)
-        elif settings.embedding_dim != model_dim:
+        from .settings_overlay import locked_keys
+
+        dimension_is_pinned = "embedding_dim" in locked_keys(settings)
+        if dimension_is_pinned and settings.embedding_dim != model_dim:
             raise RuntimeError(
                 f"EMBEDDING_DIM={settings.embedding_dim} but the model emits "
-                f"{model_dim}-d vectors. Fix the pin (or unset for auto-detect) "
-                "and retry — the job will not guess."
+                f"{model_dim}-d vectors. Update or remove the EMBEDDING_DIM pin "
+                "in .env and retry."
             )
+        if not dimension_is_pinned:
+            if settings.embedding_dim != model_dim:
+                log.info(
+                    "Reembed    : replacing stale width %s with probed model width %d",
+                    settings.embedding_dim, model_dim,
+                )
+            settings.embedding_dim = model_dim
+            # Admin database values may be an old detected width. Keep width
+            # auto-detected on the next boot instead of restoring that stale
+            # value over the newly verified model.
+            from .repo.app_settings import AppSettingsRepo
+
+            AppSettingsRepo(db).delete("embedding_dim")
         bump(message=f"resizing vectors to {model_dim}-d")
         if getattr(db, "backend", "postgres") == "sqlite":
             counts = app.state.store.reset_vectors(model_dim)

@@ -2,6 +2,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { LogOut, Moon, Search, Settings as SettingsIcon, Sun } from "lucide-react";
 import { useAuth } from "../../lib/auth";
 import { useTheme } from "../../lib/theme";
+import { isDesktopApp } from "../../lib/runtime";
 import { IconButton } from "../ui/Button";
 import Brand from "../Brand";
 
@@ -33,15 +34,17 @@ export function AppHeader({ onSearch, onSettings }: { onSearch: () => void; onSe
             >
               {user.display_name.slice(0, 1).toUpperCase()}
             </span>
-            <IconButton
-              label="Sign out"
-              onClick={() => {
-                signOut();
-                navigate("/login");
-              }}
-            >
-              <LogOut size={16} />
-            </IconButton>
+            {!isDesktopApp && (
+              <IconButton
+                label="Sign out"
+                onClick={() => {
+                  signOut();
+                  navigate("/login");
+                }}
+              >
+                <LogOut size={16} />
+              </IconButton>
+            )}
           </span>
         ) : (
           <Link

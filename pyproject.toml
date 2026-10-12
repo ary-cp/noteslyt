@@ -28,3 +28,8 @@ dependencies = [
     "pymupdf>=1.28.2",
     "chromadb>=1.5.9",
 ]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.22.3",
+]

@@ -312,33 +312,25 @@ def patch_admin_settings(
                   "embedding_api_key", "embedding_mode")
     )
     previous_dim = settings.embedding_dim
-    if endpoint_touched and "embedding_dim" not in coerced:
-        if "embedding_dim" in locked:
-            auto_warnings.append(
-                f"Endpoint changed but EMBEDDING_DIM={settings.embedding_dim} is pinned "
-                "in .env (locked) — update or remove it there; the UI cannot override it."
-            )
-        else:
-            from ..migration_runner import probe_model_dim as _probe
-
-            probed_width = _probe(settings.model_copy(update={
-                k: v for k, v in coerced.items() if v is not None}))
-            if probed_width is None:
-                auto_warnings.append(
-                    "Endpoint changed but its width could not be probed "
-                    "(unreachable). Re-save when it is up, or set EMBEDDING_DIM manually."
-                )
-            elif probed_width != settings.embedding_dim:
-                setattr(settings, "embedding_dim", probed_width)
-                auto_warnings.append(
-                    f"Probed the new endpoint: {probed_width}-d vectors — no manual "
-                    "width needed. Re-embed to use it."
-                )
+    auto_dim = endpoint_touched and "embedding_dim" not in coerced and "embedding_dim" not in locked
+    if endpoint_touched and "embedding_dim" not in coerced and "embedding_dim" in locked:
+        auto_warnings.append(
+            f"Endpoint changed, but EMBEDDING_DIM={settings.embedding_dim} is pinned "
+            "in .env. Update or remove that pin to detect the selected model's width."
+        )
+    # A previous provider's detected width is not a pin. Clear any in-app
+    # width override before rebuilding services, then probe the actual newly
+    # selected embedder (especially important when switching cloud ↔ local).
+    if auto_dim:
+        to_clear.append("embedding_dim")
     # Auto-added keys need old values too, or a rollback below would leave
     # the singleton half-restored.
     for key in coerced:
         old_singleton.setdefault(key, getattr(settings, key, None))
     old_singleton.setdefault("embedding_dim", previous_dim)
+    rollback_keys = set(coerced)
+    if auto_dim:
+        rollback_keys.add("embedding_dim")
     try:
         if to_write:
             repo.set_many(to_write)
@@ -350,8 +342,11 @@ def patch_admin_settings(
                 setattr(settings, key, default)
             else:
                 setattr(settings, key, value)
-        # Clearing EMBEDDING_DIM re-arms auto-detect: probe now (services are
-        # about to rebuild and the endpoint is up), else roll everything back.
+        if auto_dim:
+            settings.embedding_dim = None
+        build_ai_services(request.app)
+        # Probe after rebuilding: local mode first has to initialize its
+        # managed engine, while cloud mode must use the newly saved endpoint.
         if settings.embedding_dim is None:
             from ..drift import last_known_width
             from ..migration_runner import probe_model_dim
@@ -359,6 +354,17 @@ def patch_admin_settings(
             probed = probe_model_dim(settings)
             if probed is not None:
                 settings.embedding_dim = probed
+                if auto_dim and probed != previous_dim:
+                    auto_warnings.append(
+                        f"Detected {probed}-d vectors from the selected embedding model. "
+                        "The old width was cleared; re-embed to rebuild the index."
+                    )
+            elif endpoint_touched:
+                auto_warnings.append(
+                    "The selected embedding model is saved, but its output width could "
+                    "not be detected yet. Start the endpoint and retry re-embed; the "
+                    "old width will not be assumed."
+                )
             else:
                 known = last_known_width(db)
                 if known is not None:
@@ -368,16 +374,15 @@ def patch_admin_settings(
                         "EMBEDDING_DIM cleared but no width is known (endpoint "
                         "unreachable, nothing stored) — set an explicit width instead."
                     )
-        build_ai_services(request.app)
     except HTTPException:
         raise
     except Exception as exc:
         log.exception("Settings hot-reload failed; rolling back")
         try:
-            restore = {k: old_rows[k] for k in coerced if k in old_rows}
+            restore = {k: old_rows[k] for k in rollback_keys if k in old_rows}
             if restore:
                 repo.set_many(restore)
-            for key in coerced:
+            for key in rollback_keys:
                 if key not in old_rows:
                     repo.delete(key)
             for key, value in old_singleton.items():
@@ -404,6 +409,8 @@ def patch_admin_settings(
     except Exception:
         log.exception("Could not refresh drift state after settings PATCH")
     applied = {k: ("cleared" if coerced[k] is None else "db") for k in coerced}
+    if auto_dim:
+        applied["embedding_dim"] = "cleared"
     log.info("Settings  : admin %s updated %d key(s): %s",
              getattr(admin, "id", "?"), len(applied), ", ".join(sorted(applied)))
     return SettingsPatchOut(applied=applied, warnings=warnings, needs_reembed=needs_reembed)

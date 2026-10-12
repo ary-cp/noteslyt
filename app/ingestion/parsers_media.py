@@ -126,6 +126,7 @@ def slice_audio_wav(source: Path, start_s: float, end_s: float) -> bytes:
              "-vn", "-ac", "1", "-ar", str(_WAV_RATE),
              "-f", "wav", "pipe:1"],
             check=True, timeout=300, capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or b"").decode(errors="replace")[-400:]
@@ -158,6 +159,7 @@ def _extract_wav_chunks(media: Path, workdir: Path, chunk_s: float) -> list[Path
              "-vn", "-ac", "1", "-ar", str(_WAV_RATE),
              "-f", "segment", "-segment_time", str(chunk_s), pattern],
             check=True, timeout=1800, capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or b"").decode(errors="replace")[-400:]
@@ -186,6 +188,7 @@ def _ensure_wav(path: Path, workdir: Path) -> Path:
              "-vn", "-ac", "1", "-ar", str(_WAV_RATE),
              "-f", "wav", str(out)],
             check=True, timeout=1800, capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or b"").decode(errors="replace")[-400:]

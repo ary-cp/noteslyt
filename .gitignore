@@ -10,6 +10,8 @@ frontend/node_modules/
 frontend/dist/
 frontend/.env
 frontend/.env.local
+frontend/src-tauri/target/
+frontend/src-tauri/backend-runtime/
 
 # Editors / OS
 .vscode/

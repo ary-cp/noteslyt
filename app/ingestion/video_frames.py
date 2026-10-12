@@ -40,6 +40,7 @@ def extract_frame(video: Path, at_s: float, width: int) -> bytes:
              "-vf", f"scale={max(width, 160)}:-1", "-q:v", "4",
              "-f", "mjpeg", "pipe:1"],
             check=True, timeout=120, capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or b"").decode(errors="replace")[-300:]
@@ -74,6 +75,7 @@ def slice_clip(video: Path, start_s: float, duration_s: float, width: int = 720)
                  "-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac",
                  str(tmp.name)],
                 check=True, timeout=180, capture_output=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except subprocess.CalledProcessError as exc:
             tail = (exc.stderr or b"").decode(errors="replace")[-300:]

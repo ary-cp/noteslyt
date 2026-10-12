@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "tauri": "tauri",
+    "tauri:dev": "node scripts/tauri-windows.mjs dev",
+    "backend:bundle": "node scripts/build-backend.mjs",
+    "tauri:build": "node scripts/tauri-windows.mjs build"
   },
   "dependencies": {
     "katex": "^0.19.0",
@@ -26,6 +30,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.0",
+    "@tauri-apps/cli": "^2.12.2",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^5.0.0",
