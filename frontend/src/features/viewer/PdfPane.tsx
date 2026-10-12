@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import { ChevronLeft, ChevronRight, Search, RotateCw, PanelLeft, Minus, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Search, RotateCw, PanelLeft, Minus, Plus, Maximize, Minimize, X, Bookmark } from "lucide-react";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
@@ -13,11 +13,22 @@ export default function PdfPane({ url, page: citedPage, seekKey, jumpTick }: {
   url: string; page: number | null; seekKey: number; jumpTick: number;
 }) {
   const container = useRef<HTMLDivElement>(null);
+  const viewport = useRef<HTMLDivElement>(null);
+  const [bookmarks, setBookmarks] = useState<number[]>([]);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchInput = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (searchOpen) searchInput.current?.focus(); }, [searchOpen]);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [fit, setFit] = useState<"width" | "page">("width");
+  const [aspect, setAspect] = useState(.75);
+  const [height, setHeight] = useState(window.innerHeight);
+  const [pageInput, setPageInput] = useState(String(citedPage ?? 1));
   const [width, setWidth] = useState(600);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const pages = pdf?.numPages ?? 0;
   const [page, setPage] = useState(citedPage ?? 1);
   const [zoom, setZoom] = useState(1);
+  const [zoomOpen, setZoomOpen] = useState(false);
   const [rotation, setRotation] = useState(0);
   const [thumbnails, setThumbnails] = useState(false);
   const [query, setQuery] = useState("");
@@ -25,19 +36,54 @@ export default function PdfPane({ url, page: citedPage, seekKey, jumpTick }: {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
   const [rendered, setRendered] = useState<RenderSpec | null>(null);
-  const spec = { page, width: Math.round(width * zoom), rotation, key: `${page}-${Math.round(width * zoom)}-${rotation}` };
+  const pageWidth = Math.round((fit === "page" ? Math.min(width, Math.max(100, height - (fullscreen ? 20 : 210)) * aspect) : width) * zoom);
+  const spec = { page, width: pageWidth, rotation, key: `${page}-${pageWidth}-${rotation}` };
   const requested = useRef(spec.key);
   requested.current = spec.key;
   const textCache = useRef(new Map<number, string>());
+  useEffect(() => { setPageInput(String(page)); }, [page]);
+  useEffect(() => {
+    let live = true;
+    void pdf?.getPage(page).then((p) => { const viewport = p.getViewport({ scale: 1, rotation }); if (live) setAspect(viewport.width / viewport.height); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [pdf, page, rotation]);
+  useEffect(() => {
+    const update = () => {
+      const entered = document.fullscreenElement === container.current;
+      setFullscreen(entered);
+      if (entered) container.current?.focus({ preventScroll: true });
+    };
+    document.addEventListener("fullscreenchange", update); window.addEventListener("resize", update);
+    return () => { document.removeEventListener("fullscreenchange", update); window.removeEventListener("resize", update); };
+  }, []);
+  function toggleFullscreen() {
+    const action = document.fullscreenElement ? document.exitFullscreen() : container.current?.requestFullscreen();
+    void action?.catch(() => setError("Fullscreen is unavailable in this browser."));
+  }
+  function commitPage() {
+    const n = Number(pageInput);
+    const target = Number.isInteger(n) && n > 0 ? Math.max(1, Math.min(pages || 1, n)) : page;
+    setPageInput(String(target));
+    go(target);
+  }
+
   useEffect(() => {
     if (citedPage !== null) setPage(Math.max(1, Math.min(citedPage, pages || citedPage)));
   }, [citedPage, pages, seekKey, jumpTick]);
   useEffect(() => {
-    const el = container.current;
+    const el = viewport.current;
     if (!el) return;
-    const observer = new ResizeObserver(([entry]) => setWidth(Math.max(180, entry.contentRect.width - 20)));
+    let timer: number;
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry.contentRect.width) return;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        setWidth(Math.max(180, entry.contentRect.width - 20));
+        setHeight(document.fullscreenElement === container.current ? entry.contentRect.height : window.innerHeight);
+      }, 100);
+    });
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => { observer.disconnect(); window.clearTimeout(timer); };
   }, []);
   useEffect(() => {
     let live = true;
@@ -68,6 +114,7 @@ export default function PdfPane({ url, page: citedPage, seekKey, jumpTick }: {
   function searchNext(direction: number) {
     if (!hits.length) return;
     const index = hits.indexOf(page);
+    if (index < 0) { go(direction > 0 ? hits.find((n) => n > page) ?? hits[0] : [...hits].reverse().find((n) => n < page) ?? hits[hits.length - 1]); return; }
     go(hits[(index + direction + hits.length) % hits.length]);
   }
   function renderText({ str }: { str: string }) {
@@ -81,8 +128,12 @@ export default function PdfPane({ url, page: citedPage, seekKey, jumpTick }: {
     return html + escapeHtml(str.slice(cursor));
   }
   const previewPages = Array.from({ length: Math.min(9, pages) }, (_, n) => Math.max(1, Math.min(page - 4, pages - 8)) + n);
-  return <div ref={container} className="min-w-0" onKeyDown={(e) => {
+  return <div ref={container} className="pdf-reader min-w-0" onKeyDown={(e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") { e.preventDefault(); setSearchOpen(true); searchInput.current?.focus(); return; }
+    if (e.key === "Escape" && searchOpen) { setSearchOpen(false); setQuery(""); }
     if ((e.target as HTMLElement).matches("input, select, textarea")) return;
+    if (e.key === "Home") { e.preventDefault(); go(1); }
+    if (e.key === "End") { e.preventDefault(); go(pages); }
     if (e.key === "ArrowRight") { e.preventDefault(); go(page + 1); }
     if (e.key === "ArrowLeft") { e.preventDefault(); go(page - 1); }
   }} tabIndex={0} aria-label="PDF document">
@@ -90,27 +141,38 @@ export default function PdfPane({ url, page: citedPage, seekKey, jumpTick }: {
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
         <button type="button" aria-label="Toggle page thumbnails" aria-pressed={thumbnails} onClick={() => setThumbnails((v) => !v)} className="rounded-md p-2"><PanelLeft size={16} /></button>
         <button type="button" aria-label="Previous page" disabled={page <= 1 || !pages} onClick={() => go(page - 1)} className="rounded-md p-2"><ChevronLeft size={16} /></button>
-        <label className="flex items-center gap-1">Page <input aria-label="PDF page" type="number" min={1} max={pages || 1} value={page} onChange={(e) => go(Number(e.target.value) || 1)} className="w-12 rounded border border-[var(--border)] bg-[var(--input)] p-1 text-center" /> / {pages || "…"}</label>
+        <label className="flex items-center gap-1">Page <input aria-label="PDF page" type="number" min={1} max={pages || 1} value={pageInput} onChange={(e) => setPageInput(e.target.value)} onBlur={commitPage} onKeyDown={(e) => { if (e.key === "Enter") commitPage(); }} className="w-12 rounded border border-[var(--border)] bg-[var(--input)] p-1 text-center" /> / {pages || "…"}</label>
         <button type="button" aria-label="Next page" disabled={page >= pages} onClick={() => go(page + 1)} className="rounded-md p-2"><ChevronRight size={16} /></button>
         <button type="button" aria-label="Zoom out" disabled={zoom <= .5} onClick={() => setZoom((n) => Math.max(.5, n - .25))} className="ml-auto rounded-md p-2"><Minus size={15} /></button>
-        <button type="button" title="Reset to fit width" onClick={() => setZoom(1)} className="rounded-md px-2 py-1">{zoom === 1 ? "Fit width" : `${Math.round(zoom * 100)}%`}</button>
+        <button type="button" aria-label="PDF zoom options" aria-expanded={zoomOpen} onClick={() => setZoomOpen((v) => !v)} className="min-w-20 rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1.5">
+          {zoom === 1 ? fit === "width" ? "Fit width" : "Fit page" : `${Math.round(zoom * 100)}%`}
+        </button>
         <button type="button" aria-label="Zoom in" disabled={zoom >= 3} onClick={() => setZoom((n) => Math.min(3, n + .25))} className="rounded-md p-2"><Plus size={15} /></button>
+        <button type="button" aria-label="Find in PDF" aria-expanded={searchOpen} onClick={() => { setSearchOpen((v) => !v); setQuery(""); }} className="rounded-md p-2"><Search size={15} /></button>
+        <button type="button" aria-label={bookmarks.includes(page) ? "Remove page bookmark" : "Bookmark page"} aria-pressed={bookmarks.includes(page)} disabled={!pages} onClick={() => setBookmarks((items) => items.includes(page) ? items.filter((n) => n !== page) : [...items, page].sort((a,b) => a-b))} className="rounded-md p-2"><Bookmark size={15} fill={bookmarks.includes(page) ? "currentColor" : "none"} /></button>
         <button type="button" aria-label="Rotate page" onClick={() => setRotation((n) => (n + 90) % 360)} className="rounded-md p-2"><RotateCw size={15} /></button>
+        <button type="button" aria-label={fullscreen ? "Exit PDF fullscreen" : "Fullscreen PDF"} onClick={toggleFullscreen} className="rounded-md p-2">{fullscreen ? <Minimize size={15} /> : <Maximize size={15} />}</button>
       </div>
-      <div className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--input)] px-2 text-xs">
+      {zoomOpen && <div aria-label="Zoom presets" className="flex flex-wrap gap-1 border-t border-[var(--border)] pt-2">
+        {(["width", "page"] as const).map((mode) => <button type="button" key={mode} aria-pressed={zoom === 1 && fit === mode} onClick={() => { setFit(mode); setZoom(1); setZoomOpen(false); }} className="rounded px-2 py-1 text-xs">{mode === "width" ? "Fit width" : "Fit page"}</button>)}
+        {[.5, .75, 1.25, 1.5, 2, 3].map((value) => <button type="button" key={value} aria-pressed={zoom === value} onClick={() => { setZoom(value); setZoomOpen(false); }} className="rounded px-2 py-1 text-xs">{value * 100}%</button>)}
+      </div>}
+      {searchOpen && <div className="viewer-reveal flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--input)] px-2 text-xs">
         <Search size={14} className="shrink-0 text-[var(--text-muted)]" />
-        <input aria-label="Search PDF" placeholder="Find in document…" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") searchNext(e.shiftKey ? -1 : 1); }} className="min-w-0 flex-1 bg-transparent py-2 outline-none" />
-        {query && <><span className="text-[var(--text-muted)]">{searching ? "Searching…" : hits.length ? `${Math.max(0, hits.indexOf(page) + 1)}/${hits.length} pages` : "No matches"}</span><button type="button" aria-label="Previous search result" disabled={!hits.length} onClick={() => searchNext(-1)}><ChevronLeft size={15} /></button><button type="button" aria-label="Next search result" disabled={!hits.length} onClick={() => searchNext(1)}><ChevronRight size={15} /></button></>}
-      </div>
+        <input ref={searchInput} aria-label="Search PDF" placeholder="Find in document…" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") searchNext(e.shiftKey ? -1 : 1); }} className="min-w-0 flex-1 bg-transparent py-2 outline-none" />
+        {query && <><span className="text-[var(--text-muted)]">{searching ? "Searching…" : hits.length ? `${Math.max(0, hits.indexOf(page) + 1)}/${hits.length} pages` : "No matches"}</span><button type="button" aria-label="Previous search result" disabled={!hits.length} onClick={() => searchNext(-1)}><ChevronLeft size={15} /></button><button type="button" aria-label="Next search result" disabled={!hits.length} onClick={() => searchNext(1)}><ChevronRight size={15} /></button><button type="button" aria-label="Clear PDF search" onClick={() => setQuery("")}><X size={14} /></button></>}
+      </div>}
     </div>
+    {bookmarks.length > 0 && <nav aria-label="Bookmarked pages" className="mb-3 flex flex-wrap gap-1.5">{bookmarks.map((n) => <button type="button" key={n} onClick={() => go(n)} aria-label={`Bookmarked page ${n}`} className="rounded-full border border-[var(--border)] px-2 py-1 text-xs text-[var(--text-secondary)]">Page {n}</button>)}</nav>}
     {citedPage !== null && <button type="button" onClick={() => go(citedPage)} className="mb-2 text-xs text-[var(--accent)]">Cited page {citedPage} · Return to citation</button>}
     {error && <p role="alert" className="mb-2 text-xs text-[var(--danger)]">{error}</p>}
-    <Document file={url} onLoadSuccess={(doc) => { setPdf(doc); setPage((n) => Math.min(n, doc.numPages)); setError(""); }}
+    <div ref={viewport} className="pdf-viewport">
+    <Document file={url} onLoadSuccess={(doc) => { textCache.current.clear(); setRendered(null); setPdf(doc); setPage((n) => Math.min(n, doc.numPages)); setError(""); }}
       onLoadError={(e) => setError(e.message)} loading={<p className="min-h-80 p-4 text-sm">Opening document…</p>} error={<p className="p-4 text-sm">Unable to render PDF. Download the source to view it.</p>}>
       {thumbnails && <div className="mb-3 flex gap-2 overflow-x-auto rounded-lg bg-[var(--surface-secondary)] p-2" aria-label="Page thumbnails">
         {previewPages.map((n) => <button type="button" key={n} aria-label={`Go to page ${n}`} aria-current={page === n ? "page" : undefined} onClick={() => go(n)} className={`shrink-0 rounded-md border-2 p-1 text-xs ${page === n ? "border-[var(--accent)]" : "border-transparent"}`}><Page pageNumber={n} width={70} renderTextLayer={false} renderAnnotationLayer={false} loading={<div className="h-24 w-[70px]" />} /><span>{n}</span></button>)}
       </div>}
-      <div className={`relative overflow-auto rounded-xl border bg-[#25282e] p-2 ${page === citedPage ? "border-[var(--accent)]" : "border-[var(--border)]"}`} aria-busy={rendered?.key !== spec.key}>
+      <div className={`pdf-page-surface relative overflow-auto rounded-xl border bg-[#25282e] p-2 ${page === citedPage ? "border-[var(--accent)]" : "border-[var(--border)]"}`} aria-busy={rendered?.key !== spec.key}>
         {[...(rendered && rendered.key !== spec.key ? [rendered] : []), spec].map((item) => <div key={item.key} style={item.key === spec.key && rendered && rendered.key !== spec.key ? { position: "absolute", top: 8, left: 8, opacity: 0, pointerEvents: "none" } : undefined}>
           <Page pageNumber={item.page} width={item.width} rotate={item.rotation} customTextRenderer={renderText}
             onRenderSuccess={() => { if (requested.current === item.key) setRendered((prev) => prev?.key === item.key ? prev : item); }}
@@ -119,5 +181,6 @@ export default function PdfPane({ url, page: citedPage, seekKey, jumpTick }: {
         {rendered && rendered.key !== spec.key && <span className="absolute right-3 top-3 rounded bg-black/75 px-2 py-1 text-xs text-white">Rendering…</span>}
       </div>
     </Document>
+    </div>
   </div>;
 }
