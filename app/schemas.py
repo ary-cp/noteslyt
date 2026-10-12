@@ -27,6 +27,7 @@ class UserOut(BaseModel):
     id: str
     email: str
     display_name: str
+    is_admin: bool = False
 
 
 class TokenResponse(BaseModel):
@@ -488,3 +489,61 @@ class HealthResponse(BaseModel):
     storage: StorageOut
     projects: int
     frontend: str = ""                # served bundle dir, or "" when API-only
+    embedding_drift: str = ""         # non-empty when vector routes are 409 (re-embed or revert)
+
+
+# ------------------------------------------------------------------- settings
+class SettingItemOut(BaseModel):
+    """One admin-editable key: display value, where it comes from, lock state.
+
+    Secret values are NEVER returned in plaintext — `configured` tells the UI
+    whether a key exists, and PATCH sets a new one.
+    """
+
+    key: str
+    group: str
+    source: str                       # "env" | "db" | "default"
+    locked: bool                      # pinned by operator env — PATCH refuses
+    secret: bool
+    value: object | None = None       # plaintext for non-secrets, None for secrets
+    configured: bool = False          # secrets: is any value set?
+
+
+class SettingsOut(BaseModel):
+    settings: list[SettingItemOut]
+    is_admin: bool = True
+
+
+class SettingsPatchOut(BaseModel):
+    applied: dict[str, str]           # key -> "db", or "cleared"
+    warnings: list[str] = []
+    needs_reembed: bool = False
+
+
+class EmbeddingStatusOut(BaseModel):
+    """Drift ground truth for the banner (Phase 3 UI): no secrets inside."""
+
+    embedding_model: str
+    resolved_dim: int | None = None
+    live_widths: dict[str, int | None] = {}
+    probed_width: int | None = None   # None when the endpoint is unreachable
+    drift: bool = False
+    detail: str = ""
+    last_model: str | None = None     # model that produced the stored vectors
+    last_dim: int | None = None
+    revert_to: str | None = None      # PATCH embedding_model here to clear drift w/o re-embed
+
+
+class SetupStatusOut(BaseModel):
+    """First-run onboarding state for the admin setup wizard."""
+
+    setup_completed: bool
+    is_admin: bool = False
+
+
+class ModelsFetchRequest(BaseModel):
+    """List model ids from an OpenAI-compatible `/models` endpoint (POST so the
+    key never lands in URL logs). Nothing is stored."""
+
+    base_url: str
+    api_key: str | None = None

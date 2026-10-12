@@ -199,6 +199,14 @@ class LLMClient:
 # =============================================================================
 #  Embeddings
 # =============================================================================
+class NativeUnsupportedError(RuntimeError):
+    """The embedding endpoint cannot encode media bytes.
+
+    Raised when it tokenizes data URIs as text (sine-vs-noise cosine >= 0.90)
+    or rejects byte inputs outright (HTTP 4xx, like cloud endpoints do).
+    Transport errors (5xx, timeouts, DNS) are NOT this — those propagate
+    unchanged so transient outages stay loud.
+    """
 class Embedder(Protocol):
     name: str
 
@@ -250,7 +258,12 @@ class OpenAICompatibleEmbedder:
                     piece_vecs.append(self._embed_small(t, depth=0))
                 continue
             # The API may return items out of order; sort by index to be safe.
-            piece_vecs.extend(item.embedding for item in sorted(response.data, key=lambda d: d.index))
+            # Some OpenAI-compatible endpoints (e.g. Gemini) return index=null —
+            # then the wire order is all we have, so keep it instead of crashing.
+            batch_items = list(response.data)
+            if all(getattr(item, "index", None) is not None for item in batch_items):
+                batch_items.sort(key=lambda d: d.index)
+            piece_vecs.extend(item.embedding for item in batch_items)
         grouped: dict[int, list[list[float]]] = {}
         for o, v in zip(owner, piece_vecs):
             grouped.setdefault(o, []).append(v)
@@ -292,7 +305,17 @@ class OpenAICompatibleEmbedder:
             json={"model": self.model, "input": [{"content": content}]},
             timeout=timeout,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if 400 <= exc.response.status_code < 500:
+                raise NativeUnsupportedError(
+                    f"Embedding endpoint rejected the {what} input "
+                    f"(HTTP {exc.response.status_code}): it does not encode media "
+                    "bytes. Serve a joint model with its projector, or keep "
+                    "transcript modes."
+                ) from exc
+            raise
         data = response.json().get("data") or []
         emb = data[0].get("embedding") if data else None
         if not isinstance(emb, list) or not emb or not isinstance(emb[0], (int, float)):
@@ -337,6 +360,135 @@ class OpenAICompatibleEmbedder:
             [{"type": "input_video", "input_video": {"data": data_b64, "format": fmt}}],
             300.0,
             "video",
+        )
+
+
+class JinaEmbedder(OpenAICompatibleEmbedder):
+    """Jina Embeddings API (`https://api.jina.ai/v1`): OpenAI-style text plus
+    typed multimodal objects.
+
+    Text goes through the inherited OpenAI-compatible `embed()` (Jina matches
+    OpenAI's text schema, so nothing changes there). Media posts native Jina
+    items — `{"image"|"audio"|"video": <base64 bytes>}` inside `input` — per
+    their docs (typed objects, URL or base64; audio covers WAV/MP3/FLAC/OGG/
+    M4A/Opus). Response is OpenAI-shaped (`data[0].embedding`). v5-omni models
+    (`jina-embeddings-v5-omni-small/nano`) share one space across text, image,
+    audio, video — and their text output equals the v5-text counterparts, so
+    adding modalities never needs a re-embed of text.
+    """
+
+    def __init__(self, base_url: str, api_key: str, model: str, batch_size: int = 64,
+                 max_input_chars: int = 1500):
+        super().__init__(base_url, api_key, model, batch_size, max_input_chars)
+        self.name = f"jina:{model}"
+
+    def _post_native(self, items: list[dict], timeout: float, what: str) -> list[float]:
+        """One native multimodal request. Anything without a float vector raises."""
+        try:
+            response = httpx.post(
+                f"{self.base_url}/embeddings",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json={"model": self.model, "input": items},
+                timeout=timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if 400 <= exc.response.status_code < 500:
+                raise NativeUnsupportedError(
+                    f"Jina rejected the {what} input (HTTP {exc.response.status_code}): "
+                    "the configured model may be text-only — use a v5-omni model "
+                    "for image/audio/video."
+                ) from exc
+            raise
+        data = response.json().get("data") or []
+        emb = data[0].get("embedding") if data else None
+        if not isinstance(emb, list) or not emb or not isinstance(emb[0], (int, float)):
+            raise ValueError(f"Jina returned no usable vector for the {what}")
+        return [float(x) for x in emb]
+
+    def embed_image(self, image: bytes, mime: str) -> list[float]:
+        return self._post_native(
+            [{"image": base64.b64encode(image).decode("ascii")}], 120.0, "image"
+        )
+
+    def embed_audio(self, audio: bytes, mime: str) -> list[float]:
+        return self._post_native(
+            [{"audio": base64.b64encode(audio).decode("ascii")}], 180.0, "audio"
+        )
+
+    def embed_video(self, video: bytes, mime: str) -> list[float]:
+        return self._post_native(
+            [{"video": base64.b64encode(video).decode("ascii")}], 300.0, "video"
+        )
+
+
+class GeminiNativeEmbedder(OpenAICompatibleEmbedder):
+    """Google's native `embedContent` interface for media (text stays compat).
+
+    Text goes through the inherited OpenAI-compatible `embed()` — proven
+    against Google's compatibility endpoint. Media posts native content parts
+    (`inline_data` with real MIME types) to
+    `{root}/models/{model}:embedContent` with the key in `x-goog-api-key`.
+    `root` derives from the configured base URL by stripping a trailing
+    `/openai` (the compat prefix), so an existing compat configuration keeps
+    working unchanged. A leading `models/` on the configured model id is
+    stripped the same way. When `output_dim` is set, every native call asks
+    for exactly that width (`output_dimensionality`) — verified live.
+    """
+
+    def __init__(self, base_url: str, api_key: str, model: str, batch_size: int = 64,
+                 max_input_chars: int = 1500, output_dim: int | None = None):
+        super().__init__(base_url, api_key, model, batch_size, max_input_chars)
+        self.model = model.removeprefix("models/")
+        root = self.base_url
+        if root.endswith("/openai"):
+            root = root[: -len("/openai")] or root
+        self._native_root = root
+        self.output_dim = output_dim
+        self.name = f"gemini-native:{self.model}"
+
+    def _post_native(self, parts: list[dict], timeout: float, what: str) -> list[float]:
+        """One native embedContent call. Anything without values raises."""
+        body: dict[str, Any] = {"model": f"models/{self.model}", "content": {"parts": parts}}
+        if self.output_dim is not None:
+            body["output_dimensionality"] = int(self.output_dim)
+        try:
+            response = httpx.post(
+                f"{self._native_root}/models/{self.model}:embedContent",
+                headers={"x-goog-api-key": self.api_key, "Content-Type": "application/json"},
+                json=body,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if 400 <= exc.response.status_code < 500:
+                raise NativeUnsupportedError(
+                    f"Gemini rejected the {what} input (HTTP {exc.response.status_code}): "
+                    "the configured model may not take that modality — Gemini "
+                    "Embedding models take text natively, media support varies."
+                ) from exc
+            raise
+        emb = (response.json().get("embedding") or {}).get("values")
+        if not isinstance(emb, list) or not emb or not isinstance(emb[0], (int, float)):
+            raise ValueError(f"Gemini returned no usable vector for the {what}")
+        return [float(x) for x in emb]
+
+    def embed_image(self, image: bytes, mime: str) -> list[float]:
+        return self._post_native(
+            [{"inline_data": {"mime_type": mime, "data": base64.b64encode(image).decode("ascii")}}],
+            120.0, "image",
+        )
+
+    def embed_audio(self, audio: bytes, mime: str) -> list[float]:
+        return self._post_native(
+            [{"inline_data": {"mime_type": mime, "data": base64.b64encode(audio).decode("ascii")}}],
+            180.0, "audio",
+        )
+
+    def embed_video(self, video: bytes, mime: str) -> list[float]:
+        return self._post_native(
+            [{"inline_data": {"mime_type": mime, "data": base64.b64encode(video).decode("ascii")}}],
+            300.0, "video",
         )
 
 def _split_long(text: str, budget: int) -> list[str]:
@@ -428,7 +580,7 @@ def verify_native_support(embedder: Embedder) -> None:
         return buf.getvalue()
 
     if not hasattr(embedder, "embed_audio"):
-        raise RuntimeError(
+        raise NativeUnsupportedError(
             "Native embedding modes need an embedder with byte inputs; "
             "the configured backend only embeds text."
         )
@@ -456,11 +608,13 @@ def verify_native_support(embedder: Embedder) -> None:
     nb = math.sqrt(sum(x * x for x in b)) or 1.0
     similarity = dot / (na * nb)
     if similarity >= 0.90:
-        raise RuntimeError(
+        raise NativeUnsupportedError(
             f"Native embedding modes are enabled but the embedding endpoint encodes "
             f"bytes as text (two different audio blobs: cosine {similarity:.4f}). "
-            f"Set AUDIO_EMBED_MODE=transcript (and VIDEO_EMBED_MODE=transcript), or serve "
-            f"a joint model from llama.cpp and re-run scripts/probe_multimodal.py."
+            f"Set AUDIO_EMBED_MODE=transcript (and VIDEO_EMBED_MODE=transcript), serve "
+            f"a joint model from llama.cpp (EMBEDDING_PROTOCOL=llama_cpp), pick a cloud "
+            f"multimodal protocol (EMBEDDING_PROTOCOL=jina|gemini), and re-run "
+            f"scripts/probe_multimodal.py."
         )
 
 
@@ -471,6 +625,11 @@ def build_embedder(settings: Settings) -> Embedder:
     different server than chat (Groq has no /embeddings endpoint, so Groq chat
     + OpenAI embeddings is the common pairing). Unset values inherit the LLM
     provider, which keeps a single-server setup a three-line .env.
+
+    Text always goes through the OpenAI-compatible endpoint. `protocol` only
+    selects the multimodal (image/audio/video) wire shape; "auto" keeps the
+    llama.cpp shape everywhere (local mode ignores it — the managed embedder
+    speaks llama.cpp natively).
     """
     if settings.embedding_mode == "local":
         from .llama_embed import ManagedEmbedder, get_embedding_manager
@@ -479,5 +638,15 @@ def build_embedder(settings: Settings) -> Embedder:
                                settings.embedding_batch_size, settings.embedding_max_input_chars)
     base_url = settings.resolved_embedding_base_url
     api_key = settings.resolved_embedding_api_key
-    return OpenAICompatibleEmbedder(base_url, api_key, settings.embedding_model,
-                                    settings.embedding_batch_size, settings.embedding_max_input_chars)
+    args = (base_url, api_key, settings.embedding_model,
+            settings.embedding_batch_size, settings.embedding_max_input_chars)
+    protocol = settings.embedding_protocol
+    if protocol == "jina":
+        return JinaEmbedder(*args)
+    if protocol == "gemini":
+        # Exact-width native vectors: the model truncates server-side
+        # (Matryoshka), so a pinned dim never mismatches. None (fresh boot,
+        # pre-resolution) means native default width — which always equals
+        # whatever the text probe will pin, since it is the same model.
+        return GeminiNativeEmbedder(*args, output_dim=settings.embedding_dim)
+    return OpenAICompatibleEmbedder(*args)

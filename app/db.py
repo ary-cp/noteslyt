@@ -56,8 +56,8 @@ REEMBED_HINT = (
     "Vectors from different embedding models are incomparable, so swapping "
     "models means re-embedding the whole corpus (padding/truncating would "
     "silently corrupt retrieval):\n"
-    "  1. Set EMBEDDING_DIM to your model's output width "
-    "(1536 OpenAI text-embedding-3-small, 768 nomic/EmbeddingGemma, "
+    "  1. Set EMBEDDING_DIM to your model's output width (or leave unset for "
+    "auto-detect: 1536 OpenAI text-embedding-3-small, 768 nomic/EmbeddingGemma, "
     "3072 OpenAI text-embedding-3-large).\n"
     "  2. Run:  uv run python scripts/re_embed.py\n"
     "     (`--check` only reports; the default run alters the column, wipes "
@@ -80,6 +80,8 @@ def describe_embedding_drift(dims: dict[str, int | None]) -> list[str]:
 
 class Database:
     """Thin pool wrapper. Repositories in `app/repo/` own all the SQL."""
+
+    backend = "postgres"
 
     def __init__(self, settings: Settings):
         self._settings = settings

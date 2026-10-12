@@ -85,8 +85,8 @@ def _ffmpeg() -> str:
     exe = shutil.which("ffmpeg")
     if not exe:
         raise ParserError(
-            "Video ingestion needs `ffmpeg` on PATH to extract audio, and it was not found. "
-            "Install ffmpeg (https://ffmpeg.org/download.html) or upload the audio track directly."
+            "Audio/video ingestion needs `ffmpeg` on PATH to decode audio, and it was not found. "
+            "Install ffmpeg (https://ffmpeg.org/download.html) or upload a WAV file directly."
         )
     return exe
 
@@ -167,6 +167,40 @@ def _extract_wav_chunks(media: Path, workdir: Path, chunk_s: float) -> list[Path
     return sorted(workdir.glob("part-*.wav"))
 
 
+def _ensure_wav(path: Path, workdir: Path) -> Path:
+    """Transcode non-WAV audio to 16 kHz mono WAV; WAV passes through untouched.
+
+    The vendored STT server only accepts WAV uploads, while cloud Whisper
+    endpoints take mp3/m4a/ogg natively — but Whisper resamples to 16 kHz mono
+    internally anyway, so normalizing up front is lossless for accuracy and
+    makes every backend behave identically. Only the short-file path uses
+    this (long files already go through the chunked `_extract_wav_chunks`).
+    """
+    if path.suffix.lower() == ".wav":
+        return path
+    exe = _ffmpeg()
+    out = workdir / (path.stem + ".wav")
+    try:
+        subprocess.run(
+            [exe, "-y", "-v", "error", "-i", str(path),
+             "-vn", "-ac", "1", "-ar", str(_WAV_RATE),
+             "-f", "wav", str(out)],
+            check=True, timeout=1800, capture_output=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        tail = (exc.stderr or b"").decode(errors="replace")[-400:]
+        raise ParserError(f"Could not decode audio from {path.name}: {tail or exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ParserError(f"Audio conversion of {path.name} timed out.") from exc
+    try:
+        payload = out.read_bytes()
+    except OSError as exc:
+        raise ParserError(f"Audio conversion of {path.name} produced no output.") from exc
+    if _wav_sample_bytes(payload) <= 0:
+        raise ParserError(f"Could not decode audio from {path.name} (no audio stream?).")
+    return out
+
+
 def _transcribe_pieces(
     transcriber: Transcriber,
     pieces: list[Path],
@@ -239,9 +273,11 @@ def parse_audio(path: Path, settings: Settings) -> ParsedSource:
     transcriber = _require_transcriber()
     chunk_s = transcription_chunk_s(settings)
     # Long files go in pieces (one request per ~chunk_s seconds) so a lecture
-    # never exceeds the STT encoder window; short files keep the old single
-    # request (no ffmpeg needed). Duration unknown (no ffprobe) → try single,
-    # the model error names TRANSCRIPTION_CHUNK_S when it is too long.
+    # never exceeds the STT encoder window. Short files go in one request —
+    # normalized to WAV first, because the vendored STT server rejects MP3
+    # and friends while cloud endpoints quietly accept them. Duration unknown
+    # (no ffprobe) → try single, the model error names TRANSCRIPTION_CHUNK_S
+    # when it is too long.
     duration = audio_duration_s(path)
     if duration > chunk_s:
         with tempfile.TemporaryDirectory(prefix="study-audio-") as tmp:
@@ -250,13 +286,15 @@ def parse_audio(path: Path, settings: Settings) -> ParsedSource:
                 raise ParserError(f"No audio stream found in {path.name}.")
             segments = _transcribe_pieces(transcriber, pieces, chunk_s, path.name)
     else:
-        try:
-            segments = transcriber.transcribe(path)
-        except Exception as exc:
-            raise ParserError(
-                f"Transcription of {path.name} failed: {exc}. "
-                "If the STT model rejects long inputs, lower TRANSCRIPTION_CHUNK_S."
-            ) from exc
+        with tempfile.TemporaryDirectory(prefix="study-audio-") as tmp:
+            wav_path = _ensure_wav(path, Path(tmp))
+            try:
+                segments = transcriber.transcribe(wav_path)
+            except Exception as exc:
+                raise ParserError(
+                    f"Transcription of {path.name} failed: {exc}. "
+                    "If the STT model rejects long inputs, lower TRANSCRIPTION_CHUNK_S."
+                ) from exc
     # Audio parts are coarse (~3 min) so each part maps to one embeddable
     # audio clip downstream (transcript + audio dual vectors, like video).
     # ~180 s of speech is ~2500 chars, so the char target scales with it.

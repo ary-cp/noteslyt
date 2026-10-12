@@ -45,6 +45,8 @@ export interface HealthResponse {
   parser: string;
   storage: StorageOut;
   projects: number;
+  frontend?: string;
+  embedding_drift?: string;
 }
 
 /** `app/schemas.py: UserOut` */
@@ -52,6 +54,7 @@ export interface UserOut {
   id: string;
   email: string;
   display_name: string;
+  is_admin?: boolean;
 }
 
 /** `app/schemas.py: TokenResponse` */
@@ -118,6 +121,65 @@ export interface LlamaStatus {
   mmproj_present?: boolean;
   update_state?: string;
   update_message?: string;
+}
+
+// --------------------------------- admin settings + drift (experimental)
+
+/** `app/schemas.py: SettingItemOut` — secrets never carry plaintext. */
+export interface SettingItem {
+  key: string;
+  group: string;
+  source: "env" | "db" | "default" | string;
+  locked: boolean;
+  secret: boolean;
+  value: unknown | null;
+  configured: boolean;
+}
+
+/** `GET /system/settings` (admin). */
+export interface SettingsOut {
+  settings: SettingItem[];
+  is_admin: boolean;
+}
+
+/** `PATCH /system/settings` response. */
+export interface SettingsPatchOut {
+  applied: Record<string, string>;
+  warnings: string[];
+  needs_reembed: boolean;
+}
+
+/** `GET /system/settings/status` — drift ground truth for the banner. */
+export interface EmbeddingStatus {
+  embedding_model: string;
+  resolved_dim: number | null;
+  live_widths: Record<string, number | null>;
+  probed_width: number | null;
+  drift: boolean;
+  detail: string;
+  last_model: string | null;
+  last_dim: number | null;
+  revert_to: string | null;
+}
+
+/** `GET /system/setup/status` — first-run onboarding state. */
+export interface SetupStatus {
+  setup_completed: boolean;
+  is_admin: boolean;
+}
+
+/** `GET /system/reembed/status` — background re-embed job progress. */
+export interface ReembedJob {
+  state: "idle" | "running" | "done" | "done_with_failures" | "failed" | string;
+  total: number;
+  processed: number;
+  ok: number;
+  failed: number;
+  started_at: string;
+  finished_at: string;
+  message: string;
+  errors: { filename: string; detail: string }[];
+  detail?: string;
 }
 
 /** `app/schemas.py: SourceOut` */

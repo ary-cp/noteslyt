@@ -42,7 +42,8 @@ def _token_response(user, settings) -> TokenResponse:
     return TokenResponse(
         access_token=create_access_token(user.id, settings),
         expires_in=settings.auth_token_ttl_s,
-        user=UserOut(id=user.id, email=user.email, display_name=user.display_name),
+        user=UserOut(id=user.id, email=user.email, display_name=user.display_name,
+                     is_admin=getattr(user, "is_admin", False)),
     )
 
 
@@ -96,7 +97,8 @@ def login(
 @router.get("/me", response_model=UserOut)
 def me(user: CurrentUser) -> UserOut:
     """Validate the caller's token and echo back their identity."""
-    return UserOut(id=user.id, email=user.email, display_name=user.display_name)
+    return UserOut(id=user.id, email=user.email, display_name=user.display_name,
+                   is_admin=getattr(user, "is_admin", False))
 
 
 @router.post("/onboarding", status_code=status.HTTP_204_NO_CONTENT)

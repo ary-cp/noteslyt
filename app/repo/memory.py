@@ -113,13 +113,22 @@ class ProjectMemoryRepo(Repo):
     # ------------------------------------------------------------ streak
     def streak(self, user_id: str, project_id: str) -> dict[str, int]:
         """Study streak from the learner's own message days in this project."""
-        rows = self._fetch_all(
-            "select distinct (m.created_at at time zone 'UTC')::date as day "
-            "from chat_messages m join chats c on c.id = m.chat_id "
-            "where c.project_id = %s and c.user_id = %s and m.role = 'user' "
-            "and m.created_at >= now() - interval '14 days' order by day desc",
-            (project_id, user_id),
-        )
+        if getattr(self.db, "backend", "postgres") == "sqlite":
+            rows = self._fetch_all(
+                "select distinct date(m.created_at) as day "
+                "from chat_messages m join chats c on c.id = m.chat_id "
+                "where c.project_id = %s and c.user_id = %s and m.role = 'user' "
+                "and m.created_at >= datetime('now', '-14 days') order by day desc",
+                (project_id, user_id),
+            )
+        else:
+            rows = self._fetch_all(
+                "select distinct (m.created_at at time zone 'UTC')::date as day "
+                "from chat_messages m join chats c on c.id = m.chat_id "
+                "where c.project_id = %s and c.user_id = %s and m.role = 'user' "
+                "and m.created_at >= now() - interval '14 days' order by day desc",
+                (project_id, user_id),
+            )
         days = [str(r["day"]) for r in rows]
         current = _consecutive(days)
         return {"current_days": current, "active_days_14": len(days)}

@@ -125,6 +125,140 @@ def units_from_pages(pages) -> list[SourceUnit]:
     ]
 
 
+# ------------------------------------------------- stored-parse round-trip
+# Re-embedding must not pay for (or risk) a fresh parse/transcription when the
+# last parse is already stored: `render_parsed_markdown` output inverts back
+# into units here. Segment ranges are millisecond-precise, so timestamps
+# survive; second-precision `[m:ss]` starts get their ends inferred from the
+# next segment. Anything unrecognized (or an empty result) returns [] and the
+# caller falls back to parsing the file — never a corrupt ingest.
+#
+# One known edge: a unit *body* containing a line that starts with "## "
+# splits into an extra section unit here. That only reshapes chunks on the
+# re-embed path (retrieval quality, not corruption), and real parses all but
+# never emit such lines — accepted deliberately to keep the stored format
+# byte-identical to what the viewer already shows.
+
+
+def _parse_stored_ts(text: str) -> float | None:
+    """`00:00:29.760` or `1:23` -> seconds. None when unparseable."""
+    text = text.strip()
+    if "-->" in text:
+        return None
+    parts = text.replace(",", ".").split(":")
+    try:
+        if len(parts) == 3:
+            h, m, s = parts
+            return int(h) * 3600 + int(m) * 60 + float(s)
+        if len(parts) == 2:
+            m, s = parts
+            if not m.isdigit() or len(m) > 3:
+                return None
+            return int(m) * 60 + float(s)
+    except ValueError:
+        return None
+    return None
+
+
+def _split_stored_header(header: str) -> tuple[str, str, float | None, float | None] | None:
+    """`## ...` label -> (kind, value, start_ts, end_ts). None when not a header we wrote."""
+    import re
+
+    if " --> " in header:
+        left, _, right = header.partition(" --> ")
+        start, end = _parse_stored_ts(left), _parse_stored_ts(right)
+        if start is None or end is None:
+            return None
+        return (SEGMENT, format_timestamp(start), start, end)
+    m = re.fullmatch(r"p\.(\d+)", header)
+    if m:
+        return (PAGE, m.group(1), None, None)
+    m = re.fullmatch(r"slide (\d+)", header)
+    if m:
+        return (SLIDE, m.group(1), None, None)
+    m = re.fullmatch(r"sheet: (.+)", header)
+    if m:
+        return (SHEET, m.group(1), None, None)
+    m = re.fullmatch(r"image (.+)", header)
+    if m:
+        return (IMAGE, m.group(1), None, None)
+    m = re.fullmatch(r"row (.+)", header)
+    if m:
+        return (ROW, m.group(1), None, None)
+    start = _parse_stored_ts(header)
+    if start is not None:
+        return (SEGMENT, format_timestamp(start), start, None)
+    return None
+
+
+def units_from_markdown(markdown: str) -> tuple[list[SourceUnit], str]:
+    """Invert `render_parsed_markdown` output -> (units, parser name).
+
+    Returns ([], "") when nothing parses, so callers fall back to the file.
+    Section-style headers that match no known form become `section` units
+    with the whole header as the value (mirrors how md/txt parsers read).
+    """
+    units: list[SourceUnit] = []
+    parser = ""
+    current_header: str | None = None
+    current_lines: list[str] = []
+    title_seen = False
+
+    def flush() -> None:
+        if current_header is None:
+            return
+        text = "\n".join(current_lines).strip()
+        if not text:
+            return
+        split = _split_stored_header(current_header)
+        if split is None:
+            kind, value, start, end = SECTION, current_header, None, None
+        else:
+            kind, value, start, end = split
+        units.append(SourceUnit(
+            index=len(units) + 1, text=text,
+            locator_kind=kind, locator_value=value,
+            start_ts=start, end_ts=end,
+        ))
+
+    for raw_line in (markdown or "").splitlines():
+        line = raw_line.rstrip()
+        if not title_seen:
+            if line.startswith("# ") and not line.startswith("## "):
+                title_seen = True
+                continue
+            if not line.strip():
+                continue
+            # No title line (old rows): treat everything as units.
+            title_seen = True
+        if line.startswith("<!-- parser:") and line.rstrip().endswith("-->"):
+            parser = line.split("<!-- parser:", 1)[1].rsplit("-->", 1)[0].strip()
+            continue
+        if line.lstrip().startswith("…(truncated"):
+            continue
+        if line.startswith("## "):
+            # A new unit. Known forms invert precisely; anything else becomes
+            # a `section` unit carrying the whole header (mirrors md/txt).
+            flush()
+            current_header = line[3:].strip()
+            current_lines = []
+            continue
+        if current_header is None:
+            continue
+        current_lines.append(raw_line)
+    flush()
+
+    # Second-precision starts inherit their end from the next segment start.
+    for i, unit in enumerate(units):
+        if (unit.locator_kind == SEGMENT and unit.start_ts is not None
+                and unit.end_ts is None):
+            nxt = units[i + 1] if i + 1 < len(units) else None
+            if (nxt is not None and nxt.locator_kind == SEGMENT
+                    and nxt.start_ts is not None and nxt.start_ts > unit.start_ts):
+                unit.end_ts = nxt.start_ts
+    return units, parser
+
+
 @dataclass
 class ParsedSource:
     """What a parser produced, plus anything the caller should be told."""

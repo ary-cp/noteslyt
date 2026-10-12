@@ -19,9 +19,11 @@ import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from "re
 import { AuthProvider, useAuth } from "./lib/auth";
 import { ThemeProvider, useTheme } from "./lib/theme";
 import { ToastProvider, useToast } from "./lib/toast";
-import { createProject } from "./lib/api";
+import { createProject, getSetupStatus } from "./lib/api";
 import { AppHeader } from "./components/layout/AppHeader";
+import { DriftBanner } from "./components/layout/DriftBanner";
 import { SettingsModal } from "./components/layout/SettingsModal";
+import { SetupWizard } from "./components/layout/SetupWizard";
 import { CommandPalette } from "./components/layout/CommandPalette";
 import { ToastViewport } from "./components/ui/Toast";
 import { Modal } from "./components/ui/Modal";
@@ -70,8 +72,10 @@ function Shell() {
   const loc = useLocation();
   const { push } = useToast();
   const { toggle } = useTheme();
+  const { user, ready } = useAuth();
   const [palette, setPalette] = useState(false);
   const [settings, setSettings] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [subject, setSubject] = useState("");
@@ -117,6 +121,18 @@ function Shell() {
     return () => document.removeEventListener("keydown", onKey);
   }, [paletteAction]);
 
+  // First-run onboarding: the first admin lands in the setup wizard so API
+  // keys/endpoints are entered before anything else. Finish or Skip marks it
+  // done; closing is disabled so it reappears next sign-in until resolved.
+  useEffect(() => {
+    if (!ready || !user?.is_admin) return;
+    getSetupStatus()
+      .then((s) => {
+        if (!s.setup_completed) setSetupOpen(true);
+      })
+      .catch(() => undefined);
+  }, [ready, user]);
+
   const create = async () => {
     if (!title.trim()) {
       setFormError("Give your project a name to continue.");
@@ -142,6 +158,7 @@ function Shell() {
     <div className="flex h-full flex-col bg-[var(--background)] text-[var(--text-primary)]">
       <style>{tooltipStyles}</style>
       {!hideHeader && <AppHeader onSearch={() => setPalette(true)} onSettings={() => setSettings(true)} />}
+      <DriftBanner />
       <div className="flex min-h-0 flex-1 flex-col">
         <Routes>
           <Route path="/projects" element={<Navigate to="/" replace />} />
@@ -192,6 +209,7 @@ function Shell() {
         onOpenCreateProject={() => setCreateOpen(true)}
       />
       <SettingsModal open={settings} onClose={() => setSettings(false)} />
+      <SetupWizard open={setupOpen} onDone={() => setSetupOpen(false)} />
       <Modal
         open={createOpen}
         onClose={() => setCreateOpen(false)}

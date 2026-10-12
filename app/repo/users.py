@@ -13,7 +13,7 @@ from typing import Any
 from .base import Repo, to_record
 from .models import UserRecord
 
-_FIELDS = ("id", "email", "display_name", "created_at")
+_FIELDS = ("id", "email", "display_name", "created_at", "is_admin")
 _COLUMNS = ", ".join(_FIELDS)
 
 
@@ -35,13 +35,21 @@ def verify_password(password_hash: str, password: str) -> bool:
 
 class UserRepo(Repo):
     def create(self, email: str, password: str, display_name: str) -> UserRecord | None:
-        """Register a user. Returns None if the email is already taken."""
+        """Register a user. Returns None if the email is already taken.
+
+        The first user in an empty table becomes admin (single-user desktop
+        installs need no extra step; concurrent double-signups may rarely both
+        win the race — the first admin can demote in a later phase).
+        """
         try:
-            row = self._fetch_one(
-                f"insert into users (id, email, password_hash, display_name) "
-                f"values (%s, %s, %s, %s) returning {_COLUMNS}",
-                (str(uuid.uuid4()), email.strip().lower(), hash_password(password), display_name),
-            )
+            with self.db.transaction() as conn:
+                count = conn.execute("select count(*) as n from users").fetchone()["n"]
+                row = conn.execute(
+                    f"insert into users (id, email, password_hash, display_name, is_admin) "
+                    f"values (%s, %s, %s, %s, %s) returning {_COLUMNS}",
+                    (str(uuid.uuid4()), email.strip().lower(), hash_password(password),
+                     display_name, count == 0),
+                ).fetchone()
         except Exception as exc:  # unique violation
             if "duplicate key" in str(exc).lower() or "unique" in str(exc).lower():
                 return None
@@ -50,7 +58,8 @@ class UserRepo(Repo):
 
     def get_by_email_with_hash(self, email: str) -> dict[str, Any] | None:
         return self._fetch_one(
-            "select id, email, display_name, password_hash, created_at from users where email = %s",
+            "select id, email, display_name, password_hash, created_at, is_admin "
+            "from users where email = %s",
             (email.strip().lower(),),
         )
 

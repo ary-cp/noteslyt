@@ -19,6 +19,7 @@ class UserRecord:
     email: str
     display_name: str
     created_at: datetime | None = None
+    is_admin: bool = False
 
 
 @dataclass

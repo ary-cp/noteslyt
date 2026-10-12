@@ -1,10 +1,8 @@
-# NotesLyt — source-cited AI tutor + adaptive assessment
+![logo](frontend\public\01-primary-logo.svg)
 
-> **Track D · Personalized Tutoring & Adaptive Learning**
-> A learner creates **projects** ("books"), each with its own corpus of sources —
-> lecture videos, textbooks, slide decks, spreadsheets — its own topics, its own chats,
-> and its own memory. Every answer cites the exact page, slide or timestamp it came from,
-> and an adaptive quiz (Bayesian Knowledge Tracing) targets what you haven't mastered.
+<center> <h1> NotesLyt — source-cited AI tutor + adaptive assessment</h1> </center>
+
+
 
 Database and uploads stay on your machine. AI requests use the providers configured
 in `.env`; fully offline operation requires local providers.

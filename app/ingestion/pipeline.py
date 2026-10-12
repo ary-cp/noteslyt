@@ -93,6 +93,7 @@ class IngestResult:
     parser: str = ""
     detail: str = ""
     elapsed_s: float = 0.0
+    reused_parse: bool = False
 
     @property
     def ok(self) -> bool:
@@ -117,10 +118,17 @@ class IngestionPipeline:
         self.topics = topics
 
     # ================================================================== main
-    def ingest_source(self, source: SourceRecord, path: Path) -> IngestResult:
+    def ingest_source(self, source: SourceRecord, path: Path, *,
+                      reuse_parsed: bool = False) -> IngestResult:
         """
         Ingest one stored file. Never raises for an expected failure — the source
         row is moved to `failed` with a readable reason instead.
+
+        `reuse_parsed` (re-embed path only) rebuilds units from the stored
+        parse instead of re-parsing the file — no re-transcription, no
+        re-captioning, no parser bills. Falls back to a fresh parse when the
+        stored text is missing, truncated or unparseable. New uploads always
+        parse the file (nothing stored yet).
         """
         t0 = time.perf_counter()
         result = IngestResult(
@@ -135,7 +143,7 @@ class IngestionPipeline:
 
             # 1. Parse -> units --------------------------------------------
             self.sources.set_status(source.id, "parsing", f"parsing {source.filename}")
-            parsed = parse_source(path, source.source_type, self.settings)
+            parsed = self._parse_with_reuse(source, path, result, reuse_parsed=reuse_parsed)
             result.parser = parsed.parser
             result.warnings.extend(parsed.warnings)
             result.units = parsed.unit_count
@@ -145,7 +153,8 @@ class IngestionPipeline:
                 )
 
             # 1b. Video keyframes -> vision captions (same units, same locators)
-            if source.source_type == "video":
+            # Skipped for reused parses: their captions are already in the text.
+            if source.source_type == "video" and not result.reused_parse:
                 self._caption_video_frames(source, path, parsed.units, result)
 
             # 2. Chunk (never crosses a locator boundary) -------------------
@@ -162,7 +171,8 @@ class IngestionPipeline:
             # ingest itself.
             try:
                 markdown, truncated = render_parsed_markdown(
-                    source.filename, parsed.units, MAX_PARSED_CHARS
+                    source.filename, parsed.units, MAX_PARSED_CHARS,
+                    parser=parsed.parser,
                 )
                 self.sources.save_content(source.id, markdown, truncated)
             except Exception:  # noqa: BLE001 — preview is auxiliary, chunks are not
@@ -313,6 +323,18 @@ class IngestionPipeline:
             result.topics = [
                 {"slug": t.slug, "name": t.name, "locators": t.locators} for t in proposed
             ]
+            # 3c. Drift ground truth (best-effort) -------------------------
+            # Remember what produced these vectors so a later model swap is
+            # detectable even when widths coincide. Never fails the ingest.
+            try:
+                from ..drift import record_ingest_ground_truth
+
+                record_ingest_ground_truth(
+                    self.sources.db, self.settings.embedding_model,
+                    self.settings.embedding_dim,
+                )
+            except Exception:  # noqa: BLE001 — auxiliary, never fails ingest
+                log.warning("Ground-truth refresh skipped for project %s", source.project_id)
             # 3b. Prerequisite graph (best-effort) -------------------------
             # Topics just changed, so the dependency map may be stale. One LLM
             # call; any failure keeps the previous graph and only logs.
@@ -340,6 +362,33 @@ class IngestionPipeline:
         return result
 
     # ================================================================ helpers
+    def _parse_with_reuse(self, source: SourceRecord, path: Path,
+                          result: IngestResult, *, reuse_parsed: bool):
+        """Parse step with stored-parse reuse for re-embeds (see ingest_source)."""
+        from .units import ParsedSource, units_from_markdown
+
+        if reuse_parsed and source.source_type != "image":
+            try:
+                row = self.sources.get_content(source.id)
+            except Exception:  # noqa: BLE001 — e.g. table predates migration 0004
+                row = None
+            if row and (row.get("markdown") or "").strip() and not row.get("truncated"):
+                units, stored_parser = units_from_markdown(row["markdown"])
+                if units:
+                    log.info("Reusing stored parse for %s (%d units, via %s) — "
+                             "no re-transcription.", source.filename, len(units),
+                             stored_parser or "unknown parser")
+                    result.reused_parse = True
+                    result.warnings.append(
+                        "Reused the stored transcript/parse instead of re-parsing "
+                        f"({stored_parser or 'unknown parser'}). Re-run with a fresh "
+                        "parse to redo it."
+                    )
+                    return ParsedSource(units=units, parser=stored_parser or "stored")
+                log.info("Stored parse for %s unusable; parsing the file fresh.",
+                         source.filename)
+        return parse_source(path, source.source_type, self.settings)
+
     def _caption_video_frames(self, source, path: Path, units: list, result) -> None:
         """Caption one frame per Nth video segment unit with the vision model.
 
@@ -797,6 +846,17 @@ class IngestionPipeline:
                 f"Embedder returned {len(vectors)} vectors for {len(texts)} chunks."
             )
         expected = self.settings.embedding_dim
+        if expected is None:
+            # Fresh install that booted before setup collected an endpoint:
+            # adopt whatever width the endpoint emits from here on.
+            seen = {len(v) for v in vectors}
+            if len(seen) == 1:
+                self.settings.embedding_dim = seen.pop()
+                return vectors
+            raise IngestionError(
+                "Embedder returned inconsistent widths — complete setup first, "
+                "then re-queue this source."
+            )
         wrong = {len(v) for v in vectors}
         if wrong and wrong != {expected}:
             raise IngestionError(
@@ -813,14 +873,33 @@ class IngestionPipeline:
 
 
 def render_parsed_markdown(
-    filename: str, units: list[SourceUnit], limit: int = MAX_PARSED_CHARS
+    filename: str, units: list[SourceUnit], limit: int = MAX_PARSED_CHARS,
+    parser: str = "",
 ) -> tuple[str, bool]:
     """Parser output as markdown: what the model actually ingested.
 
     One `## <locator>` section per unit, in reading order. Returns
-    `(markdown, truncated)`.
+    `(markdown, truncated)`. The `<!-- parser: … -->` comment records which
+    parser produced the units so `units_from_markdown` can round-trip the
+    name — invisible when rendered, one line in the raw view.
     """
     parts = [f"# {filename}", ""]
+    if parser:
+        parts.append(f"<!-- parser: {parser} -->")
+        parts.append("")
+    for unit in units:
+        text = (unit.text or "").strip()
+        if not text:
+            continue
+        parts.append(f"## {unit.citation_label()}")
+        parts.append("")
+        parts.append(text)
+        parts.append("")
+    markdown = "\n".join(parts).strip() + "\n"
+    if len(markdown) > limit:
+        cut = markdown[:limit].rstrip()
+        return cut + f"\n\n…(truncated — {len(markdown) - len(cut)} more characters in the full parse)", True
+    return markdown, False
     for unit in units:
         text = (unit.text or "").strip()
         if not text:

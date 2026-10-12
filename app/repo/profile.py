@@ -102,8 +102,10 @@ class ProfileRepo(Repo):
     def quiz_progress(self, user_id: str) -> dict:
         """Evidence from saved first answers, including quizzes taken before profile UI existed."""
         return self._fetch_one(
-            "select count(*)::int as answered, count(*) filter (where a.correct)::int as correct, "
-            "count(distinct q.topic_id)::int as topics_practiced, count(distinct a.quiz_id)::int as quizzes_practiced "
+            "select count(*) as answered, "
+            "coalesce(sum(case when a.correct then 1 else 0 end), 0) as correct, "
+            "count(distinct q.topic_id) as topics_practiced, "
+            "count(distinct a.quiz_id) as quizzes_practiced "
             "from answers a join questions q on q.id = a.question_id "
             "join quizzes z on z.id = a.quiz_id join projects p on p.id = z.project_id "
             "where a.user_id = %s and z.user_id = %s and p.user_id = %s",
@@ -131,7 +133,13 @@ class ProfileRepo(Repo):
                 "select study_pattern from user_profiles where user_id = %s for update",
                 (user_id,),
             ).fetchone()
-            pattern = dict(row["study_pattern"] or {})
+            stored = row["study_pattern"] if row else None
+            if isinstance(stored, str):
+                try:
+                    stored = json.loads(stored) if stored else {}
+                except ValueError:
+                    stored = {}
+            pattern = dict(stored or {})
             for key, delta in deltas.items():
                 try:
                     current = int(pattern.get(key, 0))
@@ -186,12 +194,23 @@ class ProfileRepo(Repo):
 def _to_profile(row: dict[str, Any] | None) -> ProfileRecord | None:
     if row is None:
         return None
+
+    def _parsed(value: Any, fallback: Any) -> Any:
+        if value is None or value == "":
+            return fallback
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except ValueError:
+                return fallback
+        return value
+
     return ProfileRecord(
         user_id=_coerce(row["user_id"]),
         capability_level=row["capability_level"],
         thinking_level=row["thinking_level"],
         goals=row["goals"] or "",
-        study_pattern=row["study_pattern"] or {},
-        strengths=row["strengths"] or [],
+        study_pattern=_parsed(row["study_pattern"], {}),
+        strengths=_parsed(row["strengths"], []),
         updated_at=row["updated_at"],
     )

@@ -10,22 +10,28 @@ Why this exists: vectors from different models are incomparable, so swapping
 e.g. OpenAI `text-embedding-3-small` (1536-d) for nomic/EmbeddingGemma (768-d)
 without re-embedding fails every ingest at the Postgres insert
 ("expected 1536 dimensions, not 768") — and padding/truncating across would
-silently corrupt retrieval. The boot guard (`app/main.py`) refuses to start
-in drift and points here.
+silently corrupt retrieval. The server degrades vector routes to 409 in drift
+and points here (or POST /system/reembed for the in-app job).
 
 Procedure (destructive to vectors only — users, projects, sources, topics,
 chats and memory are untouched):
 
     1. Probe the model: one /embeddings call, the output width wins.
-    2. Require EMBEDDING_DIM to equal it (the script never guesses).
+    2. Require EMBEDDING_DIM to equal it (the script never guesses; unset
+       means auto-detect and the probe wins).
     3. Drop the HNSW index, delete all chunk rows, null stored stem vectors,
        ALTER both vector columns, recreate the index and `match_chunks`.
     4. Reset ready/failed sources to queued and re-ingest every stored file
        through the normal pipeline (same code as uploads, incl. topics merge).
+       Stored parses/transcripts are reused (no re-transcription bills);
+       pass --fresh-parse to redo them from the files (STT/parser upgrades).
 
-Stop the API server first: it holds no locks the DDL needs, but an upload
-landing mid-run would ingest at the new width into a half-migrated table.
+Stop the API server first: uploads landing mid-run ingest at the new width
+(consistent), but an upload racing the DDL window can still fail its batch.
 LLM + transcription endpoints must be reachable (topics + media re-ingest).
+
+The resize/re-ingest core lives in app/reembed.py (shared with the in-app
+job); this CLI is prints + arg parsing around it.
 """
 
 from __future__ import annotations
@@ -37,49 +43,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import Settings, get_settings  # noqa: E402
-from app.db import Database, describe_embedding_drift  # noqa: E402
-from app.ingestion import IngestionPipeline  # noqa: E402
-from app.ingestion.parsers_media import set_transcriber  # noqa: E402
-from app.llm import LLMClient, build_embedder  # noqa: E402
-from app.repo import ProjectRepo, SourceRepo, TopicRepo, UserRepo  # noqa: E402
-from app.repo.profile import ProfileRepo  # noqa: E402
-from app.storage import FileStorage  # noqa: E402
-from app.transcription import build_transcriber  # noqa: E402
-from app.vectorstore import VectorStore  # noqa: E402
-
-# Keep in sync with migrations/0001_core.sql — the only other place this
-# function is defined. `{dim}` is the single substitution point.
-MATCH_CHUNKS_DDL = """create or replace function match_chunks (
-    query_embedding   vector({dim}),
-    match_count       integer,
-    filter_project_id uuid,
-    filter_source_ids uuid[] default null,
-    filter_topic_ids  uuid[] default null
+from app.db import describe_embedding_drift  # noqa: E402
+from app.llm import build_embedder  # noqa: E402
+from app.reembed import (  # noqa: E402
+    reingest_all,
+    reset_sources_for_reembed,
+    resize_vectors,
 )
-returns table (
-    id            uuid,
-    source_id     uuid,
-    topic_id      uuid,
-    text          text,
-    locator_kind  text,
-    locator_value text,
-    page          integer,
-    start_ts      real,
-    end_ts        real,
-    heading       text,
-    similarity    real
-)
-language sql stable as $$
-    select c.id, c.source_id, c.topic_id, c.text, c.locator_kind, c.locator_value,
-           c.page, c.start_ts, c.end_ts, c.heading,
-           1 - (c.embedding <=> query_embedding) as similarity
-    from chunks c
-    where c.project_id = filter_project_id
-      and (filter_source_ids is null or c.source_id = any (filter_source_ids))
-      and (filter_topic_ids  is null or c.topic_id  = any (filter_topic_ids))
-    order by c.embedding <=> query_embedding
-    limit match_count;
-$$"""
 
 
 def probe_model_dim(settings: Settings) -> int:
@@ -114,88 +84,54 @@ def report(dims: dict[str, int | None]) -> list[str]:
 
 
 def resize(db: Database, dim: int) -> None:
-    """Wipe vectors and resize every vector column, index and the retrieval function."""
-    with db.transaction() as conn:
-        conn.execute("drop index if exists chunks_embedding_idx")
-        deleted = conn.execute("delete from chunks").rowcount
-        conn.execute(f"alter table chunks alter column embedding type vector({dim})")
-        # Stem vectors are recomputed on next generation; stale cross-model
-        # rows would poison novelty cosine, so they go too.
-        nulled = conn.execute("update questions set stem_embedding = null").rowcount
-        conn.execute(f"alter table questions alter column stem_embedding type vector({dim})")
-        conn.execute(
-            "create index chunks_embedding_idx on chunks using hnsw (embedding vector_cosine_ops)"
-        )
-        conn.execute(MATCH_CHUNKS_DDL.format(dim=dim))
-    print(f"resized         : deleted {deleted} chunk rows, nulled {nulled} stem vectors, "
-          f"columns now vector({dim})")
+    """CLI wrapper: shared resize core + prints (see app/reembed.py)."""
+    counts = resize_vectors(db, dim)
+    print(f"resized         : deleted {counts['deleted']} chunk rows, nulled {counts['nulled']} "
+          f"stem vectors, columns now vector({dim})")
 
 
 def reset_sources(db: Database) -> int:
     """Ready/failed rows go back to queued so the pipeline picks them up."""
-    with db.transaction() as conn:
-        n = conn.execute(
-            "update sources set status = 'queued', "
-            "status_detail = 're-embed queued after embedding-model change', "
-            "units = 0, chunk_count = 0, parser = '', warnings = '[]' "
-            "where status in ('ready', 'failed')"
-        ).rowcount
+    n = reset_sources_for_reembed(db)
     print(f"re-queued       : {n} source(s)")
     return n
 
 
-def reingest(settings: Settings, db: Database) -> tuple[int, int]:
+def reingest(settings: Settings, db: Database, *, reuse_parsed: bool = True) -> tuple[int, int]:
     """Run every queued source through the normal ingestion pipeline."""
-    llm = LLMClient(settings)
-    embedder = build_embedder(settings)
-    store = VectorStore(db)
-    sources = SourceRepo(db)
-    topics = TopicRepo(db)
-    set_transcriber(build_transcriber(settings))
-    storage = FileStorage(settings.uploads_dir)
-    # Repos below are unused directly but mirror the lifespan wiring so a
-    # future pipeline dependency cannot silently diverge.
-    _users, _projects, _profiles = UserRepo(db), ProjectRepo(db), ProfileRepo(db)
-    pipeline = IngestionPipeline(settings, llm, embedder, store, sources, topics)
+    def on_source(filename: str, ok: bool, detail: str) -> None:
+        print(f"  [{'ok' if ok else 'FAIL'}] {filename} — {detail}")
 
-    ok, failed = 0, 0
-    for source in sources.claim_pending():
-        path = storage.open_for_read(source.project_id, source.id, source.filename)
-        if path is None:
-            sources.mark_failed(source.id, "Stored file disappeared before re-embed.")
-            print(f"  [FAIL] {source.filename} — file missing on disk")
-            failed += 1
-            continue
-        result = pipeline.ingest_source(source, path)
-        if result.ok:
-            print(f"  [ok] {source.filename} — {result.chunks} chunks via {result.parser}")
-            ok += 1
-        else:
-            print(f"  [FAIL] {source.filename} — {result.detail}")
-            failed += 1
-    return ok, failed
+    result = reingest_all(settings, db, reuse_parsed=reuse_parsed, on_source=on_source)
+    return result["ok"], result["failed"]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Re-embed the corpus after a model change.")
     parser.add_argument("--check", action="store_true", help="report widths, change nothing")
     parser.add_argument("--force", action="store_true", help="re-ingest even when widths agree")
+    parser.add_argument("--fresh-parse", action="store_true",
+                        help="re-parse/transcribe from the files instead of reusing stored parses")
     args = parser.parse_args()
 
     settings = get_settings()
-    if not settings.database_url:
-        raise SystemExit("DATABASE_URL is not set.")
     print(f"target          : {settings.db_target}")
 
     model_dim = probe_model_dim(settings)
-    if settings.embedding_dim != model_dim:
+    if settings.embedding_dim is None:
+        settings.embedding_dim = model_dim
+        print(f"auto-dim        : EMBEDDING_DIM unset, using probed width {model_dim}")
+    elif settings.embedding_dim != model_dim:
         raise SystemExit(
             f"EMBEDDING_DIM={settings.embedding_dim} but the model emits {model_dim}-d vectors.\n"
-            f"Set EMBEDDING_DIM={model_dim} in .env first — the script will not guess, "
-            f"because every other width check keys off it."
+            f"Set EMBEDDING_DIM={model_dim} in .env (or unset for auto-detect) — the script "
+            f"will not guess, because every other width check keys off it."
         )
 
-    db = Database(settings)
+    from app.backend import create_database, create_vector_store  # noqa: E402
+
+    db = create_database(settings)
+    store = create_vector_store(settings, db)
     try:
         dims = collect_dims(settings, db, model_dim)
         print("widths:")
@@ -211,10 +147,17 @@ def main() -> int:
         else:
             print("force           : widths agree, re-ingesting anyway")
 
-        resize(db, model_dim)
+        if getattr(db, "backend", "postgres") == "sqlite":
+            counts = store.reset_vectors(model_dim)
+            print(f"resized         : cleared Chroma collection + {counts['deleted']} chunk rows")
+        else:
+            resize(db, model_dim)
         reset_sources(db)
-        ok, failed = reingest(settings, db)
+        ok, failed = reingest(settings, db, reuse_parsed=not args.fresh_parse)
 
+        from app.drift import record_ingest_ground_truth  # noqa: E402
+
+        record_ingest_ground_truth(db, settings.embedding_model, model_dim)
         print("widths after:")
         post = report(collect_dims(settings, db, model_dim))
         print(f"done            : {ok} re-embedded, {failed} failed")

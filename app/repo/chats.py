@@ -16,7 +16,7 @@ from typing import Any
 
 from psycopg.types.json import Json
 
-from .base import Repo, to_record, to_records
+from .base import Repo, parse_times, to_record, to_records
 from .models import ChatMessageRecord, ChatRecord
 
 _CHAT_FIELDS = (
@@ -50,7 +50,11 @@ class ChatRepo(Repo):
             "group by c.id order by c.last_message_at desc",
             (project_id, user_id),
         )
-        return [{**r, "id": str(r["id"]), "project_id": str(r["project_id"])} for r in rows]
+        out = []
+        for r in rows:
+            parse_times(r, "created_at", "last_message_at")
+            out.append({**r, "id": str(r["id"]), "project_id": str(r["project_id"])})
+        return out
 
     def get_owned(self, chat_id: str, user_id: str) -> ChatRecord | None:
         row = self._fetch_one(
@@ -63,9 +67,9 @@ class ChatRepo(Repo):
 
     def rename(self, chat_id: str, user_id: str, title: str) -> ChatRecord | None:
         row = self._fetch_one(
-            f"update chats c set title = %s from projects p "
-            f"where c.id = %s and c.project_id = p.id and p.user_id = %s "
-            f"returning {', '.join('c.' + f for f in _CHAT_FIELDS)}",
+            f"update chats set title = %s where id = %s and project_id in "
+            f"(select p.id from projects p where p.user_id = %s) "
+            f"returning {', '.join(_CHAT_FIELDS)}",
             ((title or "New chat")[:120], chat_id, user_id),
         )
         return to_record(ChatRecord, row)
@@ -73,8 +77,8 @@ class ChatRepo(Repo):
     def delete_owned(self, chat_id: str, user_id: str) -> bool:
         return (
             self._execute(
-                "delete from chats c using projects p "
-                "where c.id = %s and c.project_id = p.id and p.user_id = %s",
+                "delete from chats where id = %s and project_id in "
+                "(select p.id from projects p where p.user_id = %s)",
                 (chat_id, user_id),
             )
             > 0

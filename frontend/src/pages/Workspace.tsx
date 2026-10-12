@@ -17,6 +17,7 @@ import {
   listProjects,
   listSources,
   renameChat,
+  retrySource,
   uploadSources,
 } from "../lib/api";
 import type { ChatOut, CitationLocator, ProjectListItem, ProjectOut, SourceOut, ViewerTarget } from "../lib/types";
@@ -360,6 +361,19 @@ export default function Workspace({
     [refreshSources, push],
   );
 
+  const retryFailedSource = useCallback(
+    async (id: string) => {
+      try {
+        await retrySource(id);
+        push("Retry queued", { detail: "Resuming after the failure — transcription is not redone.", tone: "success" });
+        await refreshSources();
+      } catch (e) {
+        push("Retry failed", { detail: e instanceof Error ? e.message : String(e), tone: "error" });
+      }
+    },
+    [refreshSources, push],
+  );
+
   const selectedSources = useMemo(() => sources.filter((s) => selectedIds.has(s.id)), [sources, selectedIds]);
   const [sourceQuery, setSourceQuery] = useState("");
   const debouncedQuery = useDebounced(sourceQuery, 200);
@@ -493,6 +507,7 @@ export default function Workspace({
                 openSource(id);
               }}
               onRemoveSource={(id) => void removeSource(id)}
+              onRetrySource={(id) => void retryFailedSource(id)}
               onFiles={(f) => void onFiles(f)}
               onNewChat={() => void newChat()}
               onOpenChat={(id) => {

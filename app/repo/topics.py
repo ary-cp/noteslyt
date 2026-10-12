@@ -53,12 +53,13 @@ class TopicRepo(Repo):
         """Project topics linked to at least one selected source."""
         if not source_ids:
             return []
+        placeholders = ", ".join(["%s"] * len(source_ids))
         rows = self._fetch_all(
             f"select distinct t.{_FIELDS[0]}, "
             + ", ".join(f"t.{name}" for name in _FIELDS[1:])
             + " from topics t join topic_sources ts on ts.topic_id = t.id "
-              "where t.project_id = %s and ts.source_id = any(%s) order by t.name",
-            (project_id, source_ids),
+            f"where t.project_id = %s and ts.source_id in ({placeholders}) order by t.name",
+            (project_id, *source_ids),
         )
         return to_records(TopicRecord, rows)  # type: ignore[return-value]
 
@@ -75,12 +76,19 @@ class TopicRepo(Repo):
 
     def sources_for(self, topic_id: str) -> list[dict[str, Any]]:
         """Which sources cover a topic — used to show topic coverage in the UI."""
-        return self._fetch_all(
+        rows = self._fetch_all(
             "select ts.source_id, ts.locators, s.filename, s.source_type "
             "from topic_sources ts join sources s on s.id = ts.source_id "
             "where ts.topic_id = %s",
             (topic_id,),
         )
+        for r in rows:
+            if isinstance(r.get("locators"), str):
+                try:
+                    r["locators"] = json.loads(r["locators"])
+                except ValueError:
+                    r["locators"] = []
+        return rows
 
     def set_edges(self, project_id: str, edges: list[tuple[str, str]]) -> None:
         """Replace the prerequisite graph for a project. `edges` = (topic_id, prereq_id)."""

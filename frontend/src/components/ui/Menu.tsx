@@ -81,6 +81,7 @@ export function Dropdown({
           setActive(options.findIndex((o) => o.value === value));
         }}
         onKeyDown={onKey}
+        title={current?.label ?? undefined}
         className="flex h-8 w-full cursor-pointer items-center justify-between gap-2 rounded-[7px] border border-[var(--border)] bg-[var(--input)] px-2.5 text-[13px] text-[var(--text-primary)] hover:border-[var(--border-strong)]"
       >
         <span className="truncate">{current?.label ?? <span className="text-[var(--text-muted)]">{placeholder}</span>}</span>
@@ -98,6 +99,7 @@ export function Dropdown({
               role="option"
               aria-selected={o.value === value}
               disabled={o.disabled}
+              title={o.label}
               onClick={() => {
                 onChange(o.value);
                 setOpen(false);
