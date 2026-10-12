@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Play, Pause, Volume2, VolumeX, Maximize, SkipBack, SkipForward, Headphones, Captions, PictureInPicture2, Search, SlidersHorizontal, ChevronDown } from "lucide-react";
+import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, SkipBack, SkipForward, Headphones, Captions, PictureInPicture2, Search, SlidersHorizontal, ChevronDown } from "lucide-react";
 import { formatDuration } from "../../lib/utils";
 
 import { transcriptSegments } from "./transcript";
@@ -11,18 +11,22 @@ export default function MediaPane({ title, active, url, video, time, stopAt, see
   const ref = useRef<HTMLVideoElement & HTMLAudioElement>(null);
   const player = useRef<HTMLDivElement>(null);
   const previousVolume = useRef(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const update = () => {
+      const entered = document.fullscreenElement === player.current;
+      setIsFullscreen(entered);
+      if (entered) player.current?.focus({ preventScroll: true });
+    };
+    document.addEventListener("fullscreenchange", update);
+    return () => document.removeEventListener("fullscreenchange", update);
+  }, []);
   const activeRef = useRef(active);
   activeRef.current = active;
   const transcript = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [transcriptOpen, setTranscriptOpen] = useState(true);
   const [remaining, setRemaining] = useState(false);
-  const [sleepMinutes, setSleepMinutes] = useState(0);
-  useEffect(() => {
-    if (!sleepMinutes) return;
-    const timer = window.setTimeout(() => { ref.current?.pause(); setSleepMinutes(0); }, sleepMinutes * 60_000);
-    return () => window.clearTimeout(timer);
-  }, [sleepMinutes]);
   const [captions, setCaptions] = useState(false);
   const [follow, setFollow] = useState(false);
   const [speed, setSpeed] = useState(1);
@@ -128,11 +132,14 @@ export default function MediaPane({ title, active, url, video, time, stopAt, see
   };
   return <div className="space-y-4">
     <div ref={player} className="media-player overflow-hidden rounded-xl border border-[var(--border)] bg-[#101216] p-3 text-white" tabIndex={0} aria-label="Media player" onKeyDown={(e) => {
-      if ((e.target as HTMLElement).matches("input,select,button")) return;
+      const target = e.target as HTMLElement;
+      if (e.altKey || e.ctrlKey || e.metaKey || target.closest("input,select,textarea,[contenteditable=true]")) return;
+      if (e.key === " " && target.closest("button")) return;
+      if (e.repeat) return;
       if (e.key === " " || e.key.toLowerCase() === "k") { e.preventDefault(); togglePlayback(); }
       if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); fullPlayback(); seek(position + (e.key === "ArrowLeft" ? -5 : 5)); }
-      if (e.key.toLowerCase() === "f") fullscreen();
-      if (e.key.toLowerCase() === "m") toggleMute();
+      if (video && e.key.toLowerCase() === "f") { e.preventDefault(); fullscreen(); }
+      if (e.key.toLowerCase() === "m") { e.preventDefault(); toggleMute(); }
     }}>
       {!video && <div className="audio-cover">
         <span className={`audio-disc ${playing ? "is-playing" : ""}`}><Headphones size={32} /></span>
@@ -141,12 +148,13 @@ export default function MediaPane({ title, active, url, video, time, stopAt, see
         <span className="font-mono text-2xl tabular-nums text-white/90">{formatDuration(position)} <span className="text-sm text-white/40">/ {formatDuration(duration)}</span></span>
         <p className="text-xs text-white/50">{waiting ? "Buffering…" : playing ? "Now playing" : "Ready to listen"}</p>
       </div>}
-      <div className="relative">
+      <div className="media-stage relative">
         {video ? <video {...mediaProps} playsInline /> : <audio {...mediaProps} className="hidden" />}
         {video && captions && activeIndex >= 0 && <div className="pointer-events-none absolute inset-x-3 bottom-3 text-center"><span className="inline-block max-h-28 overflow-hidden rounded-md bg-black/80 px-3 py-2 text-sm leading-relaxed text-white">{segments[activeIndex].text}</span></div>}
         {video && !playing && <button type="button" aria-label="Play video" onClick={togglePlayback} className="absolute left-1/2 top-1/2 flex h-14 w-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-black/60 text-white shadow-lg"><Play size={24} fill="currentColor" /></button>}
         {waiting && <span role="status" className="absolute right-3 top-3 rounded bg-black/70 px-2 py-1 text-xs">Buffering…</span>}
       </div>
+      <div className="media-controls">
       {error && <p role="alert" className="p-2 text-sm text-[var(--danger)]">{error}</p>}
       <div className="relative mx-1 mt-3 h-5" title={time !== null ? `Highlighted citation starts at ${formatDuration(time)}` : "Seek through source"}>
         <div className="absolute inset-x-0 top-2 h-1 rounded bg-[var(--border)]" />
@@ -164,7 +172,7 @@ export default function MediaPane({ title, active, url, video, time, stopAt, see
         <button type="button" aria-label="Playback settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((v) => !v)} className="rounded p-1.5"><SlidersHorizontal size={16} /></button>
         {video && <button type="button" aria-label="Toggle captions" aria-pressed={captions} disabled={!segments.length} onClick={() => setCaptions((v) => !v)} className="rounded p-1.5 disabled:opacity-30"><Captions size={17} /></button>}
         {video && document.pictureInPictureEnabled && <button type="button" aria-label="Picture in picture" onClick={() => void pictureInPicture()} className="rounded p-1.5"><PictureInPicture2 size={17} /></button>}
-        {video && <button type="button" aria-label="Fullscreen video" onClick={fullscreen} className="rounded p-1.5"><Maximize size={16} /></button>}
+        {video && <button type="button" aria-label={isFullscreen ? "Exit video fullscreen" : "Fullscreen video"} onClick={fullscreen} className="rounded p-1.5">{isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}</button>}
       </div>
       {settingsOpen && <div className="viewer-reveal mt-3 space-y-3 border-t border-white/10 pt-3">
         <div className="flex flex-wrap items-center justify-between gap-3 text-xs"><span className="text-white/50">Volume & speed</span>
@@ -173,14 +181,9 @@ export default function MediaPane({ title, active, url, video, time, stopAt, see
           {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}
         </select>
         </div>
-        <label className="flex items-center justify-between gap-2 text-xs text-white/60">Sleep timer
-          <select aria-label="Sleep timer" value={sleepMinutes} onChange={(e) => setSleepMinutes(Number(e.target.value))} className="rounded border border-white/10 bg-[#101216] px-2 py-1">
-            <option value={0}>Off</option>{[5, 15, 30, 60].map((n) => <option key={n} value={n}>{n} minutes</option>)}
-          </select>
-        </label>
         <p className="text-[10px] text-white/40">Space / K: play · ← →: seek · M: mute{video ? " · F: fullscreen" : ""}</p>
       </div>}
-      {sleepMinutes > 0 && <p role="status" className="mt-2 text-[10px] text-white/50">Sleep timer on · playback will pause automatically</p>}
+      </div>
     </div>
     {time !== null && <div className="rounded-lg border border-[var(--accent-border)] bg-[var(--accent-soft)] p-3 text-sm">
       <div className="flex flex-wrap items-center gap-2">

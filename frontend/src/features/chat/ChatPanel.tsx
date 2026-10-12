@@ -5,7 +5,7 @@ import remarkMath from "remark-math";
 import rehypeRaw from "rehype-raw";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { AlertTriangle, Check, Copy, FileText, Maximize2, RefreshCw, Send, Square } from "lucide-react";
+import { AlertTriangle, Check, Copy, Maximize2, RefreshCw, Send, Square } from "lucide-react";
 import { ChatStreamError, createChat, getChat, renameChat, streamMessage } from "../../lib/api";
 import type { ChatCitation, ChatMessageOut, CitationLocator, SourceOut } from "../../lib/types";
 import { useToast } from "../../lib/toast";
@@ -166,11 +166,9 @@ function MessageActions({ content }: { content: string }) {
 /* ---------------- chat panel ---------------- */
 
 const SUGGESTIONS = [
-  "Explain the main concepts",
-  "Summarize these lectures",
-  "Create an exam from my sources",
-  "Explain this in Hindi (हिंदी में समझाएं)",
-  "Teach me this topic step by step",
+  { label: "Summarize", prompt: "Summarize the main ideas from my sources" },
+  { label: "Explain a concept", prompt: "Explain the main concepts step by step" },
+  { label: "Quiz me", prompt: "Quiz me on the key concepts from my sources" },
 ];
 
 export function ChatPanel({
@@ -405,31 +403,20 @@ export function ChatPanel({
           ) : error ? (
             <ErrorState body={error} onRetry={() => setRefreshTick((n) => n + 1)} />
           ) : messages.length === 0 && !sending ? (
-            <div className="flex flex-col items-center pt-10 text-center">
-              <span className="mb-4 flex h-11 w-11 items-center justify-center rounded-[10px] border border-[var(--border)] bg-[var(--surface)] text-[var(--text-secondary)]">
-                <FileText size={19} />
-              </span>
-              <h3 className="text-[19px] font-semibold tracking-tight">What do you want to learn?</h3>
-              <p className="mt-1.5 max-w-[420px] text-sm text-[var(--text-secondary)]">
-                Ask questions about your sources. Answers cite the exact page or timestamp.
+            <div className="mx-auto flex w-full max-w-[440px] flex-col items-center px-4 py-12 text-center">
+              <h3 className="text-xl font-medium tracking-tight">{hasReady ? "Explore your sources" : "Start with a source"}</h3>
+              <p className="mt-2 max-w-[340px] text-sm leading-relaxed text-[var(--text-muted)]">
+                {hasReady ? "Ask a question. Get answers linked to your sources." : "Add a document, recording, or image to start learning."}
               </p>
-              <div className="mt-5 flex max-w-[520px] flex-wrap justify-center gap-2">
-                {SUGGESTIONS.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => void send(s)}
-                    className="cursor-pointer rounded-full border border-[var(--border)] bg-[var(--surface)] px-3.5 py-1.5 text-[13px] text-[var(--text-secondary)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-              {!hasReady && (
-                <button type="button" onClick={onNeedSources} className="mt-6 cursor-pointer text-[13px] text-[var(--accent)] underline underline-offset-2">
-                  Upload a source to begin
-                </button>
-              )}
+              {hasReady ? <div className="mt-6 flex flex-wrap justify-center gap-2">
+                {SUGGESTIONS.map((s) => <button key={s.label} type="button" onClick={() => void send(s.prompt)}
+                  className="cursor-pointer rounded-lg border border-[var(--border)] px-3 py-2 text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-secondary)] hover:text-[var(--text-primary)]">
+                  {s.label}
+                </button>)}
+              </div> : <button type="button" onClick={onNeedSources}
+                className="mt-6 cursor-pointer rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90">
+                Add a source
+              </button>}
             </div>
           ) : (
             messages.map((m) => <ChatMessage key={m.id} msg={m} sources={sources} onOpenSource={onOpenSource} />)
