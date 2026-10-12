@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { DRIFT_EVENT, getAdminSettings, getEmbeddingStatus, getLlamaStatus, getReembedStatus, patchAdminSettings, startReembed, updateLlamaEngine } from "../../lib/api";
-import type { EmbeddingStatus, LlamaStatus, ReembedJob, SettingItem } from "../../lib/types";
+import { DRIFT_EVENT, getAdminSettings, getEmbeddingStatus, getReembedStatus, patchAdminSettings, startReembed } from "../../lib/api";
+import type { EmbeddingStatus, ReembedJob, SettingItem } from "../../lib/types";
 import { useAuth } from "../../lib/auth";
 import { useToast } from "../../lib/toast";
 import { Button, Spinner } from "../ui/Button";
@@ -532,7 +532,6 @@ export function AdminSettings({
           {statusBlock}
         </div>
       )}
-      {tab === "embeddings" && <EngineCard />}
       {isCloudEmbeddings && (
         <p className="mt-1 text-[13px] text-[var(--text-muted)]">
           Cloud mode — vectors come from the endpoint above. Switch to Local to manage downloads, model files and batch sizes.
@@ -607,63 +606,6 @@ export function AdminSettings({
           </Button>
         </div>
       )}
-    </div>
-  );
-}
-
-function EngineCard() {
-  const { push } = useToast();
-  const [engine, setEngine] = useState<LlamaStatus | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const refresh = useCallback(() => {
-    getLlamaStatus().then(setEngine).catch(() => setEngine(null));
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  if (engine === null) return null;
-  // Cloud mode has no vendored engine — show nothing (not even an
-  // update button): there is simply nothing to manage here.
-  if (engine.mode === "cloud") return null;
-  return (
-    <div className="mt-2 rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-[13px] font-medium">
-            Local llama.cpp {engine.build_tag ? `· ${engine.build_tag}` : ""}
-          </p>
-          <p className="text-xs text-[var(--text-muted)]">
-            {engine.installed ? "Installed" : "Not downloaded yet"}
-            {engine.model_present ? " · model ready" : " · model missing"}
-            {engine.running ? " · server running" : " · server sleeps until needed"}
-          </p>
-          {(engine.update_state !== "idle" || engine.update_message) && (
-            <p className="mt-1 text-xs text-[var(--text-muted)]">
-              Update: {engine.update_state}{engine.update_message ? ` — ${engine.update_message}` : ""}
-            </p>
-          )}
-        </div>
-        <Button
-          variant="secondary"
-          loading={busy}
-          disabled={busy}
-          onClick={() => {
-            setBusy(true);
-            updateLlamaEngine()
-              .then(() => {
-                push("Engine update started", { detail: "This downloads in the background.", tone: "success" });
-                window.setTimeout(refresh, 5000);
-              })
-              .catch((e: unknown) => push("Update failed to start", { detail: e instanceof Error ? e.message : String(e), tone: "error" }))
-              .finally(() => setBusy(false));
-          }}
-        >
-          Update engine
-        </Button>
-      </div>
     </div>
   );
 }

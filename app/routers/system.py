@@ -42,11 +42,11 @@ def llama_status(
 
 @router.post("/system/llama/update", status_code=202)
 def llama_update(
-    user: CurrentUser,
+    admin: AdminUser,
     background: BackgroundTasks,
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict:
-    """Download the newest llama.cpp build and swap it in (background)."""
+    """Download the newest llama.cpp build and swap it in (background). Admin-only."""
     if settings.embedding_mode != "local":
         raise HTTPException(status_code=400, detail="Engine updates apply to EMBEDDING_MODE=local only.")
     from ..llama_embed import get_embedding_manager

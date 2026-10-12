@@ -34,6 +34,7 @@ T = TypeVar("T")
 _JSON_FIELDS: dict[str, set[str]] = {
     "SourceRecord": {"warnings"},
     "ChatMessageRecord": {"citations"},
+    "QuestionRecord": {"options", "answer_key", "stem_embedding"},
     "AnswerRecord": {"missed", "matched"},
     "AssessmentRecord": {"quiz_ids", "report"},
 }

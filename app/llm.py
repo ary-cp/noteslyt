@@ -618,6 +618,27 @@ def verify_native_support(embedder: Embedder) -> None:
         )
 
 
+def resolve_protocol(settings: Settings) -> str:
+    """Effective multimodal protocol: explicit setting wins, otherwise sniffed.
+
+    Well-known hosts map to their native shape (`generativelanguage.
+    googleapis.com` -> gemini, `api.jina.ai` -> jina) so a Google compat URL
+    just works for media. Anything else keeps the llama.cpp shape (works
+    against llama-server-shaped endpoints; pure-text endpoints fail native
+    modes loudly at boot). Local mode ignores this entirely.
+    """
+    if settings.embedding_protocol != "auto":
+        return settings.embedding_protocol
+    from .config import _host
+
+    host = _host(settings.resolved_embedding_base_url)
+    if "generativelanguage.googleapis.com" in host:
+        return "gemini"
+    if "api.jina.ai" in host:
+        return "jina"
+    return "llama_cpp"
+
+
 def build_embedder(settings: Settings) -> Embedder:
     """Factory: picks the embedding backend from `.env`.
 
@@ -627,9 +648,9 @@ def build_embedder(settings: Settings) -> Embedder:
     provider, which keeps a single-server setup a three-line .env.
 
     Text always goes through the OpenAI-compatible endpoint. `protocol` only
-    selects the multimodal (image/audio/video) wire shape; "auto" keeps the
-    llama.cpp shape everywhere (local mode ignores it — the managed embedder
-    speaks llama.cpp natively).
+    selects the multimodal (image/audio/video) wire shape, resolved from the
+    setting with well-known-host sniffing; "auto" in local mode is irrelevant
+    (the managed embedder speaks llama.cpp natively).
     """
     if settings.embedding_mode == "local":
         from .llama_embed import ManagedEmbedder, get_embedding_manager
@@ -640,7 +661,7 @@ def build_embedder(settings: Settings) -> Embedder:
     api_key = settings.resolved_embedding_api_key
     args = (base_url, api_key, settings.embedding_model,
             settings.embedding_batch_size, settings.embedding_max_input_chars)
-    protocol = settings.embedding_protocol
+    protocol = resolve_protocol(settings) if settings.embedding_mode == "cloud" else "llama_cpp"
     if protocol == "jina":
         return JinaEmbedder(*args)
     if protocol == "gemini":

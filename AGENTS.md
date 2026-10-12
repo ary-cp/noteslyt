@@ -154,7 +154,8 @@ profiles across separate projects and reports mastery gain, question repetition
 - Multimodal wire shapes are per-protocol classes in `app/llm.py`
   (`JinaEmbedder`, `GeminiNativeEmbedder`, both sharing the OpenAI-compatible
   text path); `EMBEDDING_PROTOCOL` (auto/llama_cpp/jina/gemini, admin-editable)
-  selects the media shape. Text never leaves the compat endpoint.
+  selects the media shape, with `auto` sniffed from well-known hosts
+  (`resolve_protocol` in `app/llm.py`). Text never leaves the compat endpoint.
 
 ## Files
 
