@@ -7,13 +7,19 @@ use std::{
     net::{TcpStream, ToSocketAddrs},
     path::PathBuf,
     process::{Child, Command, Stdio},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     thread,
     time::{Duration, Instant},
 };
-use tauri::{Manager, RunEvent};
+use tauri::{AppHandle, Manager, RunEvent};
 
-struct BackendProcess(Mutex<Option<Child>>);
+struct BackendProcess {
+    child: Mutex<Option<Child>>,
+    exiting: AtomicBool,
+}
 
 fn source_root() -> Result<PathBuf, String> {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -58,7 +64,7 @@ fn writable_data_dir(path: &PathBuf) -> std::io::Result<()> {
     fs::remove_file(probe)
 }
 
-fn start_backend(app: &tauri::App) -> Result<Option<Child>, String> {
+fn start_backend(app: &AppHandle) -> Result<Option<Child>, String> {
     let packaged = !cfg!(debug_assertions);
     let port: u16 = if packaged { 8765 } else { 8000 };
     if backend_responds(port) {
@@ -167,8 +173,42 @@ fn start_backend(app: &tauri::App) -> Result<Option<Child>, String> {
 fn main() {
     let app = tauri::Builder::default()
         .setup(|app| {
-            let backend = start_backend(app).map_err(std::io::Error::other)?;
-            app.manage(BackendProcess(Mutex::new(backend)));
+            app.manage(BackendProcess {
+                child: Mutex::new(None),
+                exiting: AtomicBool::new(false),
+            });
+            let handle = app.handle().clone();
+            thread::spawn(move || match start_backend(&handle) {
+                Ok(child) => {
+                    if let Some(process) = handle.try_state::<BackendProcess>() {
+                        if process.exiting.load(Ordering::SeqCst) {
+                            if let Some(mut child) = child {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                            }
+                            return;
+                        }
+                        if let Ok(mut running) = process.child.lock() {
+                            *running = child;
+                        }
+                    }
+                    if !cfg!(debug_assertions) {
+                        if let Some(window) = handle.get_webview_window("main") {
+                            if let Ok(url) = tauri::Url::parse("http://127.0.0.1:8765/") {
+                                let _ = window.navigate(url);
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    eprintln!("NotesLyt backend startup failed: {error}");
+                    if !cfg!(debug_assertions) {
+                        if let Some(window) = handle.get_webview_window("main") {
+                            let _ = window.eval("document.body.classList.add('startup-error')");
+                        }
+                    }
+                }
+            });
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -177,7 +217,8 @@ fn main() {
     app.run(|app_handle, event| {
         if matches!(event, RunEvent::Exit) {
             if let Some(process) = app_handle.try_state::<BackendProcess>() {
-                if let Ok(mut child) = process.0.lock() {
+                process.exiting.store(true, Ordering::SeqCst);
+                if let Ok(mut child) = process.child.lock() {
                     if let Some(child) = child.as_mut() {
                         let _ = child.kill();
                         let _ = child.wait();

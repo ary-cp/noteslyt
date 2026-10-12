@@ -1,6 +1,6 @@
 [package]
 name = "noteslyt-desktop"
-version = "0.1.3"
+version = "0.1.6"
 description = "NotesLyt desktop application"
 authors = ["NotesLyt"]
 edition = "2021"
