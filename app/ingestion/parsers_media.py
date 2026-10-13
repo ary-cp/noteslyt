@@ -28,13 +28,13 @@ exact.
 from __future__ import annotations
 
 import logging
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..config import Settings
+from ..ffmpeg import ffmpeg_exe
 from ..storage import content_type_for
 from ..transcription import audio_duration_s
 from .parsers import ParserError
@@ -82,11 +82,14 @@ def _require_transcriber() -> Transcriber:
 
 
 def _ffmpeg() -> str:
-    exe = shutil.which("ffmpeg")
+    exe = ffmpeg_exe()
     if not exe:
         raise ParserError(
-            "Audio/video ingestion needs `ffmpeg` on PATH to decode audio, and it was not found. "
-            "Install ffmpeg (https://ffmpeg.org/download.html) or upload a WAV file directly."
+            "Audio/video ingestion needs the bundled `ffmpeg`, and none was found "
+            "(no shipped binary, and none on PATH). "
+            "On desktop reinstall the app; on server run "
+            "`npm run ffmpeg:fetch --prefix frontend` or install ffmpeg "
+            "(https://ffmpeg.org/download.html)."
         )
     return exe
 

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "NotesLyt",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "identifier": "app.noteslyt.desktop",
   "build": {
     "beforeDevCommand": {
@@ -11,7 +11,7 @@
     },
     "devUrl": "http://127.0.0.1:5173",
     "beforeBuildCommand": {
-      "script": "npm run build && npm run backend:bundle",
+      "script": "npm run build && npm run ffmpeg:fetch && npm run backend:bundle",
       "cwd": ".."
     },
     "frontendDist": "../dist"
@@ -44,7 +44,8 @@
     "resources": {
       "../../migrations/": "migrations/",
       "../dist/": "frontend/dist/",
-      "backend-runtime/": "backend-runtime/"
+      "backend-runtime/": "backend-runtime/",
+      "binaries-ffmpeg/": "ffmpeg/"
     }
   }
 }

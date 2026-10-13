@@ -217,6 +217,9 @@ async def lifespan(app: FastAPI):
         log.warning("Database   : %d unapplied migration(s): %s",
                     len(health["migrations_pending"]), ", ".join(health["migrations_pending"]))
     log.info("Parser     : %s%s", settings.parser, "" if settings.firecrawl_api_key else " (no FIRECRAWL_API_KEY -> local pdf-inspector/anydoc)")
+    from .ffmpeg import ffmpeg_exe, ffmpeg_source
+
+    log.info("FFmpeg     : %s (%s)", ffmpeg_exe() or "not found", ffmpeg_source())
     log.info("Storage    : local disk (%s)", settings.uploads_dir.resolve())
 
     studio_cleanup = asyncio.create_task(_studio_failure_cleanup(app.state.studio, db))
@@ -334,6 +337,8 @@ def health() -> HealthResponse:
         drift_detail = getattr(app.state, "embedding_drift", None)
         drift_detail = drift_detail.detail if drift_detail else ""
     drifted = bool(drift_detail)
+    from .ffmpeg import ffmpeg_source
+
     return HealthResponse(
         status="degraded" if (pending or drifted) else "ok",
         llm_base_url=s.llm_base_url,
@@ -354,6 +359,7 @@ def health() -> HealthResponse:
         projects=app.state.db.count("projects"),
         frontend=FRONTEND_DIR,
         embedding_drift=(drift_detail if drifted else ""),
+        ffmpeg=ffmpeg_source(),
     )
 
 

@@ -47,6 +47,7 @@ export interface HealthResponse {
   projects: number;
   frontend?: string;
   embedding_drift?: string;
+  ffmpeg?: string;
 }
 
 /** `app/schemas.py: UserOut` */

@@ -61,9 +61,11 @@ Both profiles keep uploaded originals on the server's local filesystem under `DA
 
 - Node.js and npm. Use the version supported by the installed Tauri CLI.
 - Rust and the platform's native build tools for Tauri. On Windows, install Visual Studio Build Tools with the C++ workload and the WebView2 runtime.
-- For audio/video parsing, install FFmpeg and ensure `ffmpeg` and `ffprobe` are available on `PATH`.
+- For audio/video parsing in dev, fetch the pinned builds once:
+  `npm run ffmpeg:fetch --prefix frontend` (or set `FFMPEG_PATH` / `FFPROBE_PATH`).
+  The desktop installer ships these binaries, so end users need nothing on `PATH`.
 
-End users installing a packaged desktop build do not need Python, uv, Node.js, or Rust. Local AI engines and their model weights may be downloaded on first use when local modes are enabled.
+End users installing a packaged desktop build do not need Python, uv, Node.js, Rust, or ffmpeg. Local AI engines and their model weights may be downloaded on first use when local modes are enabled.
 
 ## Quick start: local SQLite
 
