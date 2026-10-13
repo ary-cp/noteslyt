@@ -195,7 +195,7 @@ const DESCRIPTIONS: Record<string, string> = {
   firecrawl_max_pages: "Maximum pages parsed per document (1 credit each).",
   parser: "Auto uses Firecrawl when keyed, otherwise local parsers.",
   top_k: "Chunks pulled into the prompt.",
-  max_distance: "Refuse when the best chunk is farther than this (2.0 disables).",
+  max_distance: "Legacy similarity threshold. The tutor now judges support from the retrieved context.",
   chunk_size: "Characters per chunk (never crosses a page boundary).",
   chunk_overlap: "Characters shared between neighboring chunks.",
   pdf_page_images: "Also embed every PDF page as an image, so charts stay searchable.",

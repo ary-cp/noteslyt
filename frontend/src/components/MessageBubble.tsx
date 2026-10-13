@@ -44,17 +44,14 @@ export function MessageBubble({ message, onCite }: Props) {
     );
   }
 
-  const refused = message.grounded === false;
+  const outsideSources = message.grounded === false && /\*\*Outside your sources:\*\*/i.test(message.content);
 
   return (
     <div className="px-1">
-      {refused ? (
-        <p className="text-[15px] leading-7 text-ink-muted italic">{message.content}</p>
-      ) : (
-        <MarkdownMessage markdown={message.content} onCite={onCite} />
-      )}
+      {outsideSources && <p className="mb-2 text-xs text-ink-muted">Includes information outside your sources.</p>}
+      <MarkdownMessage markdown={message.content} onCite={onCite} />
 
-      {!refused && message.citations && message.citations.length > 0 && (
+      {message.citations && message.citations.length > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wide text-ink-muted">
             <FileText size={12} strokeWidth={1.75} /> Sources

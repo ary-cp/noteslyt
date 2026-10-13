@@ -1,13 +1,11 @@
 import type * as React from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
-  CalendarDays,
   ClipboardList,
   FileText,
   GraduationCap,
   Loader2,
   PanelRight,
-  Presentation,
   // Mic,
   Sparkles,
   // TableProperties,
@@ -28,18 +26,19 @@ import { timeAgo } from "../../lib/utils";
 
 export type StudioTool = "summary" | "flashcards" | "quiz" | "exam" | "guide" | "mindmap" | "podcast" | "slides" | "sheet" | "schedule";
 
-const TOOLS: { id: StudioTool; title: string; desc: string; icon: React.ReactNode; ready: boolean }[] = [
+export const STUDIO_TOOLS: { id: StudioTool; title: string; desc: string; icon: React.ReactNode; ready: boolean }[] = [
   { id: "summary", title: "Summary", desc: "Key points from your sources", icon: <FileText size={16} />, ready: true },
   { id: "quiz", title: "Quiz", desc: "Test yourself with feedback", icon: <MdQuiz size={16} />, ready: true },
   { id: "flashcards", title: "Flashcards", desc: "Review key concepts", icon: <PiCardsThreeBold size={16} />, ready: true },
   { id: "exam", title: "Mock exam", desc: "Timed, exam-style practice", icon: <GraduationCap size={16} />, ready: true },
   { id: "guide", title: "Study guide", desc: "Structured revision document", icon: <ClipboardList size={16} />, ready: true },
   { id: "mindmap", title: "Mind map", desc: "See how ideas connect", icon: <RiMindMap size={16} />, ready: true },
-  { id: "slides", title: "Slides", desc: "Present your sources", icon: <Presentation size={16} />, ready: true },
-  { id: "schedule", title: "Schedule", desc: "Revision plan to exam day", icon: <CalendarDays size={16} />, ready: true },
   // { id: "podcast", title: "Audio overview", desc: "Listen on the go", icon: <Mic size={16} />, ready: false },
   // { id: "sheet", title: "Cheat sheet", desc: "One-page revision", icon: <TableProperties size={16} />, ready: false },
 ];
+
+/** @deprecated Use STUDIO_TOOLS — kept so existing imports keep working. */
+const TOOLS = STUDIO_TOOLS;
 
 interface Artifact {
   id: string;
@@ -59,11 +58,13 @@ export function StudioPanel({
   sources,
   selectedSources,
   onHide,
+  openRequest,
 }: {
   projectId: string;
   sources: SourceOut[];
   selectedSources: SourceOut[];
   onHide: () => void;
+  openRequest?: { tool: StudioTool; nonce: number } | null;
 }) {
   const { push } = useToast();
   const [topics, setTopics] = useState<TopicSummary[]>([]);
@@ -85,6 +86,12 @@ export function StudioPanel({
   });
   const [minsPerDay, setMinsPerDay] = useState(30);
   const [viewing, setViewing] = useState<Artifact | null>(null);
+
+  // Collapsed-rail shortcut: clicking a tool icon in the slim right rail
+  // expands Studio and opens that tool's dialog.
+  useEffect(() => {
+    if (openRequest) setGenTool(openRequest.tool);
+  }, [openRequest]);
 
   useEffect(() => {
     let active = true;

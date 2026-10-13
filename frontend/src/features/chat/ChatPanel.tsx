@@ -131,9 +131,9 @@ const ChatMessage = memo(function ChatMessage({ msg, sources, onOpenSource }: { 
 
   return (
     <div className="group/msg min-w-0">
-      {msg.grounded === false && (
+      {msg.grounded === false && /\*\*Outside your sources:\*\*/i.test(msg.content) && (
         <p className="mb-2 inline-flex items-center gap-1.5 rounded-[7px] border border-[var(--warning)]/30 bg-[var(--warning-soft)] px-2.5 py-1 text-[13px] text-[var(--warning)]">
-          <AlertTriangle size={13} /> No supported answer found in the selected sources.
+          <AlertTriangle size={13} /> Includes information outside your sources.
         </p>
       )}
       <MarkdownBody text={linkedAnswer} citations={msg.citations} sources={sources} onOpenCitation={onOpenSource} />

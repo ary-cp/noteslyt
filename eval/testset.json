@@ -1,5 +1,5 @@
 {
-  "_note": "Grounded items cite locators inside the fixture files below (linear-algebra PDF pages, docx sections, xlsx sheet). Refusal items are off-material and must be refused exactly. Segment (audio/video) expectations are intentionally absent: real transcription splits differently per model, so timestamps are asserted in smoke tests, not here.",
+  "_note": "Grounded items cite locators inside the fixture files below (linear-algebra PDF pages, docx sections, xlsx sheet). Off-material items may be refused or answered from general knowledge only when clearly labeled Outside your sources and left uncited. Segment (audio/video) expectations are intentionally absent: real transcription splits differently per model, so timestamps are asserted in smoke tests, not here.",
   "projects": [
     {"key": "physics", "fixtures": ["linear_pdf", "notes_docx"]},
     {"key": "materials", "fixtures": ["costs_xlsx", "linear_pdf"]}
