@@ -379,11 +379,38 @@ class LocalTranscriptionServer:
         except Exception:
             return True  # process alive; health endpoint may still be warming up
 
+    def _foreign_holder(self) -> bool:
+        """True when something that is not our child answers on our port.
+
+        Same rule as the embedding backend (see llama_embed): a stale server
+        from a hard-killed run, or a second NotesLyt on the same ports.
+        Refuse loudly instead of sharing it.
+        """
+        try:
+            req = urllib.request.Request(
+                f"http://{self.settings.transcription_local_host}:"
+                f"{self.settings.transcription_local_port}/health",
+                headers={"User-Agent": "noteslyt/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
     def ensure_running(self, timeout_s: int = 600) -> None:
         """Start the server unless already up (wake-on-API), then wait for health."""
         with self._lock:
             if self.is_running():
                 return
+            if self._foreign_holder():
+                raise RuntimeError(
+                    f"Port {self.settings.transcription_local_port} already answers a "
+                    f"transcription server that this process did not start (a stale "
+                    f"server from a hard-killed run, or a second NotesLyt on the same "
+                    f"ports). Stop the holder first — Task Manager, or "
+                    f"`taskkill /F /IM audiocpp*.exe` from an elevated prompt "
+                    f"— then retry."
+                )
             # Only one vendored engine stays resident: loading the ASR model
             # unloads the embedding server first so the two never share memory.
             self._unload_peer_embedder()
@@ -562,8 +589,25 @@ class LocalTranscriber:
 
 # ================================================================ singleton
 def init_transcription_server(settings) -> LocalTranscriptionServer:
-    """Create the manager and ensure engine + model files exist (downloads!)."""
+    """Create the manager and ensure engine + model files exist (downloads!).
+
+    Reuses the live manager when it already points at the same local dir —
+    replacing it on a settings hot-reload would orphan a running server
+    (same leak as the embedding backend; see llama_embed).
+    """
     global _MANAGER
+    root = Path(settings.transcription_local_dir).expanduser().resolve()
+    if _MANAGER is not None and _MANAGER.root == root:
+        _MANAGER.settings = settings
+        _MANAGER.ensure_engine()
+        _MANAGER.ensure_model_file()
+        return _MANAGER
+    if _MANAGER is not None:
+        log.warning("Transcription local dir changed — stopping the previous server.")
+        try:
+            _MANAGER.stop()
+        except Exception:  # noqa: BLE001 — best-effort; the new manager still boots
+            log.exception("Could not stop the previous transcription server")
     manager = LocalTranscriptionServer(settings)
     manager.ensure_engine()
     manager.ensure_model_file()
