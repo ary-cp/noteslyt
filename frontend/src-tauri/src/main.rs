@@ -64,6 +64,28 @@ fn writable_data_dir(path: &PathBuf) -> std::io::Result<()> {
     fs::remove_file(probe)
 }
 
+/// Stop the backend and every child process it started (including llama-server).
+/// Killing only the FastAPI process can orphan llama.cpp and leave its VRAM in use.
+fn kill_process_tree(child: &mut Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        let pid = child.id().to_string();
+        let result = Command::new("taskkill")
+            .args(["/PID", &pid, "/T", "/F"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .status();
+        if result.is_ok_and(|status| status.success()) {
+            let _ = child.wait();
+            return;
+        }
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn start_backend(app: &AppHandle) -> Result<Option<Child>, String> {
     let packaged = !cfg!(debug_assertions);
     let port: u16 = if packaged { 8765 } else { 8000 };
@@ -166,7 +188,7 @@ fn start_backend(app: &AppHandle) -> Result<Option<Child>, String> {
         }
         thread::sleep(Duration::from_millis(250));
     }
-    let _ = child.kill();
+    kill_process_tree(&mut child);
     Err("The NotesLyt API did not become ready within 60 seconds. Check the app's data folder and model settings.".to_string())
 }
 
@@ -183,8 +205,7 @@ fn main() {
                     if let Some(process) = handle.try_state::<BackendProcess>() {
                         if process.exiting.load(Ordering::SeqCst) {
                             if let Some(mut child) = child {
-                                let _ = child.kill();
-                                let _ = child.wait();
+                                kill_process_tree(&mut child);
                             }
                             return;
                         }
@@ -220,8 +241,7 @@ fn main() {
                 process.exiting.store(true, Ordering::SeqCst);
                 if let Ok(mut child) = process.child.lock() {
                     if let Some(child) = child.as_mut() {
-                        let _ = child.kill();
-                        let _ = child.wait();
+                        kill_process_tree(child);
                     }
                 }
             }
