@@ -501,6 +501,7 @@ class HealthResponse(BaseModel):
     projects: int
     frontend: str = ""                # served bundle dir, or "" when API-only
     embedding_drift: str = ""         # non-empty when vector routes are 409 (re-embed or revert)
+    ffmpeg: str = ""                  # "bundled" | "system" | "missing" — which ffmpeg the backend resolves
 
 
 # ------------------------------------------------------------------- settings
