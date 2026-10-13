@@ -197,7 +197,9 @@ profiles across separate projects and reports mastery gain, question repetition
 ## Ingestion
 
 - `POST /projects/{id}/sources` returns **202** with a `queued` row per file; ingestion
-  runs on a `BackgroundTask`. Clients poll `GET /projects/{id}/ingest-status` (cheap)
+  runs on a `BackgroundTask`. Multi-file batches overlap when every stage is API-backed
+  (cloud embedding + cloud transcription + transcript AV vectors); any local engine
+  falls back to sequential. Clients poll `GET /projects/{id}/ingest-status` (cheap)
   or `GET /sources/{id}` (full row) until the status settles.
 - `sources.source_type` stores the **format id** (`pdf`, `docx`, `xlsx`, `audio`,
   `video`, …) because the parser registry dispatches on it. Use `media_kind()` to
