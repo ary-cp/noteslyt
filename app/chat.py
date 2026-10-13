@@ -210,10 +210,10 @@ class ChatService:
             on_chunk(result.answer)
         self.chats.add_message(chat_id, "assistant", result.answer, stored, bool(stored))
 
-        # First exchange names the chat: a 2-3 word summary of the question.
+        # First exchange names the chat: AI 2-3 word summary of the question.
         title = chat.title
         if title == "New chat":
-            title = _short_title(question) if defer else self._generate_title(question, result.answer)
+            title = self._generate_title(question, result.answer)
             self.chats.rename(chat_id, user_id, title)
 
         if did_rewrite:
@@ -237,12 +237,16 @@ class ChatService:
                 max_tokens=32,
             ).strip().strip("\"'`*# ")
             title = " ".join(title.split())
+            # Refusals / empty output must fall back before truncation
+            # (truncating first would shred the refusal signature).
+            if not title or _is_refusal(title):
+                return fallback
             # Enforce the 2-3 word contract even if the model is verbose.
             words = title.split()
             if len(words) > 3:
                 words = words[:3]
             title = " ".join(words)[:40].strip()
-            if not title or _is_refusal(title) or len(title.split()) > 3:
+            if not title or len(title.split()) > 3:
                 return fallback
             return title
         except Exception as exc:  # noqa: BLE001 — naming must not fail a turn
@@ -530,9 +534,11 @@ _TITLE_STOPWORDS = frozenset({
     "is", "are", "was", "were", "be", "been", "do", "does", "did", "done",
     "can", "could", "should", "would", "will", "shall", "may", "might",
     "the", "a", "an", "of", "in", "on", "for", "to", "from", "with", "about",
-    "into", "over", "under", "and", "or", "but", "if", "then", "than",
+    "into", "over", "under", "between", "versus", "vs", "and", "or", "but",
+    "if", "then", "than",
     "explain", "describe", "summarize", "summarise", "summary", "tell",
     "give", "list", "show", "me", "my", "our", "your", "please", "kindly",
+    "detail", "details", "detailed", "simply", "simple", "terms",
     "notes", "note", "pdf", "doc", "file", "source", "sources",
 })
 
@@ -541,9 +547,9 @@ def _short_title(question: str) -> str:
     """Deterministic 2-3 word summary of a question (no LLM call).
 
     Strips question-words/filler and keeps the first 2-3 meaningful words in
-    order, Title-Cased. Guarantees 2 words when possible so every new chat
-    gets a short name even on the streaming path (defer) where no LLM call
-    is made.
+    order, Title-Cased. Uppercase acronyms (TCP, UDP, BKT) are prioritized so
+    the fallback still names the real topic. Guarantees 2 words when possible
+    so every new chat gets a short name even when the LLM title call fails.
     """
     import re
 
@@ -551,13 +557,20 @@ def _short_title(question: str) -> str:
     if not words:
         return "New chat"
     meaningful = [w for w in words if w.lower() not in _TITLE_STOPWORDS]
-    picked = meaningful[:3] if meaningful else words[:3]
+    acronyms = [w for w in meaningful if w.isupper() and len(w) >= 2][:3]
+    if len(acronyms) >= 2:
+        picked = acronyms[:3]
+    elif len(acronyms) == 1:
+        rest = [w for w in meaningful if w not in acronyms][:2]
+        picked = (acronyms + rest)[:3]
+    else:
+        picked = meaningful[:3] if meaningful else words[:3]
     if len(picked) == 1:
         # Single-word question ("Photosynthesis") -> two-word title.
         picked = [*picked, "Notes"]
     elif len(picked) == 0:
         return "New chat"
-    title = " ".join(w[:16].capitalize() for w in picked[:3])
+    title = " ".join(w[:16].capitalize() if not w.isupper() else w[:16] for w in picked[:3])
     return title[:40] or "New chat"
 
 
