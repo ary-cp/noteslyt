@@ -12,7 +12,8 @@ import { ArrowLeft, Download, FileText } from "lucide-react";
 import { fetchSourceBlob, getSourceContent } from "../../lib/api";
 import type { SourceOut, ViewerTarget } from "../../lib/types";
 import { mediaKind } from "../../lib/sourceKind";
-import { citationLabel, formatDuration, parseTimestamp, timeAgo } from "../../lib/utils";
+import { citationLabel, formatDuration, parseTimestamp } from "../../lib/utils";
+import { TimeAgo } from "../../components/TimeAgo";
 import {
   enhanceTableMath,
   findPageAnchor,
@@ -204,7 +205,7 @@ export function SourceReader({
               {source.filename}
             </h2>
             <p className="text-xs text-[var(--text-muted)]">
-              {source.source_type.toUpperCase()} · {source.status === "ready" ? "Ready" : source.status} · {timeAgo(source.created_at)}
+              {source.source_type.toUpperCase()} · {source.status === "ready" ? "Ready" : source.status} · <TimeAgo iso={source.created_at} />
             </p>
           </div>
           <button

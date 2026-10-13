@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Maximize2, X, ZoomIn, ZoomOut } from "lucide-react";
 
 /**
@@ -141,14 +142,19 @@ export default function MermaidBlock({ code }: { code: string }) {
     return () => obs.disconnect();
   }, []);
 
-  // Close fullscreen on Escape.
+  // Close fullscreen on Escape + lock background scroll while open.
   useEffect(() => {
     if (!expanded) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setExpanded(false);
     };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
   }, [expanded]);
 
   const zoomIn = useCallback(() => setZoom((z) => Math.min(MAX_ZOOM, Math.round((z + ZOOM_STEP) * 100) / 100)), []);
@@ -250,38 +256,40 @@ export default function MermaidBlock({ code }: { code: string }) {
         <pre className="mt-1 overflow-x-auto font-mono text-xs">{diagram}</pre>
       </details>
 
-      {expanded && (
-        <div
-          className="anim-fade fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Diagram full page view"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setExpanded(false);
-          }}
-        >
-          <div data-mermaid-root className="flex max-h-full w-[min(1200px,96vw)] flex-col overflow-hidden rounded-[10px] border border-[var(--border)] bg-[var(--surface)] shadow-2xl">
-            <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-3 py-2">
-              <span className="font-mono text-xs text-[var(--text-secondary)]">diagram · full page</span>
-              <span className="flex items-center gap-2">
-                {toolbar(true)}
-                <button
-                  type="button"
-                  onClick={() => setExpanded(false)}
-                  aria-label="Close full page view"
-                  title="Close (Esc)"
-                  className="cursor-pointer rounded p-1.5 text-[var(--text-secondary)] hover:bg-[var(--surface-secondary)] hover:text-[var(--text-primary)]"
-                >
-                  <X size={15} />
-                </button>
-              </span>
+      {expanded &&
+        createPortal(
+          <div
+            className="anim-fade fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Diagram full page view"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setExpanded(false);
+            }}
+          >
+            <div data-mermaid-root className="flex max-h-full w-[min(1200px,96vw)] flex-col overflow-hidden rounded-[10px] border border-[var(--border)] bg-[var(--surface)] shadow-2xl">
+              <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-3 py-2">
+                <span className="font-mono text-xs text-[var(--text-secondary)]">diagram · full page</span>
+                <span className="flex items-center gap-2">
+                  {toolbar(true)}
+                  <button
+                    type="button"
+                    onClick={() => setExpanded(false)}
+                    aria-label="Close full page view"
+                    title="Close (Esc)"
+                    className="cursor-pointer rounded p-1.5 text-[var(--text-secondary)] hover:bg-[var(--surface-secondary)] hover:text-[var(--text-primary)]"
+                  >
+                    <X size={15} />
+                  </button>
+                </span>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto">
+                <MermaidCanvas code={diagram} theme={theme} zoom={zoom} />
+              </div>
             </div>
-            <div className="min-h-0 flex-1 overflow-auto">
-              <MermaidCanvas code={diagram} theme={theme} zoom={zoom} />
-            </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

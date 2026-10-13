@@ -50,7 +50,14 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 
 
 def _iso(value) -> str:
-    return value.isoformat() if value is not None else ""
+    if value is None:
+        return ""
+    # See chats router: tag naive SQLite UTC rows so browsers don't skew.
+    if getattr(value, "tzinfo", None) is None:
+        from datetime import timezone as _tz
+
+        value = value.replace(tzinfo=_tz.utc)
+    return value.isoformat()
 
 
 def _to_out(project) -> ProjectOut:
