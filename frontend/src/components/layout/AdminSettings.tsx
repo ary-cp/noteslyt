@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { DRIFT_EVENT, getAdminSettings, getEmbeddingStatus, getReembedStatus, patchAdminSettings, startReembed } from "../../lib/api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DRIFT_EVENT, fetchModels, getAdminSettings, getEmbeddingStatus, getReembedStatus, patchAdminSettings, startReembed } from "../../lib/api";
 import type { EmbeddingStatus, ReembedJob, SettingItem } from "../../lib/types";
 import { useAuth } from "../../lib/auth";
 import { useToast } from "../../lib/toast";
@@ -27,14 +27,36 @@ export const ADMIN_NAV_TABS = ["embeddings", "transcription", "media", "parsing"
 
 // Download sources are fixed — nobody should change them, so they stay out
 // of the UI entirely (the API still accepts them). Same for the transcription
-// download directory.
+// download directory. The old per-file local weight keys are hidden too: the
+// local engine is one directory with auto-detected *.gguf files.
 const HIDDEN_KEYS = new Set([
   "embedding_local_repo",
+  "embedding_local_model_file",
+  "embedding_local_mmproj_file",
+  "embedding_local_model_path",
+  "embedding_local_mmproj_path",
   "transcription_local_repo",
   "transcription_local_model_repo",
   "transcription_local_dir",
   "llama_github_repo",
 ]);
+
+// Cloud embedding provider presets: picking one fills the endpoint trio +
+// wire protocol. Custom keeps whatever is typed.
+export const EMBEDDING_PRESETS = [
+  { value: "custom", label: "Custom endpoint", base_url: "", model: "", protocol: "auto" },
+  { value: "gemini", label: "Gemini", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-embedding-2", protocol: "gemini" },
+  { value: "jina", label: "Jina", base_url: "https://api.jina.ai/v1", model: "jina-embeddings-v5-omni-nano", protocol: "jina" },
+] as const;
+
+export function embeddingPresetOf(baseUrl: string, model: string, protocol: string): string {
+  const b = (baseUrl ?? "").trim().toLowerCase().replace(/\/$/, "");
+  const m = (model ?? "").trim().toLowerCase();
+  const p = (protocol ?? "").trim().toLowerCase() || "auto";
+  if (b.includes("generativelanguage.googleapis.com") && m.startsWith("gemini-embedding") && (p === "gemini" || p === "auto")) return "gemini";
+  if (b.includes("api.jina.ai") && m.startsWith("jina-embeddings-v5-omni") && (p === "jina" || p === "auto")) return "jina";
+  return "custom";
+}
 
 // Mode switches pin to the top of their tab.
 const PINNED_TOP: Record<string, string[]> = {
@@ -45,16 +67,19 @@ const PINNED_TOP: Record<string, string[]> = {
 // The two native-mode switches live with the embedding mode, not in Media.
 const EMBED_MODE_KEYS = new Set(["audio_embed_mode", "video_embed_mode"]);
 
-// Cloud tabs show only the endpoint trio (+ width/chunking for embeddings);
-// local-only knobs would be dead controls. Local tabs hide the ignored remote trio.
+// Cloud tabs show only the endpoint trio (+ width/protocol/chunking for
+// embeddings); local-only knobs would be dead controls. Local tabs hide the
+// ignored remote trio — plus the cloud model id, which never applies to the
+// vendored server (its weights come from the local directory).
 const EMBEDDING_CLOUD_KEYS = new Set([
-  "embedding_mode", "embedding_base_url", "embedding_api_key", "embedding_model", "embedding_dim",
+  "embedding_mode", "embedding_base_url", "embedding_api_key", "embedding_model",
+  "embedding_protocol", "embedding_dim", "embedding_batch_size", "embedding_max_input_chars",
 ]);
 const CHUNK_KEYS = new Set(["chunk_size", "chunk_overlap"]);
 const TRANSCRIPTION_CLOUD_KEYS = new Set([
   "transcription_mode", "transcription_base_url", "transcription_api_key", "transcription_model",
 ]);
-const IGNORED_IN_LOCAL = new Set(["embedding_base_url", "embedding_api_key", "transcription_base_url", "transcription_api_key"]);
+const IGNORED_IN_LOCAL = new Set(["embedding_base_url", "embedding_api_key", "embedding_model", "transcription_base_url", "transcription_api_key"]);
 
 export type AdminTab = (typeof ADMIN_GROUPS)[number];
 
@@ -157,19 +182,15 @@ const DESCRIPTIONS: Record<string, string> = {
   embedding_dim: "Vector width. Empty means auto-detect from the model.",
   embedding_batch_size: "Texts embedded per request.",
   embedding_max_input_chars: "Longer inputs are split on sentences and mean-pooled.",
-  embedding_local_dir: "Vendored engine + weights directory.",
+  embedding_local_dir: "Model directory — any *.gguf weights + mmproj projector found here are used automatically.",
   embedding_local_repo: "Download source for the engine and weights.",
-    embedding_local_model_file: "Weight filename inside the repo.",
-  embedding_local_mmproj_file: "Vision projector filename for image input.",
-  embedding_local_model_path: "Use your own weights instead of the download.",
-  embedding_local_mmproj_path: "Use your own projector instead of the download.",
   embedding_idle_unload_s: "Idle seconds before the server unloads (0 keeps it up).",
   llama_github_repo: "Source for engine updates.",
   audio_embed_mode: "Transcript text, or raw-audio vectors (needs a joint model).",
   audio_segment_seconds: "Seconds of audio per embedded part.",
   video_embed_mode: "Transcript text, or per-part video vectors.",
   video_segment_seconds: "Seconds of video per embedded part.",
-  video_clip_seconds: "Middle slice embedded instead of the full part (0 = full part).",
+  video_clip_seconds: "Middle slice embedded per part (10 = the full 10 s part).",
   video_clip_width: "Maximum clip width in pixels (downscales, never upscales).",
   transcription_mode: "Cloud endpoint, or the vendored local server.",
   transcription_base_url: "Speech-to-text endpoint (inherits chat URL when empty).",
@@ -198,7 +219,7 @@ const DESCRIPTIONS: Record<string, string> = {
   max_distance: "Legacy similarity threshold. The tutor now judges support from the retrieved context.",
   chunk_size: "Characters per chunk (never crosses a page boundary).",
   chunk_overlap: "Characters shared between neighboring chunks.",
-  pdf_page_images: "Also embed every PDF page as an image, so charts stay searchable.",
+  pdf_page_images: "Also embed document pages (PDF/DOCX/XLSX) and slides as images, so charts stay searchable.",
   pdf_page_image_max_pages: "Per-source render budget (0 renders all pages).",
   history_turns: "Prior messages forwarded to the model.",
   memory_chat_window: "Recent messages kept verbatim.",
@@ -239,6 +260,124 @@ function displayValue(item: SettingItem): string {
   if (item.value === null || item.value === undefined) return "—";
   return String(item.value);
 }
+
+/** Model id picker: once its endpoint URL (+ optional key) is set, lists
+ * `/models` in a dropdown; Custom keeps manual entry working. */
+function ModelPicker({
+  baseUrl, apiKey, value, onChange, disabled, placeholder, ariaLabel,
+}: {
+  baseUrl: string;
+  apiKey: string;
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+  placeholder?: string;
+  ariaLabel: string;
+}) {
+  const [options, setOptions] = useState<string[] | null>(null);
+  const [fetching, setFetching] = useState(false);
+  const [fetchError, setFetchError] = useState("");
+  const [custom, setCustom] = useState(false);
+  const lastFetched = useRef("");
+
+  const fetch = async (base: string, key: string) => {
+    const trimmed = base.trim();
+    if (!trimmed || disabled) return;
+    lastFetched.current = trimmed;
+    setFetching(true);
+    setFetchError("");
+    try {
+      const res = await fetchModels(trimmed, key.trim() || undefined);
+      const ids = res.models.map((m) => m.id);
+      setOptions(ids);
+      if (ids.length === 0) setFetchError("Endpoint returned no models — type the id manually.");
+    } catch (e) {
+      setOptions(null);
+      setFetchError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  useEffect(() => {
+    const trimmed = baseUrl.trim();
+    if (!trimmed || disabled || (trimmed === lastFetched.current && options !== null)) return;
+    const timer = window.setTimeout(() => void fetch(trimmed, apiKey), 800);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseUrl, apiKey, disabled]);
+
+  const showList = options !== null && !custom;
+  const dropdownOptions = showList
+    ? [...(options ?? []), ...(value.trim() && !(options ?? []).includes(value.trim()) ? [value.trim()] : []), "__custom__"]
+    : [];
+
+  if (showList) {
+    return (
+      <div>
+        <div className="flex items-center gap-2">
+          <Dropdown
+            value={dropdownOptions.includes(value) ? value : ""}
+            ariaLabel={ariaLabel}
+            className="min-w-0 flex-1"
+            placeholder={options?.length ? "Pick a model…" : "No models found"}
+            onChange={(v) => {
+              if (v === "__custom__") setCustom(true);
+              else onChange(v);
+            }}
+            options={dropdownOptions.map((id) => id === "__custom__" ? { value: id, label: "Custom… (type manually)" } : { value: id, label: id })}
+          />
+          <Button variant="ghost" disabled={fetching || disabled} onClick={() => void fetch(baseUrl, apiKey)}>
+            {fetching ? "…" : "Refresh"}
+          </Button>
+        </div>
+        {fetching && <p className="mt-1 text-xs text-[var(--text-muted)]">Listing models…</p>}
+        {!fetching && fetchError && (
+          <p className="mt-1 text-xs text-[var(--text-muted)]">
+            {fetchError}{" "}
+            <button type="button" onClick={() => void fetch(baseUrl, apiKey)} className="cursor-pointer underline hover:text-[var(--text-primary)]">
+              Retry
+            </button>
+          </p>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div className="flex items-center gap-2">
+        <TextInput
+          value={value}
+          disabled={disabled}
+          aria-label={ariaLabel}
+          placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        {options !== null && (
+          <Button variant="ghost" disabled={disabled} onClick={() => setCustom(false)}>
+            List
+          </Button>
+        )}
+      </div>
+      {fetching && <p className="mt-1 text-xs text-[var(--text-muted)]">Listing models…</p>}
+      {!fetching && fetchError && (
+        <p className="mt-1 text-xs text-[var(--text-muted)]">
+          {fetchError}{" "}
+          <button type="button" onClick={() => void fetch(baseUrl, apiKey)} className="cursor-pointer underline hover:text-[var(--text-primary)]">
+            Retry
+          </button>
+        </p>
+      )}
+    </div>
+  );
+}
+
+const MODEL_KEYS = new Set(["llm_model", "embedding_model", "transcription_model"]);
+const MODEL_PLACEHOLDERS: Record<string, string> = {
+  llm_model: "Pick from the endpoint, or type any id",
+  embedding_model: "Pick from the endpoint, or type any id",
+  transcription_model: "Pick from the endpoint, or type any id",
+};
 
 function matches(item: SettingItem, query: string): boolean {
   const q = query.trim().toLowerCase();
@@ -524,6 +663,33 @@ export function AdminSettings({
   const isCloudTranscription = tab === "transcription" && items !== null && effectiveMode(items ?? [], texts, "transcription_mode", "cloud") === "cloud";
   const isLocalTranscription = tab === "transcription" && items !== null && !isCloudTranscription;
 
+  const modelBaseUrl = (key: string): string => {
+    if (key === "llm_model") return texts["llm_base_url"] ?? "";
+    if (key === "embedding_model") return texts["embedding_base_url"] ?? "";
+    if (key === "transcription_model") return texts["transcription_base_url"] ?? "";
+    return "";
+  };
+  const modelApiKey = (key: string): string => {
+    if (key === "llm_model") return texts["llm_api_key"] ?? "";
+    if (key === "embedding_model") return texts["embedding_api_key"] ?? "";
+    if (key === "transcription_model") return texts["transcription_api_key"] ?? "";
+    return "";
+  };
+  const setPresetKeys = (preset: (typeof EMBEDDING_PRESETS)[number]) => {
+    setTexts((prev) => ({
+      ...prev,
+      embedding_base_url: preset.base_url || prev["embedding_base_url"] || "",
+      embedding_model: preset.model || prev["embedding_model"] || "",
+      embedding_protocol: preset.protocol || prev["embedding_protocol"] || "auto",
+    }));
+    setCleared((prev) => ({ ...prev, embedding_base_url: false, embedding_model: false, embedding_protocol: false }));
+  };
+  const activePreset = embeddingPresetOf(
+    texts["embedding_base_url"] ?? "",
+    texts["embedding_model"] ?? "",
+    texts["embedding_protocol"] ?? "auto",
+  );
+
   return (
     <div>
       <h3 className="text-[15px] font-semibold">{ADMIN_GROUP_TITLES[tab] ?? tab}</h3>
@@ -534,12 +700,26 @@ export function AdminSettings({
       )}
       {isCloudEmbeddings && (
         <p className="mt-1 text-[13px] text-[var(--text-muted)]">
-          Cloud mode — vectors come from the endpoint above. Switch to Local to manage downloads, model files and batch sizes.
+          Cloud mode — vectors come from the endpoint below. Pick Gemini or Jina to fill the URL, model and protocol, or stay Custom.
         </p>
+      )}
+      {isCloudEmbeddings && items && (
+        <div className="mt-2 flex items-center gap-2">
+          <span className="text-[13px] font-medium">Provider</span>
+          <Dropdown
+            value={activePreset}
+            ariaLabel="embedding-provider-preset"
+            onChange={(v) => {
+              const found = EMBEDDING_PRESETS.find((p) => p.value === v);
+              if (found && v !== "custom") setPresetKeys(found);
+            }}
+            options={EMBEDDING_PRESETS.map((p) => ({ value: p.value, label: p.label }))}
+          />
+        </div>
       )}
       {isLocalEmbeddings && (
         <p className="mt-1 text-[13px] text-[var(--text-muted)]">
-          Local mode — the vendored server ignores the remote base URL and key.
+          Local mode — the vendored server uses the model directory below. Any *.gguf weights + mmproj projector found there are picked up automatically.
         </p>
       )}
       {isCloudTranscription && (
@@ -570,6 +750,8 @@ export function AdminSettings({
               text={texts[item.key] ?? ""}
               boolValue={bools[item.key] ?? false}
               cleared={!!cleared[item.key]}
+              modelBaseUrl={modelBaseUrl(item.key)}
+              modelApiKey={modelApiKey(item.key)}
               onText={(v) => {
                 setTexts((prev) => ({ ...prev, [item.key]: v }));
                 setCleared((prev) => ({ ...prev, [item.key]: false }));
@@ -611,12 +793,14 @@ export function AdminSettings({
 }
 
 function SettingRow({
-  item, text, boolValue, cleared, onText, onBool, onToggleClear,
+  item, text, boolValue, cleared, modelBaseUrl, modelApiKey, onText, onBool, onToggleClear,
 }: {
   item: SettingItem;
   text: string;
   boolValue: boolean;
   cleared: boolean;
+  modelBaseUrl: string;
+  modelApiKey: string;
   onText: (v: string) => void;
   onBool: (v: boolean) => void;
   onToggleClear: () => void;
@@ -624,6 +808,7 @@ function SettingRow({
   const options = ENUM_OPTIONS[item.key];
   const description = DESCRIPTIONS[item.key] ?? "";
   const isBool = typeof item.value === "boolean" && !item.secret;
+  const isModel = MODEL_KEYS.has(item.key);
 
   return (
     <div className="border-b border-[var(--border)] py-3 last:border-b-0">
@@ -642,7 +827,7 @@ function SettingRow({
           />
         ) : null}
       </div>
-      {!isBool && !options && (
+      {!isBool && !options && !isModel && (
         <div className="mt-2 flex items-center gap-2">
           <TextInput
             type={item.secret ? "password" : typeof item.value === "number" ? "number" : "text"}
@@ -668,6 +853,26 @@ function SettingRow({
           {!item.locked && item.secret && item.configured && !cleared && (
             <Button variant="ghost" onClick={() => { onText(""); onToggleClear(); }}>
               Clear
+            </Button>
+          )}
+        </div>
+      )}
+      {isModel && (
+        <div className="mt-2 flex items-center gap-2">
+          <div className="min-w-0 flex-1">
+            <ModelPicker
+              baseUrl={modelBaseUrl}
+              apiKey={modelApiKey}
+              value={text}
+              onChange={onText}
+              disabled={item.locked}
+              placeholder={MODEL_PLACEHOLDERS[item.key] ?? "Pick from the endpoint, or type any id"}
+              ariaLabel={item.key}
+            />
+          </div>
+          {!item.locked && ((item.source === "db" && !item.secret) || cleared) && (
+            <Button variant="ghost" onClick={onToggleClear}>
+              {cleared ? "Undo" : "Reset"}
             </Button>
           )}
         </div>

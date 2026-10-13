@@ -55,16 +55,15 @@ EDITABLE: dict[str, str] = {
     # chat
     "llm_base_url": "chat", "llm_api_key": "chat", "llm_model": "chat",
     "llm_temperature": "chat", "llm_max_tokens": "chat",
-    # embeddings (endpoint + model + behaviour; engine internals stay env-only)
+    # embeddings (endpoint + model + behaviour; engine internals stay env-only).
+    # Local weights are a single directory (auto-detects *.gguf) — the old
+    # per-file model/mmproj file+path keys stay accepted by the API for
+    # backwards compat but are hidden from the UI.
     "embedding_mode": "embeddings", "embedding_base_url": "embeddings",
     "embedding_api_key": "embeddings", "embedding_model": "embeddings",
     "embedding_protocol": "embeddings", "embedding_dim": "embeddings", "embedding_batch_size": "embeddings",
     "embedding_max_input_chars": "embeddings",
     "embedding_local_dir": "embeddings", "embedding_local_repo": "embeddings",
-    "embedding_local_model_file": "embeddings",
-    "embedding_local_mmproj_file": "embeddings",
-    "embedding_local_model_path": "embeddings",
-    "embedding_local_mmproj_path": "embeddings",
     "embedding_idle_unload_s": "embeddings",
     "llama_github_repo": "embeddings",
     "audio_embed_mode": "media", "audio_segment_seconds": "media",

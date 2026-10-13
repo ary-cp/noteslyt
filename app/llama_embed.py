@@ -303,10 +303,20 @@ class LocalEmbeddingServer:
         return tag_file.read_text(encoding="utf-8").strip() if tag_file.exists() else ""
 
     def model_files(self) -> tuple[Path, Path]:
-        """Resolve (weights, mmproj), honouring explicit user paths first."""
+        """Resolve (weights, mmproj), honouring explicit user paths first.
+
+        Without overrides, any `*.gguf` files found under the local dir are
+        auto-detected: the `*mmproj*.gguf` becomes the projector and the
+        largest other `*.gguf` becomes the weights. Falls back to the managed
+        `<models_dir>/<repo filename>` defaults (downloaded on first use).
+        """
         s = self.settings
         weights = Path(s.embedding_local_model_path).expanduser().resolve() if s.embedding_local_model_path else None
         mmproj = Path(s.embedding_local_mmproj_path).expanduser().resolve() if s.embedding_local_mmproj_path else None
+        if weights is None or mmproj is None:
+            auto_weights, auto_mmproj = self._autodetect_gguf()
+            weights = weights or auto_weights
+            mmproj = mmproj or auto_mmproj
         if weights is None:
             weights = self.models_dir / s.embedding_local_model_file
         if mmproj is None:
@@ -318,6 +328,31 @@ class LocalEmbeddingServer:
                     f"Embedding {label} override does not exist: {path}. "
                     "Fix the path or unset the override to use the managed download."
                 )
+        return weights, mmproj
+
+    def _autodetect_gguf(self) -> tuple[Path | None, Path | None]:
+        """Scan the local dir for user-provided weights + projector."""
+        candidates: list[Path] = []
+        for base in (self.models_dir, self.root):
+            try:
+                if base.exists():
+                    candidates.extend(sorted(base.glob("*.gguf")))
+                    candidates.extend(sorted((base / "models").glob("*.gguf")))
+            except OSError:
+                continue
+        seen: dict[str, Path] = {}
+        for p in candidates:
+            try:
+                seen[str(p.resolve())] = p
+            except OSError:
+                continue
+        files = list(seen.values())
+        if not files:
+            return None, None
+        mmproj_hits = [p for p in files if "mmproj" in p.name.lower()]
+        mmproj = max(mmproj_hits, key=lambda p: p.stat().st_size if p.exists() else 0) if mmproj_hits else None
+        rest = [p for p in files if p != mmproj]
+        weights = max(rest, key=lambda p: p.stat().st_size if p.exists() else 0) if rest else None
         return weights, mmproj
 
     # ---------------------------------------------------------------- ensure
