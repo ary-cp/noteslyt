@@ -194,7 +194,9 @@ class Handler(BaseHTTPRequestHandler):
                 ] if contexts else []})
             elif any(_has_image(m) for m in msgs) and "STUDENT QUESTION:" in convo:
                 content = ("The uploaded image contains a study diagram. " + canonical_label(*found[0])) if found else REFUSAL
-            elif any(_has_image(m) for m in msgs) and "instructional designer" not in system:
+            elif any(_has_image(m) for m in msgs) and not any(
+                task in system for task in ("instructional designer", "write quiz questions", "multiple-choice")
+            ):
                 content = ("The image shows a labeled study diagram. "
                            "Key parts: pressure gauge reading 101 kPa, a piston chamber, "
                            "and an entropy-temperature chart with two curves.")

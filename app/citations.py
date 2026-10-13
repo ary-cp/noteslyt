@@ -188,6 +188,9 @@ def _expand_multi_refs(answer: str) -> str:
     return _MULTI_REF_RE.sub(_split, answer)
 
 
+_PROTECTED_CONTENT = r"(```[\s\S]*?```|`[^`\n]+`|\$\$[\s\S]*?\$\$|\$[^$\n]+\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\))"
+
+
 def audit_citations(answer: str, chunks: list) -> AuditResult:
     """
     Strip every citation whose locator was not retrieved.
@@ -220,8 +223,7 @@ def audit_citations(answer: str, chunks: list) -> AuditResult:
 
     # Models commonly group references as [1, 3]. Expand before resolving so
     # every number is validated and renumbered against the returned footnotes.
-    protected = r"(```[\s\S]*?```|`[^`\n]+`|\$\$[\s\S]*?\$\$|\$[^$\n]+\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\))"
-    parts = re.split(protected, answer)
+    parts = re.split(_PROTECTED_CONTENT, answer)
     for i in range(0, len(parts), 2):
         parts[i] = _expand_multi_refs(parts[i])
         parts[i] = CITATION_RE.sub(_replace, parts[i])
@@ -259,7 +261,10 @@ def has_uncited_prose(answer: str) -> bool:
     introduction can cover a compact list; long standalone explanations cannot
     borrow a citation from an unrelated paragraph.
     """
-    prose = re.sub(r"```[\s\S]*?```|\$\$[\s\S]*?\$\$", "", answer)
+    # Literal array indices and math references are not source citations. Use
+    # the same protected spans as the audit, otherwise `[1]` in inline code
+    # can incorrectly satisfy citation coverage for an unrelated paragraph.
+    prose = re.sub(_PROTECTED_CONTENT, " ", answer)
     for block in re.split(r"\n\s*\n", prose):
         lines = [line for line in block.splitlines() if not line.lstrip().startswith("#")]
         block = "\n".join(lines).strip()

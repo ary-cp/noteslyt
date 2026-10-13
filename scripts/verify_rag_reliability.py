@@ -26,6 +26,11 @@ def quota(message="Please retry in 39.5s.", **headers):
 
 
 def main():
+    unsupported = "This separate paragraph makes many unsupported factual claims about a different topic and appends a sample "
+    for literal in ("`[1]`", "$x[1]$", r"\(x[1]\)", r"\[x[1]\]"):
+        assert has_uncited_prose("Supported statement [1].\n\n" + unsupported + literal)
+    assert not has_uncited_prose(unsupported + "`[1]` [1].")
+    print("PASS: code and math references cannot masquerade as source citations")
     assert _is_refusal("Based on the provided context, there is no mention of NASA Table 4.2-2 [1].")
     assert _is_refusal("Based on the provided context [1], aluminium is not listed. Steel costs 120.")
     assert _is_refusal("Based on the provided operating costs data [1], there is no mention of the cost for aluminium.")
@@ -54,7 +59,7 @@ def main():
     assert [c.locator_value for c in math.citations] == ["2", "1"]
     print("PASS: grouped references validated and renumbered individually")
 
-    unsupported = "A supported fact [1].\n\nHere is a lengthy invented example that adds information not present in any uploaded source."
+    unsupported = "A supported fact [1].\n\nHere is a lengthy invented example that adds information not present in any uploaded source, with a literal array index `[1]`."
     assert has_uncited_prose(unsupported)
     assert not has_uncited_prose("The cost is 400 [1].\n\n$$120 + 80 + 200 = 400$$")
     assert not has_uncited_prose("## Heading\n\nA supported explanation with enough words to make the paragraph substantial and complete [1].")
