@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { buildSchedule } from './src/features/studio/studySchedule.ts';
+const today = new Date(2026, 9, 13);
+const items = [{ name:'Vectors',p:.3 },{ name:'Energy',p:.2 }];
+const soon = buildSchedule(items,'2026-10-14',45,today);
+assert.match(soon,/22 min each, 45 min\/day/);
+assert.match(soon.split('\n').at(-1),/Exam day/);
+assert.doesNotMatch(soon,/Exam eve/);
+const far = buildSchedule(items,'2026-12-01',30,today);
+assert.match(far,/first 30 days/);
+assert.doesNotMatch(far,/Exam day|Exam eve/);
+assert.equal(far.split('\n').filter(l=>/^\| \d+ \|/.test(l)).length,30);
+for (const value of ['', '2026-10-12']) assert.throws(()=>buildSchedule(items,value,30,today),/exam date/);
+console.log('STUDY SCHEDULE VERIFIED');

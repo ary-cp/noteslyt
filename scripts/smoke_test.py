@@ -10,7 +10,7 @@ Zero-API-key run:
     terminal 3  uv run python scripts/smoke_test.py
 
 Covers the Phase A-E surface that exists today:
-  signup -> onboarding -> two projects -> upload pdf + docx + xlsx + mp3
+  signup -> onboarding -> two projects -> upload pdf + docx + xlsx + wav
   into A -> poll to ready -> project-level topics -> retrieval scoped to one
   project (tenancy) -> cross-project isolation -> file download ->
   chats + three-tier memory (grounded answers, refusal, isolation, nudges,
@@ -82,11 +82,16 @@ def sample_xlsx() -> Path:
     return path
 
 
-def sample_mp3() -> Path:
-    # The bytes are never decoded locally — they go to the transcription
-    # endpoint (the mock in a zero-key run), so fake content is enough.
-    path = Path(tempfile.gettempdir()) / "sample_lecture.mp3"
-    path.write_bytes(b"ID3\x04\x00\x00\x00\x00\x01\x02" + b"\x00" * 4096)
+def sample_audio() -> Path:
+    # Ingestion decodes audio locally before transcription. Use a valid WAV
+    # fixture rather than a fake MP3 header (no encoder dependency to create it).
+    import wave
+    path = Path(tempfile.gettempdir()) / "sample_lecture.wav"
+    with wave.open(str(path), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(16000)
+        audio.writeframes(b"\x00\x00" * 16000)
     return path
 
 
@@ -138,8 +143,8 @@ def main() -> int:
     check("two projects", pa["id"] != pb["id"], f"{pa['title']} / {pb['title']}")
 
     # --------------------------------------------------------------- upload
-    section("upload + async ingestion (pdf + docx + xlsx + mp3)")
-    pdf, docx, xlsx, mp3 = sample_pdf(), sample_docx(), sample_xlsx(), sample_mp3()
+    section("upload + async ingestion (pdf + docx + xlsx + wav)")
+    pdf, docx, xlsx, audio = sample_pdf(), sample_docx(), sample_xlsx(), sample_audio()
     up = c.post(
         f"/projects/{pa['id']}/sources",
         files=[
@@ -148,7 +153,7 @@ def main() -> int:
                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document")),
             ("files", (xlsx.name, xlsx.read_bytes(),
                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
-            ("files", (mp3.name, mp3.read_bytes(), "audio/mpeg")),
+            ("files", (audio.name, audio.read_bytes(), "audio/wav")),
         ],
         headers=h,
     )

@@ -206,8 +206,21 @@ def main() -> int:
 
     print("\npanel 10 · quiz")
     qz = c.post(f"/projects/{pid}/quiz", json={"n_questions": 1, "qtypes": ["numerical"]}, headers=auth)
-    check("create 201", qz.status_code == 201, str(qz.status_code))
-    quiz = qz.json()
+    check("create queued job 202", qz.status_code == 202, str(qz.status_code))
+    qz.raise_for_status()
+    job_id = qz.json()["id"]
+    for _ in range(120):
+        jobs = c.get(f"/projects/{pid}/studio-jobs", headers=auth)
+        jobs.raise_for_status()
+        job = next(j for j in jobs.json() if j["id"] == job_id)
+        if job["status"] in ("ready", "failed"):
+            break
+        time.sleep(1)
+    check("quiz generation ready", job["status"] == "ready", job.get("error", ""))
+    if job["status"] != "ready":
+        c.delete(f"/projects/{pid}", headers=auth)
+        return 1
+    quiz = job["payload"]
     check("one numerical question", len(quiz["questions"]) == 1
           and quiz["questions"][0]["qtype"] == "numerical",
           str([(q["qtype"], q["topic_slug"]) for q in quiz["questions"]]))
@@ -233,6 +246,21 @@ def main() -> int:
           c.get(f"/projects/{pid}/learner", headers=iauth).status_code == 404)
     check("intruder cannot see report",
           c.get(f"/assessments/{a['assessment_id']}/report", headers=iauth).status_code == 404)
+
+    print("\nStudio artifact persistence")
+    for kind, payload in (("slides", {"slides": [{"title": "Energy", "bullets": ["Energy is conserved"]}]}),
+                          ("schedule", {"markdown": "# Study plan", "toc": ["Plan"]})):
+        saved = c.post(f"/projects/{pid}/studio-jobs", headers=auth,
+                       json={"kind": kind, "title": f"Test {kind}", "payload": payload})
+        check(f"{kind} saved", saved.status_code == 201, str(saved.status_code))
+        saved.raise_for_status()
+        jobs = c.get(f"/projects/{pid}/studio-jobs", headers=auth).json()
+        restored = next(j for j in jobs if j["id"] == saved.json()["id"])
+        check(f"{kind} restored", restored["status"] == "ready" and restored["payload"] == payload)
+    check("foreign user cannot save Studio artifact", c.post(f"/projects/{pid}/studio-jobs", headers=iauth,
+          json={"kind": "slides", "title": "Foreign", "payload": {}}).status_code == 404)
+    check("unknown Studio kind rejected", c.post(f"/projects/{pid}/studio-jobs", headers=auth,
+          json={"kind": "unknown", "title": "Unknown", "payload": {}}).status_code == 422)
 
     print("\ncleanup")
     check("delete source", c.delete(f"/sources/{sid}", headers=auth).status_code == 204)
