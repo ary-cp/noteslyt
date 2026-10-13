@@ -40,7 +40,7 @@ _JSON_FIELDS: dict[str, set[str]] = {
     "TopicRecord": {"subtopics"},
 }
 
-_sqlite_learner_locks: dict[str, threading.Lock] = {}
+_sqlite_learner_locks: dict[str, threading.RLock] = {}
 _sqlite_learner_guard = threading.Lock()
 
 
@@ -134,10 +134,13 @@ class Repo:
         """Serialize assessment and mastery writes, including initially absent rows."""
         if getattr(self.db, "backend", "postgres") == "sqlite":
             # No advisory locks on SQLite: the single-writer connection plus a
-            # per-learner mutex gives the same serialization.
+            # per-learner mutex gives the same serialization. RLock (not Lock):
+            # `QuizService.answer` nests this context via `apply_result`, and a
+            # non-reentrant lock would self-deadlock the grading thread while it
+            # still holds the process-wide DB lock — wedging the whole backend.
             key = f"learner:{user_id}:{project_id}"
             with _sqlite_learner_guard:
-                lock = _sqlite_learner_locks.setdefault(key, threading.Lock())
+                lock = _sqlite_learner_locks.setdefault(key, threading.RLock())
             with lock, self.db.transaction() as conn:
                 yield
             return
