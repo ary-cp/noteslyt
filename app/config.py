@@ -102,11 +102,15 @@ class Settings(BaseSettings):
     #                 (api.jina.ai, v5-omni models share one space).
     #   "gemini"    — native embedContent with inline_data parts.
     embedding_protocol: Literal["auto", "llama_cpp", "jina", "gemini"] = "auto"
-    # Vendored engine + weights layout (override the model paths to use your
+    # Vendored engine + weights layout (override the directory to use your
     # own files instead of the managed download):
     #   <dir>/engine/   llama-server build + BUILD_TAG
-    #   <dir>/models/   weights + mmproj projector
+    #   <dir>/models/   weights + mmproj projector (any *.gguf found here is
+    #                   auto-detected: the *mmproj*.gguf becomes the projector,
+    #                   the largest other *.gguf becomes the weights)
     #   <dir>/logs/     llama-server.log
+    # Point EMBEDDING_LOCAL_DIR at a folder holding your .gguf files and they
+    # are picked up automatically — no per-file settings needed.
     embedding_local_dir: Path = Path("./data/llama")
     embedding_local_host: str = "127.0.0.1"
     embedding_local_port: int = 8899
@@ -148,7 +152,7 @@ class Settings(BaseSettings):
     #                   with `uv run python scripts/probe_multimodal.py` first.
     # Switching modes changes the vector space: re-ingest the corpus
     # (`uv run python scripts/re_embed.py --force`) after switching.
-    audio_embed_mode: Literal["transcript", "native"] = "transcript"
+    audio_embed_mode: Literal["transcript", "native"] = "native"
     # Audio is broken into 3-minute parts carrying BOTH signals (mirrors
     # video): each part's transcript text plus one embedded audio clip of the
     # same timeframe, so retrieval matches what was said and what it sounded
@@ -165,7 +169,7 @@ class Settings(BaseSettings):
     #                   by `scripts/probe_multimodal.py`, then re-ingest.
     # (With AUDIO_EMBED_MODE=native, video falls back to soundtrack vectors;
     # VIDEO_EMBED_MODE=native takes precedence for video and uses frames.)
-    video_embed_mode: Literal["transcript", "native"] = "transcript"
+    video_embed_mode: Literal["transcript", "native"] = "native"
     # Video is broken into short parts carrying BOTH signals: each part's
     # transcript text plus one embedded video clip of the same timeframe, so
     # retrieval matches what was said and what was shown. Parts stay ~10 s
@@ -173,14 +177,15 @@ class Settings(BaseSettings):
     video_segment_seconds: float = 10.0
     # Middle-clip seconds embedded per segment instead of a still keyframe
     # (needs VIDEO_EMBED_MODE=native + a video-capable embedding endpoint).
-    # 0 keeps stills. Proven recipe for full ~10 s parts in one vector:
+    # 0 keeps stills. Default 10 embeds the full ~10 s part as one clip.
+    # Proven recipe for full ~10 s parts in one vector:
     # EMBEDDING_LOCAL_VIDEO_FPS=1.0, VIDEO_CLIP_SECONDS=10 (or 0 for the
     # whole part — same thing at 10 s parts), VIDEO_CLIP_WIDTH=720 max
     # (≈1.7k tokens: 10 frames × ~169/frame, fits ubatch 2048, ~2 s on GPU).
     # Wider input is downscaled to the width; narrower passes through, so
     # small originals never pay upscaling tokens. Oversize clips fall back
     # to the still with a warning naming the fix.
-    video_clip_seconds: float = 0.0
+    video_clip_seconds: float = 10.0
     video_clip_width: int = 720        # max width px; downscale-only, never upscale
 
     # --------------------------------------------------------- Transcription
@@ -293,9 +298,10 @@ class Settings(BaseSettings):
     chunk_overlap: int = 200
     # Visual retrieval: every PDF page is also rendered to PNG and embedded as
     # an image chunk ([Image N]), so charts/diagrams survive even where the
-    # text parse loses them. Text chunks are untouched — retrieval matches both.
+    # text parse loses them. Office documents (.pptx/.docx/.xlsx) render the
+    # same way via LibreOffice. Text chunks are untouched — retrieval matches both.
     # Needs a joint embedding model (embed_image); text-only endpoints record
-    # a warning and ingest text-only. Slides need LibreOffice, else text-only.
+    # a warning and ingest text-only. Office docs need LibreOffice, else text-only.
     pdf_page_images: bool = True
     pdf_page_image_max_pages: int = 200   # per-source render budget (0 = all)
     history_turns: int = 6         # prior messages forwarded to the LLM (legacy RAG)

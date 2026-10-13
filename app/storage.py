@@ -337,12 +337,12 @@ def read_image_chunk_bytes(
 ) -> tuple[bytes, str] | None:
     """`(bytes, mime)` grounding an image-kind chunk, or None when unavailable.
 
-    PDF/slide page visuals resolve to their rendered PNG; plain image sources
-    resolve to the uploaded file. A missing render is None — never the PDF
+    PDF/office page visuals resolve to their rendered PNG; plain image sources
+    resolve to the uploaded file. A missing render is None — never the office
     bytes, which are not an image.
     """
     source_type = getattr(source, "source_type", "")
-    if locator_kind == "image" and source_type in ("pdf", "pptx"):
+    if locator_kind == "image" and source_type in ("pdf", "pptx", "docx", "xlsx"):
         try:
             page_no = int(locator_value)
         except (TypeError, ValueError):

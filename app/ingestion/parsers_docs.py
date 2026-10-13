@@ -110,9 +110,9 @@ def parse_docx(path: Path, settings: Settings) -> ParsedSource:  # noqa: ARG001
     warnings: list[str] = []
     try:
         if doc.inline_shapes and not units:
-            warnings.append("Only embedded images found; upload image files separately for visual retrieval.")
+            warnings.append("Only embedded images found; they are covered by the rendered page images when LibreOffice is installed.")
         elif doc.inline_shapes:
-            warnings.append(f"{len(doc.inline_shapes)} embedded image(s) skipped; upload image files separately for visual retrieval.")
+            warnings.append(f"{len(doc.inline_shapes)} embedded image(s) are covered by the rendered page images when LibreOffice is installed.")
     except Exception:  # noqa: BLE001 — shape probing must never fail the parse
         pass
     return ParsedSource(units=units, parser="docx", warnings=warnings)

@@ -647,7 +647,7 @@ class IngestionPipeline:
     def _embed_page_images(
         self, source: SourceRecord, path: Path, units: list[SourceUnit], result: IngestResult
     ) -> tuple[list[Chunk], list[list[float]]]:
-        """Render document pages/slides to PNGs and embed one image chunk each.
+        """Render document pages/slides/sheets to PNGs and embed one image chunk each.
 
         Text chunks are untouched — retrieval matches both what a page says
         and what it shows (charts, diagrams, figures). Never raises: render
@@ -655,29 +655,44 @@ class IngestionPipeline:
         PNGs persist via FileStorage (auto-cleaned with the source); only
         vectors reach pgvector. Chunk indices sit above PAGE_IMAGE_INDEX_BASE
         so re-ingests upsert the same rows whatever the text chunk count is.
+
+        Office documents (.docx/.xlsx) render through LibreOffice: their
+        units carry section/sheet locators (not page ordinals), so the whole
+        converted PDF renders up to the page-image budget as generic
+        `image N` chunks.
         """
         empty: tuple[list[Chunk], list[list[float]]] = ([], [])
-        if not self.settings.pdf_page_images or source.source_type not in ("pdf", "pptx"):
+        if not self.settings.pdf_page_images or source.source_type not in ("pdf", "pptx", "docx", "xlsx"):
             return empty
-        label = "page" if source.source_type == "pdf" else "slide"
-        want = "page" if source.source_type == "pdf" else "slide"
-        numbers: list[int] = []
-        for u in units:
-            if u.locator_kind != want:
-                continue
-            try:
-                numbers.append(int(u.locator_value))
-            except (TypeError, ValueError):
-                continue
-        numbers = sorted(set(numbers))
-        if not numbers:
-            return empty
-        max_pages = self.settings.pdf_page_image_max_pages
-        if max_pages > 0 and len(numbers) > max_pages:
-            result.warnings.append(
-                f"Page-image budget reached ({max_pages} pages); remaining pages are text-only."
-            )
-            numbers = numbers[:max_pages]
+        label = "page" if source.source_type in ("pdf", "docx", "xlsx") else "slide"
+        numbers: list[int] | None = None
+        if source.source_type in ("pdf", "pptx"):
+            want = "page" if source.source_type == "pdf" else "slide"
+            collected: list[int] = []
+            for u in units:
+                if u.locator_kind != want:
+                    continue
+                try:
+                    collected.append(int(u.locator_value))
+                except (TypeError, ValueError):
+                    continue
+            numbers = sorted(set(collected))
+            if not numbers:
+                return empty
+            max_pages = self.settings.pdf_page_image_max_pages
+            if max_pages > 0 and len(numbers) > max_pages:
+                result.warnings.append(
+                    f"Page-image budget reached ({max_pages} pages); remaining pages are text-only."
+                )
+                numbers = numbers[:max_pages]
+        else:
+            # Office docs: cap the render inside the renderer (converted-PDF
+            # ordinals, not unit locators). Warn when the budget truncates is
+            # handled by comparing rendered count to the converter total.
+            max_pages = self.settings.pdf_page_image_max_pages
+            if max_pages > 0:
+                numbers = list(range(1, max_pages + 1))
+            # numbers=None (budget 0 = all) renders every converted page.
         try:
             from .page_images import render_pages
             rendered = render_pages(path, source.source_type, numbers)

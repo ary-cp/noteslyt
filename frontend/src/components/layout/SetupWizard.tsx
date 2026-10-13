@@ -14,7 +14,22 @@ const CHAT_PRESETS: { value: string; label: string; base_url: string; model: str
   { value: "openai", label: "OpenAI", base_url: "https://api.openai.com/v1", model: "gpt-4o-mini", key: "" },
 ];
 
-const STEPS = ["Chat", "Embeddings", "Transcription"] as const;
+const EMBEDDING_PRESETS: { value: string; label: string; base_url: string; model: string; protocol: string }[] = [
+  { value: "custom", label: "Custom endpoint", base_url: "", model: "", protocol: "auto" },
+  { value: "gemini", label: "Gemini", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-embedding-2", protocol: "gemini" },
+  { value: "jina", label: "Jina", base_url: "https://api.jina.ai/v1", model: "jina-embeddings-v5-omni-nano", protocol: "jina" },
+];
+
+function embeddingPresetOf(baseUrl: string, model: string, protocol: string): string {
+  const b = (baseUrl ?? "").trim().toLowerCase().replace(/\/$/, "");
+  const m = (model ?? "").trim().toLowerCase();
+  const p = (protocol ?? "").trim().toLowerCase() || "auto";
+  if (b.includes("generativelanguage.googleapis.com") && m.startsWith("gemini-embedding") && (p === "gemini" || p === "auto")) return "gemini";
+  if (b.includes("api.jina.ai") && m.startsWith("jina-embeddings-v5-omni") && (p === "jina" || p === "auto")) return "jina";
+  return "custom";
+}
+
+const STEPS = ["Chat", "Embeddings", "Transcription", "Media", "Parsing"] as const;
 
 function itemOf(items: SettingItem[], key: string): SettingItem | undefined {
   return items.find((i) => i.key === key);
@@ -199,6 +214,11 @@ export function SetupWizard({ open, onDone }: { open: boolean; onDone: () => voi
       if (require("transcription_base_url", "Transcription base URL")) return false;
       if (require("transcription_model", "Transcription model")) return false;
     }
+    const clip = get("video_clip_seconds").trim();
+    if (clip !== "" && (!Number.isFinite(Number(clip)) || Number(clip) < 0 || Number(clip) > 600)) {
+      setError("Video clip seconds must be a number 0–600.");
+      return false;
+    }
     return true;
   };
 
@@ -217,8 +237,16 @@ export function SetupWizard({ open, onDone }: { open: boolean; onDone: () => voi
     for (const key of [
       "llm_base_url", "llm_api_key", "llm_model",
       "embedding_mode", "embedding_base_url", "embedding_api_key", "embedding_model",
+      "embedding_protocol", "embedding_local_dir",
       "transcription_mode", "transcription_base_url", "transcription_api_key", "transcription_model",
+      "audio_embed_mode", "video_embed_mode", "video_clip_seconds",
+      "firecrawl_api_key",
     ]) consider(key);
+    if (typeof body["video_clip_seconds"] === "string") {
+      const raw = (body["video_clip_seconds"] as string).trim();
+      if (raw === "") delete body["video_clip_seconds"];
+      else body["video_clip_seconds"] = Number(raw);
+    }
     return body;
   };
 
@@ -258,6 +286,17 @@ export function SetupWizard({ open, onDone }: { open: boolean; onDone: () => voi
 
   const embeddingMode = get("embedding_mode") || "cloud";
   const transcriptionMode = get("transcription_mode") || "cloud";
+  const audioMode = get("audio_embed_mode") || "native";
+  const videoMode = get("video_embed_mode") || "native";
+  const embedPreset = embeddingPresetOf(get("embedding_base_url"), get("embedding_model"), get("embedding_protocol") || "auto");
+
+  const applyEmbedPreset = (value: string) => {
+    const found = EMBEDDING_PRESETS.find((p) => p.value === value);
+    if (!found || value === "custom") return;
+    if (!locked("embedding_base_url")) set("embedding_base_url", found.base_url);
+    if (!locked("embedding_model")) set("embedding_model", found.model);
+    if (!locked("embedding_protocol")) set("embedding_protocol", found.protocol);
+  };
 
   return (
     <Modal open={open} onClose={() => undefined} title="Welcome to NotesLyt" subtitle="Connect your AI providers to get started." width={620}>
@@ -318,9 +357,17 @@ export function SetupWizard({ open, onDone }: { open: boolean; onDone: () => voi
               />
             </Field>
             {embeddingMode === "local" ? (
-              <p className="text-[13px] text-[var(--text-muted)]">The embedding engine downloads itself on first use — nothing to enter here.</p>
+              <>
+                <p className="text-[13px] text-[var(--text-muted)]">The embedding engine downloads itself on first use. Point it at a folder holding your .gguf weights + mmproj projector to use your own files (auto-detected) — or leave it empty for the managed download.</p>
+                <Field label="Model directory (optional)" hint={locked("embedding_local_dir") ? "Set by the server operator." : undefined}>
+                  <TextInput value={get("embedding_local_dir")} disabled={locked("embedding_local_dir")} aria-label="Embedding model directory" placeholder="./data/llama" onChange={(e) => set("embedding_local_dir", e.target.value)} />
+                </Field>
+              </>
             ) : (
               <>
+                <Field label="Provider preset">
+                  <Dropdown value={embedPreset} ariaLabel="Embedding provider preset" onChange={applyEmbedPreset} options={EMBEDDING_PRESETS.map((p) => ({ value: p.value, label: p.label }))} />
+                </Field>
                 <Field label="Base URL" hint={locked("embedding_base_url") ? "Set by the server operator." : undefined}>
                   <TextInput value={get("embedding_base_url")} disabled={locked("embedding_base_url")} aria-label="Embedding base URL" placeholder="https://api.openai.com/v1" onChange={(e) => set("embedding_base_url", e.target.value)} />
                 </Field>
@@ -340,7 +387,7 @@ export function SetupWizard({ open, onDone }: { open: boolean; onDone: () => voi
               </>
             )}
           </div>
-        ) : (
+        ) : step === 2 ? (
           <div className="grid gap-3">
             <Field label="Mode">
               <Dropdown
@@ -375,6 +422,46 @@ export function SetupWizard({ open, onDone }: { open: boolean; onDone: () => voi
                 </Field>
               </>
             )}
+          </div>
+        ) : step === 3 ? (
+          <div className="grid gap-3">
+            <p className="text-[13px] text-[var(--text-muted)]">
+              Native modes embed the raw audio/video bytes, so retrieval matches what was heard and shown — but they need a multimodal embedding endpoint (joint model + projector, or a Gemini/Jina cloud preset). With a text-only embedder, native ingestion fails: keep Transcript in that case.
+            </p>
+            <Field label="Audio vectors">
+              <Dropdown
+                value={audioMode}
+                ariaLabel="Audio embed mode"
+                onChange={(v) => { if (!locked("audio_embed_mode")) set("audio_embed_mode", v); }}
+                options={[
+                  { value: "native", label: "Native audio (recommended)", disabled: locked("audio_embed_mode") },
+                  { value: "transcript", label: "Transcript only", disabled: locked("audio_embed_mode") },
+                ]}
+              />
+            </Field>
+            <Field label="Video vectors">
+              <Dropdown
+                value={videoMode}
+                ariaLabel="Video embed mode"
+                onChange={(v) => { if (!locked("video_embed_mode")) set("video_embed_mode", v); }}
+                options={[
+                  { value: "native", label: "Native video (recommended)", disabled: locked("video_embed_mode") },
+                  { value: "transcript", label: "Transcript only", disabled: locked("video_embed_mode") },
+                ]}
+              />
+            </Field>
+            <Field label="Video clip seconds" hint="10 embeds the full 10 s part as one clip.">
+              <TextInput value={get("video_clip_seconds") || "10"} disabled={locked("video_clip_seconds")} aria-label="Video clip seconds" placeholder="10" onChange={(e) => set("video_clip_seconds", e.target.value)} />
+            </Field>
+          </div>
+        ) : (
+          <div className="grid gap-3">
+            <p className="text-[13px] text-[var(--text-muted)]">
+              Without a Firecrawl key, PDFs parse with the local engine: scanned pages lose OCR quality. Page/slide images are still embedded, so charts stay searchable — but setting a key is recommended for scanned text.
+            </p>
+            <Field label="Firecrawl API key (optional)" hint={locked("firecrawl_api_key") ? "Set by the server operator." : undefined}>
+              <TextInput type="password" value={get("firecrawl_api_key")} disabled={locked("firecrawl_api_key")} aria-label="Firecrawl API key" placeholder={secretPlaceholder("firecrawl_api_key")} onChange={(e) => set("firecrawl_api_key", e.target.value)} />
+            </Field>
           </div>
         )}
 
