@@ -37,7 +37,7 @@ export function ChatPane({ doc, messages, busy, onSend, onCite }: Props) {
           <div className="mx-auto flex h-full max-w-md flex-col items-center justify-center text-center">
             <h2 className="text-lg font-semibold tracking-tight">Ask anything about these slides</h2>
             <p className="mt-1.5 text-sm text-ink-muted">
-              Every answer is grounded in the PDF on the right and cites the exact page.
+              Source-supported details cite the page. Any outside information is labeled.
             </p>
             <div className="mt-6 grid w-full gap-2">
               {starters.map((s) => (

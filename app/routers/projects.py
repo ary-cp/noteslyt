@@ -28,6 +28,7 @@ from ..deps import (
     get_topics,
     require_project,
 )
+from ..learner.sm2 import is_due
 from ..repo.memory import ProjectMemoryRepo
 from ..repo.projects import ProjectRepo
 from ..repo.sources import SourceRepo
@@ -182,6 +183,10 @@ def get_project_memory(
             attempts=r.attempts,
             correct=r.correct,
             coverage_status=r.coverage_status,
+            easiness=float(getattr(r, "easiness", 2.5) or 2.5),
+            repetitions=int(getattr(r, "repetitions", 0) or 0),
+            interval_days=float(getattr(r, "interval_days", 0.0) or 0.0),
+            due_at=r.due_at.isoformat() if getattr(r, "due_at", None) else None,
             label=memory.mastery_label(float(r.p_mastery)),
             last_practiced_at=r.last_practiced_at.isoformat() if r.last_practiced_at else None,
         )
@@ -196,5 +201,6 @@ def get_project_memory(
         topics=topics,
         weakest=weakest,
         coverage=coverage,
+        due_review=sum(1 for t in topics if t.due_at and is_due(t.due_at)),
         streak=memory.streak(user.id, str(project_id)),
     )

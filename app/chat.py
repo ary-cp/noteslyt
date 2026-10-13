@@ -40,13 +40,15 @@ REFUSAL = "I can't find this in your uploaded material."
 SYSTEM_PROMPT = f"""You are a precise study tutor. The student has uploaded lecture material, and retrieved excerpts are provided as CONTEXT. Each excerpt starts with a numbered reference such as [1], followed by its locator. Retrieved image sources may also be attached directly to the latest user message; match each attached image to its numbered CONTEXT entry. Retrieved lecture slices may likewise be attached as audio; match each attached clip to its numbered CONTEXT entry by its [m:ss] label.
 You also receive MEMORY: who the learner is, what they struggle with, and a summary of this conversation so far. Adapt your explanation depth to their capability level.
 
-Rules you must follow without exception:
-1. Answer ONLY from the CONTEXT. For an image source, the attached original image is part of the CONTEXT even if its text excerpt only says that its visual embedding was indexed. For an audio source, an attached clip is part of the CONTEXT alongside its transcript excerpt. Do not use outside knowledge, even if you are confident.
-2. After every factual statement, cite the matching CONTEXT number in square brackets, such as [1] or [2]. Use only numbers present in the CONTEXT. The app will render the matching source details below your answer; do not write filenames or locator labels directly.
-3. If the CONTEXT does not contain what is needed to answer, reply with exactly this sentence and nothing else:
+Guidance:
+1. Use the CONTEXT to answer what it supports. For an image source, the attached original image is part of the CONTEXT even if its text excerpt only says that its visual embedding was indexed. For an audio source, an attached clip is part of the CONTEXT alongside its transcript excerpt.
+2. Cite source-supported factual statements with the matching CONTEXT number in square brackets, such as [1] or [2]. When several excerpts support one statement, cite each number separately like [1] [2] — never grouped like [1, 2]. Use only numbers present in the CONTEXT. The app renders source details below your answer; do not write filenames or locator labels directly.
+3. Do not treat missing or loosely related excerpts as proof that the material lacks an answer. Answer the parts the CONTEXT supports, even if retrieval is incomplete. If useful information is missing, say so briefly.
+4. If you add a relevant answer from general knowledge, put it in a separate paragraph starting with **Outside your sources:**. Never make outside knowledge look cited or sourced. Only add it when you can answer reliably.
+5. If you cannot answer reliably from either the CONTEXT or general knowledge, reply with exactly this sentence and nothing else:
 {REFUSAL}
-4. Never guess, never pad, never apologise. Be concise and use Markdown (short paragraphs, lists, **bold** key terms, LaTeX with $...$ for maths if the material uses it).
-5. Explain like a good tutor: define, then give the key idea, then (if present in the context) an example."""
+6. Never guess or pad. Be concise and use Markdown (short paragraphs, lists, **bold** key terms, LaTeX with $...$ for maths if the material uses it).
+7. Explain like a good tutor: define, then give the key idea, then (if present in the context) an example."""
 
 REWRITE_SYSTEM = (
     "You rewrite follow-up questions as standalone questions. "
@@ -141,7 +143,9 @@ class ChatService:
         # 1. Rewrite follow-ups ("what about that?" → standalone) before embedding.
         rewritten, did_rewrite = self._rewrite(question, prior)
 
-        # 2. Retrieve within ONE project, READY sources only; gate before spending an LLM call.
+        # 2. Retrieve within ONE project, READY sources only. Similarity is a
+        # ranking signal; the model decides whether retrieved material answers
+        # the question instead of hard-refusing at a fixed distance cutoff.
         # Uploads ingest in the background, so a project usually holds sources
         # that are still queued/parsing — they must never answer. `ready_ids`
         # is the boundary: no ready source means nothing to retrieve from, and
@@ -161,12 +165,6 @@ class ChatService:
             source_ids=ready_ids,
         )
         best = chunks[0].distance if chunks else None
-        if not chunks or (best is not None and best > self.settings.max_distance):
-            log.info("Refusing in chat %s: best distance %s > %s", chat_id, best, self.settings.max_distance)
-            self.chats.add_message(chat_id, "assistant", REFUSAL, [], False)
-            after_turn(user_id, chat, question, REFUSAL, [], nudge=False)
-            return self._payload(chat_id, chat.title, REFUSAL, [], False, [], best)
-
         # 3. Assemble memory with an explicit budget, then generate + audit.
         global_block, project_block = self._blocks(user_id, chat.project_id)
         context = format_context(chunks, numbered=True)[: self.settings.memory_context_chars]
@@ -177,7 +175,10 @@ class ChatService:
             messages.append({"role": "system", "content": "Response style: be precise and concise. Lead with the direct answer, include only necessary explanation, and retain citations."})
         elif response_style == "explanatory":
             messages.append({"role": "system", "content": "Response style: explain the reasoning step by step in learner-friendly language. Define important terms and give a short example when useful. Retain citations."})
-        raw = self.llm.chat(messages, on_chunk=on_chunk)
+        # Buffer until the citation audit chooses the final answer. Streaming
+        # raw tokens before validation made a good answer appear and then get
+        # replaced by the fallback refusal in the same turn.
+        raw = self.llm.chat(messages)
         if _is_refusal(raw):
             self.chats.add_message(chat_id, "assistant", REFUSAL, [], False)
             after_turn(user_id, chat, question, REFUSAL, [], nudge=False)
@@ -190,7 +191,7 @@ class ChatService:
             retry = self.llm.chat(
                 messages
                 + [{"role": "assistant", "content": raw},
-                   {"role": "user", "content": "Your answer had no valid citations. Rewrite it, citing the CONTEXT label after every statement. If the context does not support the answer, reply with the exact refusal sentence."}]
+                   {"role": "user", "content": "Revise your answer. Cite each factual statement supported by CONTEXT using its numbered reference. Do not invent citations. If a useful detail is not in CONTEXT but you can answer it reliably, put it in a separate paragraph starting **Outside your sources:**. If you cannot answer reliably, reply with the exact refusal sentence."}]
             )
             if _is_refusal(retry):
                 self.chats.add_message(chat_id, "assistant", REFUSAL, [], False)
@@ -199,14 +200,14 @@ class ChatService:
                                       _retrieved_labels(chunks), best)
             result = audit_citations(retry, chunks)
 
-        if not result.answer.strip() or not result.citations:
+        if not result.answer.strip():
             log.warning("Chat model returned no usable answer for %s", chat_id)
-            self.chats.add_message(chat_id, "assistant", REFUSAL, [], False)
-            after_turn(user_id, chat, question, REFUSAL, [], nudge=False)
-            return self._payload(chat_id, chat.title, REFUSAL, [], False,
-                                 _retrieved_labels(chunks), best)
+            result.answer = REFUSAL
+            result.citations = []
 
         stored = [self._citation_dict(c) for c in result.citations]
+        if on_chunk is not None:
+            on_chunk(result.answer)
         self.chats.add_message(chat_id, "assistant", result.answer, stored, bool(stored))
 
         # First exchange names the chat (cheap, no LLM call).

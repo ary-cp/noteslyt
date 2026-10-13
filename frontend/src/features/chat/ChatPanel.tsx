@@ -116,6 +116,35 @@ export const MarkdownBody = memo(function MarkdownBody({
 
 /* ---------------- message ---------------- */
 
+/** Expand grouped references ("[1, 2, 4]", "[1-3]") into one link per number. */
+function linkifyMultiCitations(text: string): string {
+  return text.replace(/\[(\d[\d\s,;–\-]*?)\]/g, (m, group: string) => {
+    if (/^\s*\d{1,3}\s*$/.test(group)) {
+      const n = group.trim();
+      return `[${n}](#cite-ref=${n})`;
+    }
+    // Timestamps and locator labels are not reference lists — leave alone.
+    if (/[A-Za-z:]/.test(group)) return m;
+    const nums: string[] = [];
+    for (const part of group.split(/[,;]/)) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const range = /^(\d{1,3})\s*[–\-]\s*(\d{1,3})$/.exec(trimmed);
+      if (range) {
+        const lo = Math.min(Number(range[1]), Number(range[2]));
+        const hi = Math.max(Number(range[1]), Number(range[2]));
+        if (hi - lo > 20) return m;
+        for (let n = lo; n <= hi; n++) nums.push(String(n));
+      } else if (/^\d{1,3}$/.test(trimmed)) {
+        nums.push(trimmed);
+      } else {
+        return m;
+      }
+    }
+    if (!nums.length) return m;
+    return nums.map((n) => `[${n}](#cite-ref=${n})`).join(", ");
+  });
+}
 
 const ChatMessage = memo(function ChatMessage({ msg, sources, onOpenSource }: { msg: ChatMessageOut; sources: SourceOut[]; onOpenSource: (id: string | null, locator?: CitationLocator) => void }) {
   if (msg.role === "user") {
@@ -127,13 +156,16 @@ const ChatMessage = memo(function ChatMessage({ msg, sources, onOpenSource }: { 
       </div>
     );
   }
-  const linkedAnswer = msg.content.replace(/\[(\d{1,3})\]/g, "[$1](#cite-ref=$1)");
+  // Models sometimes group references ("[1, 2, 4]", "[1-3]"); split them so
+  // every number becomes its own clickable citation. Stored answers written
+  // before the server-side audit learned this still carry the grouped form.
+  const linkedAnswer = linkifyMultiCitations(msg.content);
 
   return (
     <div className="group/msg min-w-0">
-      {msg.grounded === false && (
+      {msg.grounded === false && /\*\*Outside your sources:\*\*/i.test(msg.content) && (
         <p className="mb-2 inline-flex items-center gap-1.5 rounded-[7px] border border-[var(--warning)]/30 bg-[var(--warning-soft)] px-2.5 py-1 text-[13px] text-[var(--warning)]">
-          <AlertTriangle size={13} /> No supported answer found in the selected sources.
+          <AlertTriangle size={13} /> Includes information outside your sources.
         </p>
       )}
       <MarkdownBody text={linkedAnswer} citations={msg.citations} sources={sources} onOpenCitation={onOpenSource} />

@@ -12,10 +12,63 @@ import json
 import uuid
 from typing import Any
 
-from .base import Repo, to_record, to_records
+from .base import Repo, _coerce, to_record, to_records
 from .models import TopicRecord
 
-_FIELDS = ("id", "project_id", "slug", "name", "description", "created_at")
+
+def _union_locators(existing: list[dict], incoming: list[dict]) -> list[dict]:
+    """Order-preserving locator union (stored-shape twin of the ingest helper)."""
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for loc in list(existing or []) + list(incoming or []):
+        key = (str(loc.get("kind")), str(loc.get("value")))
+        if key not in seen:
+            seen.add(key)
+            out.append({"kind": key[0], "value": key[1]})
+    return out
+
+
+def merge_subtopics(existing: list[dict] | None, incoming: list[dict]) -> list[dict]:
+    """Union of subtopic lists by slug (cap 8); concepts and locators merge too."""
+    out: list[dict] = []
+    by_slug: dict[str, dict] = {}
+    for sub in list(existing or []) + list(incoming or []):
+        slug = str(sub.get("slug", "")).strip()
+        if not slug:
+            continue
+        if slug not in by_slug:
+            if len(out) >= 8:
+                continue
+            entry = {
+                "slug": slug,
+                "name": str(sub.get("name", ""))[:80],
+                "description": str(sub.get("description", ""))[:300],
+                "concepts": [],
+                "locators": [],
+            }
+            by_slug[slug] = entry
+            out.append(entry)
+        entry = by_slug[slug]
+        for concept in sub.get("concepts", []) or []:
+            concept = str(concept).strip()[:80]
+            if concept and concept not in entry["concepts"] and len(entry["concepts"]) < 12:
+                entry["concepts"].append(concept)
+        entry["locators"] = _union_locators(entry["locators"], sub.get("locators", []) or [])[:60]
+    return out
+
+
+def _coerce_subtopics(value: object) -> list[dict]:
+    """Parse the stored children list (jsonb dict on Postgres, text on SQLite)."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return []
+    return [v for v in value if isinstance(v, dict)] if isinstance(value, list) else []
+
+_FIELDS = ("id", "project_id", "slug", "name", "description", "subtopics", "created_at")
 _COLUMNS = ", ".join(_FIELDS)
 
 
@@ -26,15 +79,29 @@ class TopicRepo(Repo):
         slug: str,
         name: str,
         description: str = "",
+        subtopics: list[dict] | None = None,
     ) -> TopicRecord:
-        """Create or update a topic by (project_id, slug) — the natural key."""
+        """Create or update a topic by (project_id, slug) — the natural key.
+
+        `subtopics=None` leaves existing children untouched (image-topic
+        backfills); a provided list unions with them by slug via
+        `merge_subtopics`, exactly like locator merging in the pipeline."""
+        keep: list[dict] = []
+        if subtopics is not None:
+            prior = self._fetch_one(
+                "select subtopics from topics where project_id = %s and slug = %s",
+                (project_id, slug),
+            )
+            keep = _coerce_subtopics(prior["subtopics"] if prior else None)
+            keep = merge_subtopics(keep, subtopics)
         row = self._fetch_one(
-            f"insert into topics (id, project_id, slug, name, description) "
-            f"values (%s, %s, %s, %s, %s) "
+            f"insert into topics (id, project_id, slug, name, description, subtopics) "
+            f"values (%s, %s, %s, %s, %s, %s::jsonb) "
             f"on conflict (project_id, slug) do update "
-            f"set name = excluded.name, description = excluded.description "
+            f"set name = excluded.name, description = excluded.description, "
+            f"subtopics = case when %s then excluded.subtopics else topics.subtopics end "
             f"returning {_COLUMNS}",
-            (str(uuid.uuid4()), project_id, slug, name, description),
+            (str(uuid.uuid4()), project_id, slug, name, description, json.dumps(keep), subtopics is not None),
         )
         return to_record(TopicRecord, row)  # type: ignore[return-value]
 

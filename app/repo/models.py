@@ -58,6 +58,7 @@ class TopicRecord:
     slug: str
     name: str
     description: str = ""
+    subtopics: list = field(default_factory=list)
     created_at: datetime | None = None
 
 
@@ -98,6 +99,10 @@ class TopicMemoryRecord:
     attempts: int = 0
     correct: int = 0
     coverage_status: str = "not_started"
+    easiness: float = 2.5
+    repetitions: int = 0
+    interval_days: float = 0.0
+    due_at: datetime | None = None
     last_practiced_at: datetime | None = None
 
 

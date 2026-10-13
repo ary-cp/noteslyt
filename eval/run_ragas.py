@@ -16,10 +16,11 @@ exactly like the rest of the suite:
   * answer_relevancy — cosine(question, answer) via the configured embedder.
   * context_precision / context_recall — retrieved labels vs the testset's
     expected locators (locator-level, deterministic).
-  * refusal accuracy — off-material items must return the exact refusal,
-    ungrounded. (Plan target: 100%.)
+  * off-material handling — off-material items must either return the refusal
+    or clearly label a general-knowledge answer as outside the sources, with
+    no citations. (Plan target: 100%.)
 
-Gates (plan.md Phase G): faithfulness >= 0.8 and refusal accuracy == 100%.
+Gates (plan.md Phase G): faithfulness >= 0.8 and safe off-material handling == 100%.
 Everything else is reported, not gated. Each item runs in a fresh chat so
 turns never leak context into each other.
 
@@ -153,8 +154,10 @@ def main() -> int:
         assert r.status_code == 200, r.text
         ans = r.json()
         if item.get("must_refuse"):
-            ok = ans["grounded"] is False and ans["answer"] == REFUSAL and ans["citations"] == []
-            check(f"{item['id']} refused", ok, ans["answer"][:60])
+            outside = bool(re.match(r"\s*\*\*Outside your sources:\*\*", ans["answer"], re.I))
+            ok = (ans["grounded"] is False and ans["citations"] == []
+                  and (ans["answer"] == REFUSAL or outside))
+            check(f"{item['id']} clearly labeled", ok, ans["answer"][:80])
             rows.append({"id": item["id"], "refused": ok})
             continue
         exp = expected_labels(item)
@@ -176,7 +179,7 @@ def main() -> int:
     faith = sum(r["faith"] for r in grounded) / len(grounded) if grounded else 0.0
     refusal = sum(r["refused"] for r in refused) / len(refused) if refused else 0.0
     check("faithfulness >= 0.8", faith >= FAITHFULNESS_MIN, f"{faith:.3f}")
-    check("refusal accuracy == 100%", refusal == 1.0, f"{refusal:.0%}")
+    check("safe off-material handling == 100%", refusal == 1.0, f"{refusal:.0%}")
     if grounded:
         print(f"  [info] mean relevancy {sum(r['rel'] for r in grounded) / len(grounded):.3f}, "
               f"mean context P/R "

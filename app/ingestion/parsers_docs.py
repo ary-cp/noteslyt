@@ -8,7 +8,7 @@ downstream (chunker, pipeline, topics, citations) knows which parser ran.
 Locator discipline (plan.md invariant 1 — a chunk never crosses a locator):
   * docx / md / txt → `section` (one heading-delimited block)
   * pptx            → `slide`   (one slide, speaker notes included)
-  * xlsx            → `sheet`   (small sheets) or `row` ranges (wide tables)
+  * xlsx            → `row` ranges, with sheet name and column labels repeated
   * csv / tsv       → `row`     (groups of data rows)
 
 Only the seven format ids listed in plan.md Phase D are registered here
@@ -39,7 +39,6 @@ log = logging.getLogger(__name__)
 # embedding calls, so tabular data is grouped. A group is still ONE locator
 # ("Sheet Rows 1-50"), so the chunker invariant holds.
 _TABULAR_GROUP_ROWS = 50
-_XLSX_SINGLE_SHEET_MAX_ROWS = 200
 _CSV_MAX_ROWS = 2000
 _XLSX_MAX_ROWS = 5000
 
@@ -174,7 +173,7 @@ def parse_pptx(path: Path, settings: Settings) -> ParsedSource:  # noqa: ARG001
 
 
 # =============================================================================
-#  xlsx — sheet units, row-range units for wide tables
+#  xlsx — row-range units with self-contained column labels
 # =============================================================================
 def _format_cell(value) -> str:
     if value is None:
@@ -273,7 +272,26 @@ def parse_xlsx(path: Path, settings: Settings) -> ParsedSource:  # noqa: ARG001
                             locator_kind=ROW,
                             locator_value=f"{name}!{first_row}:{last_row}",
                         )
+            # Keep spreadsheet records self-contained for embedding. A whole
+            # small sheet serialized as Markdown is later split by character
+            # count, often detaching rows from their column names. Instead,
+            # repeat column labels on bounded row groups for every sheet.
+            for start in range(0, max(len(data), 1), _TABULAR_GROUP_ROWS):
+                group = data[start : start + _TABULAR_GROUP_ROWS]
+                lines = [f"Sheet: {name}. Columns: {', '.join(h for h in header if h)}."]
+                lines += [
+                    " | ".join(f"{h}: {v}" for h, v in zip(header, row) if h and v)
+                    for row in group
+                ]
+                lines = [line for line in lines if line]
+                units.append(
+                    SourceUnit(
+                        index=len(units) + 1,
+                        text="\n".join(lines),
+                        locator_kind=ROW,
+                        locator_value=f"{name}!{start + 2}:{start + 1 + len(group)}" if group else f"{name}!1:1",
                     )
+                )
     finally:
         for book in (wb, formulas):
             try:

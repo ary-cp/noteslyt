@@ -255,10 +255,9 @@ def _distance(similarity: Any) -> float:
     """Cosine distance, with NaN collapsed to 1.0 (maximally distant).
 
     A zero query vector — an empty or degenerate embedding — makes pgvector return
-    NaN similarity. The RAG gate compares `distance > max_distance`, and every
-    comparison with NaN is False, so a NaN would sail past the refusal gate and
-    feed meaningless context to the LLM. Treating it as maximally distant makes
-    the gate refuse instead.
+    NaN similarity. A zero query vector makes pgvector return NaN; treating it
+    as maximally distant keeps it ranked last instead of surfacing it as a
+    strong match. Chat lets the model judge the retrieved context.
     """
     value = 1.0 - float(similarity)
     return value if math.isfinite(value) else 1.0

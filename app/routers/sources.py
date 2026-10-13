@@ -15,6 +15,7 @@ with a readable reason rather than failing later during ingestion.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Annotated
 
 import psycopg
@@ -116,6 +117,50 @@ def _background_ingest(
 # =============================================================================
 #  Upload
 # =============================================================================
+def _ingest_parallel_ok(settings: Settings) -> bool:
+    """True when every ingest stage is API-backed and safe to overlap.
+
+    Local engines are single-resident (the vendored llama-server / audio.cpp
+    hold one model at a time, and native AV vectors run on them too), so a
+    parse running local transcription while another file embeds would evict
+    the resident model. Cloud endpoints multiplex, so overlapping files only
+    buys throughput there."
+    """
+    return (
+        settings.embedding_mode == "cloud"
+        and settings.transcription_mode == "cloud"
+        and settings.audio_embed_mode == "transcript"
+        and settings.video_embed_mode == "transcript"
+    )
+
+
+def _background_ingest_batch(
+    pipeline: IngestionPipeline,
+    storage: FileStorage,
+    sources,
+    max_workers: int = 3,
+) -> None:
+    """Ingest one upload batch concurrently (API-backed configs only).
+
+    Same per-file semantics as `_background_ingest` — each file keeps its
+    own row and failure reason — but files overlap instead of running
+    back-to-back: while file 1 embeds, file 2 already parses. Bounded at
+    three workers so one 20-file batch cannot exhaust API rate limits or
+    hold twenty parsed corpora in memory at once. SQLite serializes the
+    concurrent row transactions via busy-timeout (verified); Postgres runs
+    them truly concurrently. Exceptions stay inside
+    `_background_ingest`, which records them on the row."""
+    workers = max(1, min(max_workers, len(sources)))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ingest") as pool:
+        futures = [pool.submit(_background_ingest, pipeline, storage, source)
+                 for source in sources]
+        for future in futures:
+            try:
+                future.result()
+            except Exception:  # noqa: BLE001 — recorded on the row already
+                log.exception("batched ingest worker raised")
+
+
 @router.post(
     "/projects/{project_id}/sources",
     response_model=SourceUploadAccepted,
@@ -150,6 +195,7 @@ def upload_sources(
     accepted: list[SourceOut] = []
     rejected: list[dict] = []
 
+    pending: list = []
     for upload in files:
         filename = safe_display_name(upload.filename or "upload")
         source_type = source_type_of(filename)
@@ -186,8 +232,13 @@ def upload_sources(
             )})
             continue
         accepted.append(_to_out(source))
-        background.add_task(_background_ingest, pipeline, storage, source)
+        pending.append(source)
 
+    if len(pending) > 1 and _ingest_parallel_ok(settings):
+        background.add_task(_background_ingest_batch, pipeline, storage, list(pending))
+    else:
+        for source in pending:
+            background.add_task(_background_ingest, pipeline, storage, source)
     if not accepted and rejected:
         raise HTTPException(
             status_code=415,
@@ -281,6 +332,7 @@ def list_topics(
                 slug=topic.slug,
                 name=topic.name,
                 description=topic.description,
+                subtopics=topic.subtopics or [],
                 sources=topics.sources_for(topic.id),
             )
         )
