@@ -39,6 +39,7 @@ log = logging.getLogger(__name__)
 # embedding calls, so tabular data is grouped. A group is still ONE locator
 # ("Sheet Rows 1-50"), so the chunker invariant holds.
 _TABULAR_GROUP_ROWS = 50
+_XLSX_SINGLE_SHEET_MAX_ROWS = 200
 _CSV_MAX_ROWS = 2000
 _XLSX_MAX_ROWS = 5000
 
@@ -259,12 +260,24 @@ def parse_xlsx(path: Path, settings: Settings) -> ParsedSource:  # noqa: ARG001
                 table += ["| " + " | ".join(map(_table_cell, r)) + " |" for r in data]
                 units.append(SourceUnit(index=len(units) + 1, text="\n".join(table), locator_kind=SHEET, locator_value=name))
             else:
+                # Keep large-sheet records self-contained for embedding. A whole
+                # sheet serialized as Markdown is later split by character
+                # count, often detaching rows from their column names. Instead,
+                # repeat column labels on bounded row groups. Locator math uses
+                # original worksheet rows (row_numbers), so leading/embedded
+                # blank rows stay exact.
                 for start in range(0, len(data), _TABULAR_GROUP_ROWS):
                     group = data[start : start + _TABULAR_GROUP_ROWS]
+                    if not group:
+                        continue
                     first_row = row_numbers[start + 1]
                     last_row = row_numbers[start + len(group)]
-                    lines = [f"Sheet '{name}' rows {first_row}-{last_row}."]
-                    lines += [" | ".join(f"{h}: {v}" for h, v in zip(header, r) if v) for r in group]
+                    lines = [f"Sheet: {name}. Columns: {', '.join(h for h in header if h)}."]
+                    lines += [
+                        " | ".join(f"{h}: {v}" for h, v in zip(header, row) if h and v)
+                        for row in group
+                    ]
+                    lines = [line for line in lines if line]
                     units.append(
                         SourceUnit(
                             index=len(units) + 1,
@@ -272,26 +285,7 @@ def parse_xlsx(path: Path, settings: Settings) -> ParsedSource:  # noqa: ARG001
                             locator_kind=ROW,
                             locator_value=f"{name}!{first_row}:{last_row}",
                         )
-            # Keep spreadsheet records self-contained for embedding. A whole
-            # small sheet serialized as Markdown is later split by character
-            # count, often detaching rows from their column names. Instead,
-            # repeat column labels on bounded row groups for every sheet.
-            for start in range(0, max(len(data), 1), _TABULAR_GROUP_ROWS):
-                group = data[start : start + _TABULAR_GROUP_ROWS]
-                lines = [f"Sheet: {name}. Columns: {', '.join(h for h in header if h)}."]
-                lines += [
-                    " | ".join(f"{h}: {v}" for h, v in zip(header, row) if h and v)
-                    for row in group
-                ]
-                lines = [line for line in lines if line]
-                units.append(
-                    SourceUnit(
-                        index=len(units) + 1,
-                        text="\n".join(lines),
-                        locator_kind=ROW,
-                        locator_value=f"{name}!{start + 2}:{start + 1 + len(group)}" if group else f"{name}!1:1",
                     )
-                )
     finally:
         for book in (wb, formulas):
             try:
