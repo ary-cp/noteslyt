@@ -85,7 +85,14 @@ def _generate_studio_job(job_id, kind, payload, user_id, project_id, studio, ser
 
 
 def _iso(value) -> str:
-    return value.isoformat() if value is not None else ""
+    if value is None:
+        return ""
+    # See chats router: tag naive SQLite UTC rows so browsers don't skew.
+    if getattr(value, "tzinfo", None) is None:
+        from datetime import timezone as _tz
+
+        value = value.replace(tzinfo=_tz.utc)
+    return value.isoformat()
 
 
 @router.post("/projects/{project_id}/quiz", response_model=StudioJobOut, status_code=status.HTTP_202_ACCEPTED)

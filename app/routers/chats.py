@@ -47,7 +47,16 @@ router = APIRouter(tags=["chats"])
 
 
 def _iso(value) -> str:
-    return value.isoformat() if value is not None else ""
+    if value is None:
+        return ""
+    # Postgres timestamptz arrives aware; SQLite TEXT rows arrive naive UTC.
+    # Naive values must be tagged UTC, otherwise the browser parses them as
+    # local time and every timestamp skews by the UTC offset (e.g. ~5h in IST).
+    if getattr(value, "tzinfo", None) is None:
+        from datetime import timezone as _tz
+
+        value = value.replace(tzinfo=_tz.utc)
+    return value.isoformat()
 
 
 def _chat_out(chat, message_count: int = 0) -> ChatOut:

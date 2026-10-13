@@ -23,6 +23,7 @@ import { Dropdown } from "../../components/ui/Menu";
 import { Field, RadioGroup, Slider } from "../../components/ui/Controls";
 import { MarkdownBody } from "../chat/ChatPanel";
 import { timeAgo } from "../../lib/utils";
+import { TimeAgo } from "../../components/TimeAgo";
 
 export type StudioTool = "summary" | "flashcards" | "quiz" | "exam" | "guide" | "mindmap" | "podcast" | "slides" | "sheet" | "schedule";
 
@@ -373,7 +374,7 @@ export function StudioPanel({
                     <span className="text-[var(--text-secondary)]">{job.status === "queued" || job.status === "generating" ? <Loader2 size={16} className="animate-spin" /> : TOOLS.find((t) => t.id === job.kind)?.icon}</span>
                     <span className="min-w-0 flex-1 truncate">{job.status === "ready" ? job.title : TOOLS.find((t) => t.id === job.kind)?.title ?? job.kind}</span>
                     <span className={`shrink-0 text-[11px] ${job.status === "failed" ? "text-[var(--danger)]" : "text-[var(--text-muted)]"}`}>
-                      {job.status === "ready" ? timeAgo(job.created_at) : job.status === "failed" ? "Failed" : job.status === "queued" ? "Queued" : "Generating…"}
+                      {job.status === "ready" ? <TimeAgo iso={job.created_at} /> : job.status === "failed" ? "Failed" : job.status === "queued" ? "Queued" : "Generating…"}
                     </span>
                   </button>
                   {job.status === "failed" && (

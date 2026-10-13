@@ -67,6 +67,11 @@ MAX_FILES_PER_REQUEST = 20
 
 
 def _to_out(source) -> SourceOut:
+    created = source.created_at
+    if created is not None and getattr(created, "tzinfo", None) is None:
+        from datetime import timezone as _tz
+
+        created = created.replace(tzinfo=_tz.utc)
     return SourceOut(
         id=source.id,
         project_id=source.project_id,
@@ -80,7 +85,7 @@ def _to_out(source) -> SourceOut:
         chunk_count=source.chunk_count,
         file_url=source.file_url,
         warnings=source.warnings,
-        created_at=source.created_at.isoformat() if source.created_at else "",
+        created_at=created.isoformat() if created else "",
     )
 
 
