@@ -5,7 +5,7 @@ import remarkMath from "remark-math";
 import rehypeRaw from "rehype-raw";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { AlertTriangle, Check, Copy, Maximize2, RefreshCw, Send, Square } from "lucide-react";
+import { AlertTriangle, Check, Copy, Maximize2, Pencil, RefreshCw, Send, Square } from "lucide-react";
 import { ChatStreamError, createChat, getChat, renameChat, streamMessage } from "../../lib/api";
 import type { ChatCitation, ChatMessageOut, CitationLocator, SourceOut } from "../../lib/types";
 import { useToast } from "../../lib/toast";
@@ -146,13 +146,25 @@ function linkifyMultiCitations(text: string): string {
   });
 }
 
-const ChatMessage = memo(function ChatMessage({ msg, sources, onOpenSource }: { msg: ChatMessageOut; sources: SourceOut[]; onOpenSource: (id: string | null, locator?: CitationLocator) => void }) {
+const ChatMessage = memo(function ChatMessage({ msg, sources, onOpenSource, onEdit }: { msg: ChatMessageOut; sources: SourceOut[]; onOpenSource: (id: string | null, locator?: CitationLocator) => void; onEdit?: (content: string) => void }) {
   if (msg.role === "user") {
+    const editable = onEdit && !msg.id.startsWith("local-") && !msg.id.startsWith("stream-");
     return (
-      <div className="flex justify-end">
+      <div className="group/q flex flex-col items-end gap-1">
         <div className="max-w-[85%] rounded-[10px] rounded-br-[4px] border border-[var(--border)] bg-[var(--surface-secondary)] px-3.5 py-2.5 text-[15px] whitespace-pre-wrap">
           {msg.content}
         </div>
+        {editable && (
+          <button
+            type="button"
+            onClick={() => onEdit(msg.content)}
+            aria-label="Edit question"
+            title="Edit and re-ask in this chat"
+            className="inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-xs text-[var(--text-muted)] opacity-0 transition-opacity group-hover/q:opacity-100 hover:text-[var(--text-primary)] focus:opacity-100 focus-visible:opacity-100"
+          >
+            <Pencil size={13} /> Edit
+          </button>
+        )}
       </div>
     );
   }
@@ -241,6 +253,7 @@ export function ChatPanel({
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const loadedChatRef = useRef<string | null>(null);
   const createdChatRef = useRef<string | null>(null);
@@ -402,6 +415,16 @@ export function ChatPanel({
     setRenameValue(title);
   };
 
+  // Load a sent question back into the composer so it can be edited and
+  // re-asked in the same chat as a new turn (history is append-only).
+  const editQuestion = (content: string) => {
+    setDraft(content);
+    setSendError("");
+    nearBottom.current = true;
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    window.setTimeout(() => composerRef.current?.focus(), 0);
+  };
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* chat header */}
@@ -451,7 +474,7 @@ export function ChatPanel({
               </button>}
             </div>
           ) : (
-            messages.map((m) => <ChatMessage key={m.id} msg={m} sources={sources} onOpenSource={onOpenSource} />)
+            messages.map((m) => <ChatMessage key={m.id} msg={m} sources={sources} onOpenSource={onOpenSource} onEdit={editQuestion} />)
           )}
           {!sending && (sendError || (!loading && messages.at(-1)?.role === "user")) && (
             <div role="alert" className="rounded-lg border border-[var(--danger)]/30 bg-[var(--danger-soft)] p-3 text-sm">
@@ -476,6 +499,7 @@ export function ChatPanel({
       <div className="shrink-0 px-4 pt-2 pb-4">
         <div className="chat-composer mx-auto max-w-[760px] rounded-[12px] border border-[var(--border)] bg-[var(--input)] transition-colors">
           <textarea
+            ref={composerRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
