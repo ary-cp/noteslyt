@@ -175,7 +175,7 @@ export default function PdfPane({ url, page: citedPage, seekKey, jumpTick }: {
     <div className="pdf-viewport">
     <Document className="document-layout" file={url} onLoadSuccess={(doc) => { textCache.current.clear(); setRendered(null); setPdf(doc); setPage((n) => Math.min(n, doc.numPages)); setError(""); }}
       onLoadError={(e) => setError(e.message)} loading={<p className="min-h-80 p-4 text-sm">Opening document…</p>} error={<p className="p-4 text-sm">Unable to render PDF. Download the source to view it.</p>}>
-      {thumbnails && <PageRail count={pages} selected={page} onSelect={go} preview={n => <Page pageNumber={n} width={76} renderTextLayer={false} renderAnnotationLayer={false} loading={null} />} />}
+      {thumbnails && <PageRail count={pages} selected={page} onSelect={go} preview={(n, onAspect) => <Page pageNumber={n} width={120} onLoadSuccess={p => { const view = p.getViewport({ scale: 1 }); onAspect(view.width / view.height); }} renderTextLayer={false} renderAnnotationLayer={false} loading={null} />} />}
       <div ref={viewport} className="pdf-stage">
       <div className={`pdf-page-surface relative overflow-auto rounded-xl border bg-[#25282e] p-2 ${page === citedPage ? "border-[var(--accent)]" : "border-[var(--border)]"}`} aria-busy={rendered?.key !== spec.key}>
         {[...(rendered && rendered.key !== spec.key ? [rendered] : []), spec].map((item) => <div key={item.key} style={item.key === spec.key && rendered && rendered.key !== spec.key ? { position: "absolute", top: 8, left: 8, opacity: 0, pointerEvents: "none" } : undefined}>
