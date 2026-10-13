@@ -5,7 +5,7 @@ import { Archive, FolderOpen, MoreHorizontal, Plus } from "lucide-react";
 import { createProject, deleteProject, listProjects, updateProject } from "../lib/api";
 import type { ProjectListItem } from "../lib/types";
 import { useToast } from "../lib/toast";
-import { timeAgo } from "../lib/utils";
+import { TimeAgo } from "../components/TimeAgo";
 import { Button } from "../components/ui/Button";
 import { EmptyState, Skeleton } from "../components/ui/Feedback";
 import { ConfirmModal, Modal } from "../components/ui/Modal";
@@ -216,7 +216,7 @@ function ProjectCard({
           <p className="mt-auto pt-2 text-xs text-[var(--text-muted)]">
             {project.stats.sources} {project.stats.sources === 1 ? "source" : "sources"} · {project.stats.chats} {project.stats.chats === 1 ? "chat" : "chats"}
           </p>
-          <p className="text-xs text-[var(--text-muted)]">Updated {timeAgo(project.updated_at)}</p>
+          <p className="text-xs text-[var(--text-muted)]">Updated <TimeAgo iso={project.updated_at} /></p>
         </div>
       </article>
 

@@ -54,6 +54,7 @@ Rules:
 - Topic names must describe concepts, methods, people, events, or skills found in the text. Never use page numbers, slide numbers, timestamps, sheet names, or phrases like "page 1-10" as topic names.
 - Use headings and evidence from across the outline. Do not invent topics unsupported by the outline.
 - Prefer reusing the vocabulary already used in the material for the slug.
+- Include at most 3 representative locators per topic and 2 per subtopic; do not enumerate every matching segment.
 - Each topic also breaks into 2 to 5 subtopics: a teachable slice with its own
   id, name, description, locators (same shape, a subset of the evidence) and concepts
   (up to 6 key terms, formulas or facts, as short strings).
@@ -156,10 +157,21 @@ def extract_topics(
         request = [{"type": "text", "text": request + "\nRead the original image to identify topics. Return only topic metadata, never a caption or transcription. If no teachable content is legible, return an empty topics list."},
                    {"type": "image_url", "image_url": {"url": image_url}}]
     try:
-        data = llm.complete_json(
-            TOPIC_SYSTEM_PROMPT.format(max_topics=max_topics),
-            request,
-        )
+        try:
+            data = llm.complete_json(
+                TOPIC_SYSTEM_PROMPT.format(max_topics=max_topics), request,
+                max_tokens=min(12288, max(4096, max_topics * 1024)),
+            )
+        except ValueError:
+            # Long topic/subtopic trees can exceed output budgets or produce
+            # malformed JSON. One compact retry is preferable to losing the
+            # entire syllabus; provider failures still use the outer fallback.
+            data = llm.complete_json(
+                TOPIC_SYSTEM_PROMPT.format(max_topics=min(max_topics, 4)) +
+                "\nKeep output compact: at most 4 topics, exactly 2 subtopics per topic, "
+                "one representative locator per item, and descriptions under 12 words.",
+                request, max_tokens=4096, json_mode=True,
+            )
         topics: list[Topic] = []
         seen: set[str] = set()
         for raw in data.get("topics", []):

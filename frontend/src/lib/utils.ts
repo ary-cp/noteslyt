@@ -1,17 +1,57 @@
 import { useEffect, useState } from "react";
 
+/** Parse a server timestamp as UTC even when it carries no zone.
+ *
+ * Postgres timestamptz arrives with +00:00; SQLite TEXT rows arrive as naive
+ * UTC ("2026-10-13 07:00:00"). `new Date()` reads the naive form as *local*
+ * time, which skews every label by the UTC offset (the stuck "5h ago" in
+ * IST). Normalizing here fixes all callers at once.
+ */
+export function parseServerDate(iso: string | null | undefined): number {
+  if (!iso) return Number.NaN;
+  let s = iso.trim().replace(" ", "T");
+  if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) s += "Z";
+  return new Date(s).getTime();
+}
+
 export function timeAgo(iso: string): string {
-  const t = new Date(iso).getTime();
+  const t = parseServerDate(iso);
   if (Number.isNaN(t)) return "";
-  const s = Math.max(1, Math.floor((Date.now() - t) / 1000));
-  if (s < 60) return "just now";
+  const diff = Date.now() - t;
+  // Small future skew (server/client clocks) is still "just now".
+  const s = Math.max(1, Math.floor(diff / 1000));
+  if (s < 0 || s < 60) return "just now";
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m ago`;
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h ago`;
   const d = Math.floor(h / 24);
   if (d < 30) return `${d}d ago`;
-  return new Date(iso).toLocaleDateString();
+  return new Date(t).toLocaleDateString();
+}
+
+/** Absolute local time for tooltips, so hovering any "Xm ago" shows the real time. */
+export function formatAbsolute(iso: string): string {
+  const t = parseServerDate(iso);
+  if (Number.isNaN(t)) return "";
+  return new Date(t).toLocaleString();
+}
+
+/** Ticks every `ms` so relative labels stay live without a page refresh. */
+export function useNow(ms = 30000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), ms);
+    return () => window.clearInterval(id);
+  }, [ms]);
+  return now;
+}
+
+/** Live relative timestamp: recomputed on an interval, not just on data load. */
+export function useTimeAgo(iso: string, ms = 30000): string {
+  const now = useNow(ms);
+  void now;
+  return timeAgo(iso);
 }
 
 export function formatBytes(bytes: number | null | undefined): string {

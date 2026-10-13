@@ -19,7 +19,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 from fastapi.responses import StreamingResponse
 from openai import RateLimitError
 
-from ..chat import ChatNotFoundError
+from ..chat import ChatMessageNotFoundError, ChatNotFoundError, NoReadySourcesError
 from ..deps import (
     CurrentUser,
     NoDrift,
@@ -48,7 +48,16 @@ router = APIRouter(tags=["chats"])
 
 
 def _iso(value) -> str:
-    return value.isoformat() if value is not None else ""
+    if value is None:
+        return ""
+    # Postgres timestamptz arrives aware; SQLite TEXT rows arrive naive UTC.
+    # Naive values must be tagged UTC, otherwise the browser parses them as
+    # local time and every timestamp skews by the UTC offset (e.g. ~5h in IST).
+    if getattr(value, "tzinfo", None) is None:
+        from datetime import timezone as _tz
+
+        value = value.replace(tzinfo=_tz.utc)
+    return value.isoformat()
 
 
 def _chat_out(chat, message_count: int = 0) -> ChatOut:
@@ -236,6 +245,101 @@ async def send_message_stream(
             yield f"data: {json.dumps({'type': 'error', 'value': 'The AI provider quota is currently exhausted. Please wait before retrying or check the provider quota.'})}\n\n"
         except Exception as exc:  # noqa: BLE001 — emit a stream error instead of truncating silently
             log.exception("streamed chat failed for %s", chat_id)
+            yield f"data: {json.dumps({'type': 'error', 'value': str(exc)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        events(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/chats/{chat_id}/messages/{message_id}/edit", response_model=SendMessageResponse)
+def edit_message(
+    chat_id: uuid.UUID,
+    message_id: uuid.UUID,
+    payload: SendMessageRequest,
+    user: CurrentUser,
+    background: BackgroundTasks,
+    chats: Annotated[ChatRepo, Depends(get_chats)],
+    service=Depends(get_chat_service),
+    settings=Depends(get_settings),
+    _drift_guard: NoDrift = None,  # type: ignore[assignment]  # 409 while embedding drifted
+) -> SendMessageResponse:
+    """Edit a question in place: the old text is replaced and the answer regenerates.
+
+    The target user message and every later turn are removed first, so the
+    edited question shows where the old one was instead of appending a copy.
+    """
+    require_chat(chats, chat_id, user.id)
+    try:
+        result = service.edit_and_resend(
+            user.id, str(chat_id), str(message_id), payload.content,
+            response_style=payload.response_style,
+            source_ids=payload.source_ids,
+        )
+    except ChatNotFoundError:
+        raise HTTPException(status_code=404, detail="Chat not found.") from None
+    except ChatMessageNotFoundError:
+        raise HTTPException(status_code=404, detail="Message not found.") from None
+    except NoReadySourcesError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    try:
+        if chats.user_message_count(str(chat_id)) % max(1, settings.memory_refine_every) == 0:
+            background.add_task(service.refine_profile, user.id)
+    except Exception:  # noqa: BLE001 — refinement scheduling must not fail the turn
+        log.warning("Refinement scheduling skipped for chat %s", chat_id, exc_info=True)
+
+    return SendMessageResponse(**result)
+
+
+@router.post("/chats/{chat_id}/messages/{message_id}/edit/stream")
+async def edit_message_stream(
+    chat_id: uuid.UUID,
+    message_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    payload: SendMessageRequest,
+    user: CurrentUser,
+    chats: Annotated[ChatRepo, Depends(get_chats)],
+    service=Depends(get_chat_service),
+    settings=Depends(get_settings),
+    _drift_guard: NoDrift = None,  # type: ignore[assignment]  # 409 while embedding drifted
+) -> StreamingResponse:
+    """Stream a regenerated answer for an edited question, as SSE plus the final payload."""
+    require_chat(chats, chat_id, user.id)
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+
+    def emit(kind: str, value: object) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, (kind, value))
+
+    async def events():
+        task = asyncio.create_task(asyncio.to_thread(
+            service.edit_and_resend, user.id, str(chat_id), str(message_id), payload.content,
+            lambda token: emit("token", token),
+            payload.response_style,
+            payload.source_ids,
+            background_tasks.add_task,
+        ))
+        heartbeat = loop.time()
+        try:
+            while not task.done() or not queue.empty():
+                try:
+                    kind, value = await asyncio.wait_for(queue.get(), timeout=0.1)
+                    yield f"data: {json.dumps({'type': kind, 'value': value}, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    if loop.time() - heartbeat >= 10:
+                        yield ": working\n\n"
+                        heartbeat = loop.time()
+            result = await task
+            count = chats.user_message_count(str(chat_id))
+            if count % max(1, settings.memory_refine_every) == 0:
+                asyncio.create_task(asyncio.to_thread(service.refine_profile, user.id))
+            yield f"data: {json.dumps({'type': 'final', 'value': result}, ensure_ascii=False)}\n\n"
+        except Exception as exc:  # noqa: BLE001 — emit a stream error instead of truncating silently
+            log.exception("streamed chat edit failed for %s", chat_id)
             yield f"data: {json.dumps({'type': 'error', 'value': str(exc)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(

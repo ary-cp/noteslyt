@@ -13,19 +13,20 @@ from __future__ import annotations
 
 import io
 import logging
-import shutil
 import subprocess
 from pathlib import Path
+
+from ..ffmpeg import ffmpeg_exe
 
 log = logging.getLogger(__name__)
 
 
 def _ffmpeg() -> str:
-    exe = shutil.which("ffmpeg")
+    exe = ffmpeg_exe()
     if not exe:
         raise RuntimeError(
-            "Video frame extraction needs `ffmpeg` on PATH. "
-            "Install ffmpeg (https://ffmpeg.org/download.html)."
+            "Video frame extraction needs the bundled `ffmpeg`, and none was found "
+            "(no shipped binary, and none on PATH)."
         )
     return exe
 

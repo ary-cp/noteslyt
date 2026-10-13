@@ -7,12 +7,13 @@
  * the cited block. Audio/video pin a compact player above the transcript.
  */
 
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Download, FileText } from "lucide-react";
 import { fetchSourceBlob, getSourceContent } from "../../lib/api";
 import type { SourceOut, ViewerTarget } from "../../lib/types";
 import { mediaKind } from "../../lib/sourceKind";
-import { citationLabel, formatDuration, parseTimestamp, timeAgo } from "../../lib/utils";
+import { citationLabel, formatDuration, parseTimestamp } from "../../lib/utils";
+import { TimeAgo } from "../../components/TimeAgo";
 import {
   enhanceTableMath,
   findPageAnchor,
@@ -20,6 +21,7 @@ import {
   scrollElIntoView,
   spliceCiteMarkers,
 } from "../../lib/highlight";
+import { TranscriptSpellings } from "./TranscriptSpellings";
 import MediaPane from "./MediaPane";
 const PdfPane = lazy(() => import("./PdfPane"));
 import { MarkdownBody } from "../chat/ChatPanel";
@@ -94,6 +96,8 @@ export function SourceReader({
   onBack: () => void;
 }) {
   const kind = mediaKind(source.source_type);
+  const [transcriptRevision, setTranscriptRevision] = useState(0);
+  const transcriptUpdated = useCallback(() => setTranscriptRevision(v => v + 1), []);
   const [markdown, setMarkdown] = useState<string | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [rawText, setRawText] = useState<string | null>(null);
@@ -145,7 +149,7 @@ export function SourceReader({
     return () => {
       live = false;
     };
-  }, [source.id, source.status, kind]);
+  }, [source.id, source.status, kind, transcriptRevision]);
 
   useEffect(() => {
     if (kind !== "video" && kind !== "audio" && kind !== "image" && kind !== "text" && kind !== "pdf") return;
@@ -204,7 +208,7 @@ export function SourceReader({
               {source.filename}
             </h2>
             <p className="text-xs text-[var(--text-muted)]">
-              {source.source_type.toUpperCase()} · {source.status === "ready" ? "Ready" : source.status} · {timeAgo(source.created_at)}
+              {source.source_type.toUpperCase()} · {source.status === "ready" ? "Ready" : source.status} · <TimeAgo iso={source.created_at} />
             </p>
           </div>
           <button
@@ -226,6 +230,7 @@ export function SourceReader({
 
       {/* reader body */}
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        {(kind === "audio" || kind === "video") && <TranscriptSpellings key={source.id} sourceId={source.id} ready={source.status === "ready"} onUpdated={transcriptUpdated} />}
         {!!source.warnings?.length && <details className="mb-3 rounded-lg border border-[var(--border)] p-3 text-xs text-[var(--text-secondary)]">
           <summary className="cursor-pointer">Source notes ({source.warnings.length})</summary>
           <ul className="mt-2 list-disc space-y-1 pl-4">{source.warnings.map((warning, i) => <li key={i}>{typeof warning === "string" ? warning : JSON.stringify(warning)}</li>)}</ul>

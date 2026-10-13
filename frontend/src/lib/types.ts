@@ -47,6 +47,7 @@ export interface HealthResponse {
   projects: number;
   frontend?: string;
   embedding_drift?: string;
+  ffmpeg?: string;
 }
 
 /** `app/schemas.py: UserOut` */
@@ -559,3 +560,5 @@ export interface LearnerResponse {
   document_id: string;
   mastery: TopicMastery[];
 }
+
+export interface TranscriptSpellingsRequest { replacements: Record<string, string>; }

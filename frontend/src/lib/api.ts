@@ -319,20 +319,31 @@ export const deleteChat = (id: string): Promise<void> =>
 export const sendMessage = (id: string, content: string): Promise<SendMessageResponse> =>
   request(`/chats/${id}/messages`, json({ content }));
 
-export class ChatStreamError extends Error {}
-
-export async function streamMessage(
-  id: string,
+/**
+ * Edit a question in place: the old text is replaced where it was and the
+ * answer regenerates (later turns are removed server-side too).
+ */
+export const editMessage = (
+  chatId: string,
+  messageId: string,
   content: string,
-  onToken: (token: string) => void,
   responseStyle: "default" | "precise" | "explanatory" = "default",
   sourceIds?: string[],
+): Promise<SendMessageResponse> =>
+  request(`/chats/${chatId}/messages/${messageId}/edit`, json({ content, response_style: responseStyle, source_ids: sourceIds }));
+
+export class ChatStreamError extends Error {}
+
+async function streamPost(
+  path: string,
+  body: unknown,
+  onToken: (token: string) => void,
   signal?: AbortSignal,
 ): Promise<SendMessageResponse> {
   const headers = new Headers({ "Content-Type": "application/json", Accept: "text/event-stream" });
   if (bearer) headers.set("Authorization", `Bearer ${bearer}`);
-  const response = await fetch(`${API_BASE}/chats/${id}/messages/stream`, {
-    method: "POST", headers, signal, body: JSON.stringify({ content, response_style: responseStyle, source_ids: sourceIds }),
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST", headers, signal, body: JSON.stringify(body),
   });
   if (!response.ok) {
     let detail = response.statusText;
@@ -371,6 +382,40 @@ export async function streamMessage(
   }
   if (!final) throw new ApiError("The response stream ended before the answer was finalized.", 500);
   return final;
+}
+
+export async function streamMessage(
+  id: string,
+  content: string,
+  onToken: (token: string) => void,
+  responseStyle: "default" | "precise" | "explanatory" = "default",
+  sourceIds?: string[],
+  signal?: AbortSignal,
+): Promise<SendMessageResponse> {
+  return streamPost(
+    `/chats/${id}/messages/stream`,
+    { content, response_style: responseStyle, source_ids: sourceIds },
+    onToken,
+    signal,
+  );
+}
+
+/** Stream a regenerated answer for an edited question (replaces in place). */
+export async function streamEditMessage(
+  chatId: string,
+  messageId: string,
+  content: string,
+  onToken: (token: string) => void,
+  responseStyle: "default" | "precise" | "explanatory" = "default",
+  sourceIds?: string[],
+  signal?: AbortSignal,
+): Promise<SendMessageResponse> {
+  return streamPost(
+    `/chats/${chatId}/messages/${messageId}/edit/stream`,
+    { content, response_style: responseStyle, source_ids: sourceIds },
+    onToken,
+    signal,
+  );
 }
 
 // ------------------------------------------------------------------ memory
@@ -502,3 +547,6 @@ export const answerQuestion = (
 
 export const getLearner = (userId: string, documentId: string): Promise<LearnerResponse> =>
   request(`/learner/${encodeURIComponent(userId)}/${documentId}`);
+
+export const correctTranscriptSpellings = (id: string, replacements: Record<string, string>): Promise<SourceOut> =>
+  request(`/sources/${id}/transcript-spellings`, { method: "POST", body: JSON.stringify({ replacements }) });

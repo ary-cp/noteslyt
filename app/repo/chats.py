@@ -109,6 +109,50 @@ class ChatRepo(Repo):
         )
         return to_records(ChatMessageRecord, rows)  # type: ignore[return-value]
 
+    def get_message_owned(self, chat_id: str, message_id: str, user_id: str) -> ChatMessageRecord | None:
+        """One message, or None for foreign/missing ids (never raises for others' data)."""
+        row = self._fetch_one(
+            f"select {', '.join('m.' + f for f in _MSG_FIELDS)} from chat_messages m "
+            f"join chats c on c.id = m.chat_id "
+            f"join projects p on p.id = c.project_id "
+            f"where m.id = %s and m.chat_id = %s and p.user_id = %s",
+            (message_id, chat_id, user_id),
+        )
+        return to_record(ChatMessageRecord, row)
+
+    def truncate_from(self, chat_id: str, message_id: str) -> bool:
+        """Delete a message and every later turn (edit = rewrite from that point).
+
+        Returns False when the message id is not in this chat. Ordering matches
+        `list_messages` (created_at asc), so callers can mirror the cut locally.
+        A rolling summary pointing into the cut is cleared — it describes turns
+        that no longer exist.
+        """
+        rows = self._fetch_all(
+            "select id from chat_messages where chat_id = %s order by created_at asc, id asc",
+            (chat_id,),
+        )
+        ids = [str(r["id"]) for r in rows]
+        if message_id not in ids:
+            return False
+        doomed = ids[ids.index(message_id):]
+        placeholders = ", ".join(["%s"] * len(doomed))
+        with self.db.transaction() as conn:
+            conn.execute(
+                f"delete from chat_messages where chat_id = %s and id in ({placeholders})",
+                (chat_id, *doomed),
+            )
+            row = conn.execute(
+                "select summarized_through from chats where id = %s", (chat_id,)
+            ).fetchone()
+            through = str(row["summarized_through"]) if row and row["summarized_through"] else None
+            if through and through in doomed:
+                conn.execute(
+                    "update chats set summary = %s, summarized_through = %s where id = %s",
+                    ("", None, chat_id),
+                )
+        return True
+
     def count_messages(self, chat_id: str) -> int:
         with self.db.connection() as conn:
             row = conn.execute(

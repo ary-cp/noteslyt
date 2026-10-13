@@ -60,6 +60,18 @@ class SourceRepo(Repo):
             (project_id, project_id, *source_ids, per_source),
         )
 
+    def neighboring_segments(self, project_id: str, source_id: str, start: float, end: float):
+        """Nearby speech, still bounded to the selected ready source/project."""
+        return self._fetch_all(
+            "select c.id,c.source_id,c.topic_id,c.text,c.locator_kind,c.locator_value,"
+            "c.heading,c.start_ts,c.end_ts from chunks c join sources s on s.id=c.source_id "
+            "where c.project_id=%s and s.project_id=%s and s.status='ready' "
+            "and c.source_id=%s and c.locator_kind='segment' "
+            "and c.start_ts >= %s and c.start_ts <= %s "
+            "and c.start_ts <> %s order by abs(c.start_ts - %s),c.chunk_index limit 2",
+            (project_id, project_id, source_id, max(0, start-20), end+20, start, start),
+        )
+
     def list_segments(self, source_id: str, user_id: str) -> list[dict[str, Any]]:
         """Timed chunks for the viewer's transcript rail, ownership-checked.
 
@@ -161,6 +173,15 @@ class SourceRepo(Repo):
             f"update sources set {', '.join(sets)} where id = %s",
             tuple(params),
         )
+
+    def queue_transcript_update(self, source_id: str) -> bool:
+        """Claim a ready source once; concurrent edits must not lose corrections."""
+        row = self._fetch_one(
+            "update sources set status = 'queued', status_detail = %s "
+            "where id = %s and status = 'ready' returning id",
+            ("Updating transcript spellings and search index", source_id),
+        )
+        return row is not None
 
     def mark_failed(self, source_id: str, reason: str) -> None:
         """A readable failure. The reason is surfaced to the learner, not swallowed."""

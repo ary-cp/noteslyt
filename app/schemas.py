@@ -114,6 +114,10 @@ class SourceOut(BaseModel):
     created_at: str
 
 
+class TranscriptSpellingsRequest(BaseModel):
+    replacements: dict[str, str] = Field(min_length=1, max_length=50)
+
+
 class SourceUploadAccepted(BaseModel):
     """Returned by POST /projects/{id}/sources — ingestion runs in the background."""
 
@@ -501,6 +505,7 @@ class HealthResponse(BaseModel):
     projects: int
     frontend: str = ""                # served bundle dir, or "" when API-only
     embedding_drift: str = ""         # non-empty when vector routes are 409 (re-embed or revert)
+    ffmpeg: str = ""                  # "bundled" | "system" | "missing" — which ffmpeg the backend resolves
 
 
 # ------------------------------------------------------------------- settings

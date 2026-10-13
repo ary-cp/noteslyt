@@ -3,7 +3,7 @@ import { useMemo, useRef, useState } from "react";
 import { Check, MessageSquarePlus, Minus, PanelLeft, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import type { ChatOut, SourceOut } from "../../lib/types";
 import { SourceTypeIcon, mediaKind, statusLabel, statusTone } from "../../lib/sourceKind";
-import { timeAgo } from "../../lib/utils";
+import { TimeAgo } from "../../components/TimeAgo";
 import { Badge, EmptyState, ProgressBar } from "../../components/ui/Feedback";
 import { IconButton } from "../../components/ui/Button";
 
@@ -274,7 +274,7 @@ export function SourcesPanel({
               <button type="button" onClick={() => onOpenChat(c.id)} className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 py-[7px] text-left text-[13px]">
               <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${c.id === activeChatId ? "bg-[var(--accent)]" : "bg-[var(--border-strong)]"}`} />
               <span className="min-w-0 flex-1 truncate">{c.title}</span>
-              <span className="shrink-0 text-[11px] text-[var(--text-muted)]">{timeAgo(c.last_message_at)}</span>
+              <TimeAgo iso={c.last_message_at} className="shrink-0 text-[11px] text-[var(--text-muted)]" />
               </button>
               <button type="button" aria-label={`Delete chat ${c.title}`} title="Delete chat" onClick={() => onDeleteChat(c)} className="cursor-pointer rounded p-1 text-[var(--text-muted)] opacity-0 hover:bg-[var(--danger-soft)] hover:text-[var(--danger)] group-hover:opacity-100 focus:opacity-100">
                 <Trash2 size={13} />

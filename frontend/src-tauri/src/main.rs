@@ -53,6 +53,74 @@ fn backend_responds(port: u16) -> bool {
     stream.read_to_string(&mut response).is_ok() && response.starts_with("HTTP/1.1 200")
 }
 
+/// OS-specific ffmpeg bundle subdir (matches `frontend/scripts/fetch-ffmpeg.mjs`).
+fn ffmpeg_subdir() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "windows-x64"
+    } else if cfg!(target_os = "macos") {
+        if cfg!(target_arch = "aarch64") {
+            "macos-arm64"
+        } else {
+            "macos-x64"
+        }
+    } else {
+        "linux-x64"
+    }
+}
+
+fn exe_name(base: &str) -> String {
+    if cfg!(target_os = "windows") {
+        format!("{base}.exe")
+    } else {
+        base.to_string()
+    }
+}
+
+/// Locate the shipped ffmpeg/ffprobe pair. The bundle ALWAYS wins over any
+/// system install: when these files exist the backend is pointed at them and
+/// never falls back to PATH.
+fn bundled_ffmpeg(ffmpeg_root: &PathBuf) -> (Option<PathBuf>, Option<PathBuf>) {
+    let dir = ffmpeg_root.join(ffmpeg_subdir());
+    // Older dev checkouts may have flattened binaries directly under the root.
+    let candidates = [dir.clone(), ffmpeg_root.clone()];
+    let mut ffmpeg = None;
+    let mut ffprobe = None;
+    for base in &candidates {
+        let f = base.join(exe_name("ffmpeg"));
+        if f.is_file() && ffmpeg.is_none() {
+            ffmpeg = Some(f);
+        }
+        let p = base.join(exe_name("ffprobe"));
+        if p.is_file() && ffprobe.is_none() {
+            ffprobe = Some(p);
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for exe in ffmpeg.iter().chain(ffprobe.iter()) {
+            if let Ok(meta) = fs::metadata(exe) {
+                let mut perms = meta.permissions();
+                if perms.mode() & 0o111 == 0 {
+                    perms.set_mode(0o755);
+                    let _ = fs::set_permissions(exe, perms);
+                }
+            }
+        }
+    }
+    (ffmpeg, ffprobe)
+}
+
+fn prepend_to_path(dir: &PathBuf) {
+    let mut paths = vec![dir.clone()];
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    if let Ok(joined) = std::env::join_paths(paths) {
+        std::env::set_var("PATH", &joined);
+    }
+}
+
 fn writable_data_dir(path: &PathBuf) -> std::io::Result<()> {
     fs::create_dir_all(path)?;
     let probe = path.join(format!(".noteslyt-write-check-{}", std::process::id()));
@@ -134,6 +202,28 @@ fn start_backend(app: &AppHandle) -> Result<Option<Child>, String> {
         dev_root.join("frontend").join("dist")
     };
 
+    // Bundled ffmpeg: the installer ships every OS build under ffmpeg/;
+    // the backend is pointed at this machine's subdir and the bundle
+    // ALWAYS wins over any system install (no PATH fallback).
+    let ffmpeg_root = if packaged {
+        resource_dir.join("ffmpeg")
+    } else {
+        dev_root
+            .join("frontend")
+            .join("src-tauri")
+            .join("binaries-ffmpeg")
+    };
+    let (bundled_ffmpeg_exe, bundled_ffprobe_exe) = bundled_ffmpeg(&ffmpeg_root);
+    if let Some(exe) = bundled_ffmpeg_exe.as_ref().and_then(|p| p.parent()) {
+        prepend_to_path(&exe.to_path_buf());
+    }
+    if bundled_ffmpeg_exe.is_none() {
+        eprintln!(
+            "NotesLyt: no bundled ffmpeg found under {} — media ingestion falls back to system PATH. Run `npm run ffmpeg:fetch` in frontend/.",
+            ffmpeg_root.display()
+        );
+    }
+
     let mut command = if packaged {
         Command::new(
             resource_dir
@@ -159,9 +249,16 @@ fn start_backend(app: &AppHandle) -> Result<Option<Child>, String> {
         .env("FRONTEND_DIR", &frontend_dir)
         .env("MIGRATIONS_DIR", &migrations_dir)
         .env("SQLITE_MIGRATIONS_DIR", migrations_dir.join("sqlite"))
+        .env("NOTESLYT_RESOURCE_DIR", &resource_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if let Some(exe) = bundled_ffmpeg_exe.as_ref() {
+        command.env("FFMPEG_PATH", exe);
+    }
+    if let Some(exe) = bundled_ffprobe_exe.as_ref() {
+        command.env("FFPROBE_PATH", exe);
+    }
     if packaged {
         command
             .env_remove("DATABASE_URL")

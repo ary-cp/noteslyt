@@ -8,7 +8,6 @@ purely through `.env` (`TRANSCRIPTION_*`).
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +15,7 @@ from pathlib import Path
 from openai import OpenAI
 
 from .config import Settings
+from .ffmpeg import ffmpeg_exe, ffprobe_exe
 
 
 @dataclass
@@ -80,22 +80,53 @@ def parse_srt_vtt(text: str) -> list[Segment]:
     return segments
 
 
-def audio_duration_s(path: Path) -> float:
-    """Duration of an audio/video file in seconds via ffprobe, 0.0 if unknown."""
-    ffprobe = shutil.which("ffprobe")
-    if not ffprobe:
-        # ffmpeg-only installs still ship no ffprobe on Windows; try ffmpeg -i.
-        return 0.0
+def _duration_via_ffmpeg(ffmpeg: str, path: Path) -> float:
+    """Parse `Duration: HH:MM:SS.xx` from `ffmpeg -i` stderr.
+
+    Some bundled builds (notably macOS) ship no ffprobe; ffmpeg itself always
+    reports the container duration, which is good enough for segment layout.
+    """
     try:
         proc = subprocess.run(
-            [ffprobe, "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            [ffmpeg, "-hide_banner", "-i", str(path)],
             capture_output=True, timeout=60, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        return float((proc.stdout or b"").decode().strip() or 0.0)
     except Exception:
         return 0.0
+    text = (proc.stderr or b"").decode(errors="replace")
+    match = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", text)
+    if not match:
+        return 0.0
+    try:
+        hours, minutes, seconds = match.groups()
+        return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    except ValueError:
+        return 0.0
+
+
+def audio_duration_s(path: Path) -> float:
+    """Duration of an audio/video file in seconds, 0.0 if unknown.
+
+    Prefers the bundled-first ffprobe; when the bundle ships ffmpeg-only,
+    falls back to parsing `ffmpeg -i` output instead of giving up.
+    """
+    ffprobe = ffprobe_exe()
+    if ffprobe:
+        try:
+            proc = subprocess.run(
+                [ffprobe, "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+                capture_output=True, timeout=60, check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            return float((proc.stdout or b"").decode().strip() or 0.0)
+        except Exception:
+            pass
+    ffmpeg = ffmpeg_exe()
+    if ffmpeg:
+        return _duration_via_ffmpeg(ffmpeg, path)
+    return 0.0
 
 
 def synthesize_segments(text: str, audio_path: Path, target_s: float = 20.0) -> list[Segment]:

@@ -68,7 +68,16 @@ def _coerce_field(cls: type[T], name: str, value: Any) -> Any:  # type: ignore[v
     if isinstance(value, str):
         if "datetime" in hint:
             try:
-                return datetime.fromisoformat(value)
+                parsed = datetime.fromisoformat(value)
+                # SQLite stores UTC without a zone (datetime('now')); treat
+                # naive values as UTC so .isoformat() emits +00:00 and the
+                # frontend stops reading them as local time (the "always 5h
+                # ago" skew in IST).
+                if parsed.tzinfo is None:
+                    from datetime import timezone as _tz
+
+                    parsed = parsed.replace(tzinfo=_tz.utc)
+                return parsed
             except ValueError:
                 return _coerce(value)
         if getattr(cls, "__name__", "") in _JSON_FIELDS and name in _JSON_FIELDS[cls.__name__]:  # type: ignore[attr-defined]
@@ -105,7 +114,12 @@ def parse_times(row: dict[str, Any], *keys: str) -> dict[str, Any]:
         value = row.get(key)
         if isinstance(value, str):
             try:
-                row[key] = _datetime.fromisoformat(value)
+                parsed = _datetime.fromisoformat(value)
+                if parsed.tzinfo is None:
+                    from datetime import timezone as _tz
+
+                    parsed = parsed.replace(tzinfo=_tz.utc)
+                row[key] = parsed
             except ValueError:
                 pass
     return row

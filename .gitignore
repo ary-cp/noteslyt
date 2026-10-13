@@ -12,6 +12,8 @@ frontend/.env
 frontend/.env.local
 frontend/src-tauri/target/
 frontend/src-tauri/backend-runtime/
+# Fetched at build time via `npm run ffmpeg:fetch` (large, per-OS binaries).
+frontend/src-tauri/binaries-ffmpeg/
 
 # Editors / OS
 .vscode/

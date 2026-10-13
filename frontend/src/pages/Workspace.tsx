@@ -141,6 +141,12 @@ export default function Workspace({
     }
   }, [projectId]);
 
+  useEffect(() => {
+    const update = () => { void refreshSources(); };
+    window.addEventListener("noteslyt:sources-updated", update);
+    return () => window.removeEventListener("noteslyt:sources-updated", update);
+  }, [refreshSources]);
+
   const refreshChats = useCallback(async () => {
     if (!projectId) return;
     try {

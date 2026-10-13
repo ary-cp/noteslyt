@@ -84,6 +84,22 @@ def main():
     assert all("on_chunk" not in call.kwargs for call in service.llm.chat.call_args_list)
     print("PASS: repair uncited paragraphs once; refuse if repair remains unsupported")
 
+    anchor = chunk("The lecturer is Gilbert Strang.")
+    anchor.locator_kind, anchor.locator_value = "segment", "0:08"
+    anchor.start_ts, anchor.end_ts = 8.0, 19.0
+    service.store.query.return_value = [anchor]
+    service.sources.neighboring_segments = Mock(return_value=[dict(
+        id="neighbor", source_id="source", topic_id=None, text="The book is Introduction to Linear Algebra.",
+        locator_kind="segment", locator_value="0:19", heading="", start_ts=19.0, end_ts=34.0)])
+    def adjacent_reply(messages, **kwargs):
+        assert "Introduction to Linear Algebra" in str(messages)
+        return "Gilbert Strang [1] teaches from Introduction to Linear Algebra [2]."
+    service.llm.chat = adjacent_reply
+    result = service.send("user", "chat", "Who teaches this and which book?")
+    assert len(result["citations"]) == 2 and result["citations"][1]["locator_value"] == "0:19"
+    service.sources.neighboring_segments.assert_called_once_with("project", "source", 8.0, 19.0)
+    print("PASS: nearby speech retains separate locators and source/project scope")
+
     assert rate_limit_delay(quota()) == 39.5
     assert rate_limit_delay(quota("cooldown", **{"retry-after": "12"})) == 12
     assert rate_limit_delay(quota("{'retryDelay': '22s'}")) == 22
@@ -137,6 +153,16 @@ def main():
     assert "SOURCE EXCERPTS:\nreal source" in judge.complete_json.call_args.args[1]
     assert judge_faithfulness(judge, "answer", "")[0] is None
     print("PASS: judge receives evidence; missing/invalid judgments cannot score 100%")
+    from app.ingestion.topics import extract_topics
+    from app.ingestion.units import SourceUnit
+    topic_llm = NS(complete_json=Mock(side_effect=[ValueError("malformed JSON"), {"topics": [
+        {"id": "matrix-methods", "name": "Matrix Methods", "description": "Solve equations",
+         "locators": [{"kind": "page", "value": "1"}], "subtopics": []}]}]))
+    recovered = extract_topics(topic_llm, [SourceUnit(index=1, text="Matrices solve equations.", locator_kind="page", locator_value="1")])
+    assert recovered[0].name == "Matrix Methods" and topic_llm.complete_json.call_count == 2
+    assert topic_llm.complete_json.call_args.kwargs["json_mode"] is True
+    print("PASS: malformed topic JSON receives one bounded compact retry")
+
     import tempfile
     from openpyxl import Workbook
     from app.config import Settings
