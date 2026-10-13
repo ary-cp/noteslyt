@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..learner.bkt import BKTParams, label, update
+from ..learner.sm2 import is_due, review
 from .base import Repo, to_record, to_records
 from .models import TopicMemoryRecord
 
@@ -49,6 +50,8 @@ class ProjectMemoryRepo(Repo):
             "select %s as user_id, t.project_id, t.id as topic_id, t.slug, t.name, "
             "t.description, coalesce(m.p_mastery, %s) as p_mastery, "
             "coalesce(m.attempts, 0) as attempts, coalesce(m.correct, 0) as correct, "
+            "coalesce(m.easiness, 2.5) as easiness, coalesce(m.repetitions, 0) as repetitions, "
+            "coalesce(m.interval_days, 0) as interval_days, m.due_at, "
             "coalesce(m.coverage_status, 'not_started') as coverage_status, "
             "m.last_practiced_at "
             "from topics t left join project_memory m "
@@ -61,6 +64,7 @@ class ProjectMemoryRepo(Repo):
     def get(self, user_id: str, project_id: str, topic_id: str) -> TopicMemoryRecord | None:
         row = self._fetch_one(
             "select user_id, project_id, topic_id, p_mastery, attempts, correct, "
+            "easiness, repetitions, interval_days, due_at, "
             "coverage_status, last_practiced_at from project_memory "
             "where user_id = %s and project_id = %s and topic_id = %s",
             (user_id, project_id, topic_id),
@@ -69,20 +73,34 @@ class ProjectMemoryRepo(Repo):
 
     # ------------------------------------------------------------ writes
     def apply_result(
-        self, user_id: str, project_id: str, topic_id: str, correct: bool, params: BKTParams
+        self, user_id: str, project_id: str, topic_id: str, correct: bool, params: BKTParams,
+        *, guess: float | None = None, slip: float | None = None,
     ) -> dict[str, Any]:
-        """Full BKT update from a graded assessment attempt (Phase F)."""
+        """Full BKT update from a graded assessment attempt plus an SM-2 review tick.
+
+        `guess`/`slip` carry the item calibration (format + difficulty); without
+        them the update is exactly the legacy uncalibrated one."""
         with self.learner_write(user_id, project_id):
             row = self.get(user_id, project_id, topic_id)
             p = float(row.p_mastery) if row else self.p_init
             attempts = int(row.attempts) + 1 if row else 1
             hits = int(row.correct) + (1 if correct else 0) if row else (1 if correct else 0)
-            new_p = update(p, correct, params)
+            new_p = update(p, correct, params, guess=guess, slip=slip)
+            easiness, repetitions, interval_days, due_at = review(
+                getattr(row, "easiness", 2.5) or 2.5,
+                getattr(row, "repetitions", 0) or 0,
+                getattr(row, "interval_days", 0.0) or 0.0,
+                correct,
+            )
             status = derive_coverage(new_p, attempts, self.p_init)
-            return self._upsert(user_id, project_id, topic_id, new_p, attempts, hits, status)
+            return self._upsert(user_id, project_id, topic_id, new_p, attempts, hits, status,
+                                easiness, repetitions, interval_days, due_at)
 
     def apply_nudge(self, user_id: str, project_id: str, topic_id: str, correct: bool) -> dict[str, Any]:
-        """Bounded chat-evidence step: ±5% of the remaining distance, counters untouched."""
+        """Bounded chat-evidence step: ±5% of the remaining distance, counters untouched.
+
+        SM-2 review state passes through unchanged — conversation is exposure,
+        not retrieval practice, so it never moves the schedule."""
         with self.learner_write(user_id, project_id):
             row = self.get(user_id, project_id, topic_id)
             p = float(row.p_mastery) if row else self.p_init
@@ -90,22 +108,34 @@ class ProjectMemoryRepo(Repo):
             hits = int(row.correct) if row else 0
             new_p = round(min(max(p + (0.05 * (1 - p) if correct else -0.05 * p), 0.02), 0.98), 4)
             status = derive_coverage(new_p, attempts, self.p_init)
-            return self._upsert(user_id, project_id, topic_id, new_p, attempts, hits, status)
+            return self._upsert(user_id, project_id, topic_id, new_p, attempts, hits, status,
+                                getattr(row, "easiness", 2.5) or 2.5,
+                                getattr(row, "repetitions", 0) or 0,
+                                getattr(row, "interval_days", 0.0) or 0.0,
+                                getattr(row, "due_at", None))
 
     def _upsert(
         self, user_id: str, project_id: str, topic_id: str,
         p: float, attempts: int, correct: int, status: str,
+        easiness: float = 2.5, repetitions: int = 0, interval_days: float = 0.0,
+        due_at: object = None,
     ) -> dict[str, Any]:
         row = self._fetch_one(
             "insert into project_memory "
-            "(user_id, project_id, topic_id, p_mastery, attempts, correct, coverage_status, last_practiced_at, updated_at) "
-            "values (%s, %s, %s, %s, %s, %s, %s, now(), now()) "
+            "(user_id, project_id, topic_id, p_mastery, attempts, correct, coverage_status, "
+            "easiness, repetitions, interval_days, due_at, last_practiced_at, updated_at) "
+            "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now()) "
             "on conflict (user_id, project_id, topic_id) do update set "
             "p_mastery = excluded.p_mastery, attempts = excluded.attempts, "
+            "easiness = excluded.easiness, repetitions = excluded.repetitions, "
+            "interval_days = excluded.interval_days, due_at = excluded.due_at, "
             "correct = excluded.correct, coverage_status = excluded.coverage_status, "
             "last_practiced_at = now(), updated_at = now() "
-            "returning user_id, project_id, topic_id, p_mastery, attempts, correct, coverage_status, last_practiced_at",
-            (user_id, project_id, topic_id, p, attempts, correct, status),
+            "returning user_id, project_id, topic_id, p_mastery, attempts, correct, coverage_status, "
+            "easiness, repetitions, interval_days, due_at, last_practiced_at",
+            (user_id, project_id, topic_id, p, attempts, correct, status,
+             easiness, repetitions, interval_days,
+             due_at.isoformat() if hasattr(due_at, "isoformat") else due_at),
         )
         assert row is not None
         return {k: (str(v) if k.endswith("_id") else v) for k, v in row.items()}

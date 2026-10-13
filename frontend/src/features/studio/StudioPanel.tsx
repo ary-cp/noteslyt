@@ -594,25 +594,40 @@ function buildSchedule(items: { name: string; p: number }[], examDateISO: string
  * they drive adaptive quizzes but are never disclosed.
  */
 function LearningProfileCard({ learner, onStartDiagnostic }: { learner: LearnerOut; onStartDiagnostic: () => void }) {
-  const overall = Math.round((learner.topics.reduce((sum, t) => sum + t.p_mastery, 0) / learner.topics.length) * 100);
-  const practiced = learner.topics.some((t) => t.attempts > 0);
+  // Only topics with real evidence (a quiz attempt or chat signal) count.
+  // Unseen topics carry the BKT prior (0.30) as an update seed — showing it
+  // as "30% mastery" on a fresh project is misleading, so they are excluded
+  // until the learner generates evidence.
+  const assessed = learner.topics.filter((t) => t.coverage_status !== "not_started");
+  const practiced = assessed.length > 0;
+  const overall = practiced
+    ? Math.round((assessed.reduce((sum, t) => sum + t.p_mastery, 0) / assessed.length) * 100)
+    : null;
   return (
     <div className="mt-4 rounded-[8px] border border-[var(--border)] bg-[var(--surface)] p-3">
       <p className="text-xs font-medium text-[var(--text-muted)]">YOUR LEARNING PROFILE</p>
       <div className="mt-2 flex items-center gap-3">
-        <p className="text-[28px] font-semibold leading-none">{overall}%</p>
+        <p className="text-[28px] font-semibold leading-none">{practiced ? `${overall}%` : "—"}</p>
         <div className="min-w-0 flex-1">
           <div className="h-1.5 overflow-hidden rounded-full bg-[var(--border)]">
-            <div className="h-full rounded-full bg-[var(--accent)]" style={{ width: `${overall}%` }} />
+            {practiced && <div className="h-full rounded-full bg-[var(--accent)]" style={{ width: `${overall}%` }} />}
           </div>
-          <p className="mt-1.5 text-xs text-[var(--text-muted)]">Overall mastery · updates after each quiz answer.</p>
+          <p className="mt-1.5 text-xs text-[var(--text-muted)]">
+            {practiced
+              ? `Overall mastery across ${assessed.length} assessed topic${assessed.length > 1 ? "s" : ""} · updates after each quiz answer.`
+              : "Not assessed yet · answer a quiz to measure mastery."}
+          </p>
         </div>
       </div>
+      {(learner.due_review ?? 0) > 0 && (
+        <p className="mt-2 text-xs text-[var(--text-secondary)]">
+          {learner.due_review} topic{learner.due_review > 1 ? "s" : ""} due for review — quiz them to keep mastery fresh.
+        </p>
+      )}
       {!practiced && (
         <div className="mt-3 rounded-[7px] bg-[var(--surface-secondary)] p-2.5">
           <p className="text-[13px] font-medium">New here? Start with a diagnostic.</p>
-          <p className="mt-0.5 text-xs text-[var(--text-muted)]">A short mixed quiz across your sources finds your level.</p>
-          <button
+          <p className="mt-0.5 text-xs text-[var(--text-muted)]">A short mixed quiz across your sources finds your level.</p>          <button
             type="button"
             onClick={onStartDiagnostic}
             className="mt-2 inline-flex h-8 cursor-pointer items-center rounded-[7px] bg-[var(--accent)] px-3 text-[13px] font-medium text-white hover:bg-[var(--accent-hover)]"

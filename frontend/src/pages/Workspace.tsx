@@ -268,7 +268,11 @@ export default function Workspace({
       pendingReader = { projectId, target: next };
       setReader(next);
       navigate(`/project/${projectId}/source/${id}`);
+      // The reader lives inside the left sidebar — a citation click from the
+      // collapsed icon rail (or anywhere else) must re-expand it, otherwise
+      // the URL changes with nowhere to show the source.
       if (isMobile) setMobileTab("sources");
+      else setLeftOpen(true);
     },
     [navigate, projectId, isMobile],
   );

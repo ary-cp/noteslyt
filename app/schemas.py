@@ -160,6 +160,7 @@ class TopicSummary(BaseModel):
     slug: str
     name: str
     description: str = ""
+    subtopics: list[dict] = []     # [{slug, name, description, concepts, locators}]
     sources: list[dict] = []       # [{source_id, filename, locators: [...]}]
 
 
@@ -287,6 +288,10 @@ class TopicMemoryOut(BaseModel):
     coverage_status: str
     label: str
     last_practiced_at: str | None = None
+    easiness: float = 2.5
+    repetitions: int = 0
+    interval_days: float = 0.0
+    due_at: str | None = None
 
 
 class ProjectMemoryOut(BaseModel):
@@ -294,6 +299,7 @@ class ProjectMemoryOut(BaseModel):
     topics: list[TopicMemoryOut]
     weakest: list[TopicMemoryOut]
     coverage: dict[str, int]
+    due_review: int = 0
     streak: dict[str, int]
 
 
@@ -316,6 +322,10 @@ class TopicMasteryOut(BaseModel):
     correct: int
     label: str
     coverage_status: str = "not_started"
+    easiness: float = 2.5
+    repetitions: int = 0
+    interval_days: float = 0.0
+    due_at: str | None = None
 
 
 class QuizCreateRequest(BaseModel):
@@ -438,6 +448,7 @@ class LearnerOut(BaseModel):
     topics: list[TopicMemoryOut]
     weakest: list[TopicMemoryOut]
     coverage: dict[str, int]
+    due_review: int = 0
     streak: dict[str, int]
     recent_quizzes: list[RecentQuizOut]
 

@@ -6,7 +6,8 @@ material in two cheap steps:
 
   1. ONE LLM call reads a compact outline of the source (headings + the opening
      text of every unit) and returns 4-8 topics as JSON, each naming the locators
-     where it is covered.
+     where it is covered, plus 2-5 subtopics (each with its own locators and
+     key concepts).
   2. Every chunk is assigned to its nearest topic by cosine similarity between the
      chunk embedding (already computed for RAG — free) and the embedding of
      "<topic name>: <description>". No per-chunk LLM calls, so ingestion stays
@@ -53,8 +54,11 @@ Rules:
 - Topic names must describe concepts, methods, people, events, or skills found in the text. Never use page numbers, slide numbers, timestamps, sheet names, or phrases like "page 1-10" as topic names.
 - Use headings and evidence from across the outline. Do not invent topics unsupported by the outline.
 - Prefer reusing the vocabulary already used in the material for the slug.
+- Each topic also breaks into 2 to 5 subtopics: a teachable slice with its own
+  id, name, description, locators (same shape, a subset of the evidence) and concepts
+  (up to 6 key terms, formulas or facts, as short strings).
 Output JSON of the form:
-{{"topics": [{{"id": "...", "name": "...", "description": "...", "locators": [{{"kind": "page", "value": "3"}}]}}]}}"""
+{{"topics": [{{"id": "...", "name": "...", "description": "...", "locators": [{{"kind": "page", "value": "3"}}], "subtopics": [{{"id": "...", "name": "...", "description": "...", "locators": [{{"kind": "page", "value": "3"}}], "concepts": ["..."]}}]}}]}}"""
 
 
 @dataclass
@@ -65,6 +69,7 @@ class Topic:
     name: str
     description: str = ""
     locators: list[dict] = field(default_factory=list)
+    subtopics: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -105,6 +110,7 @@ def fallback_topics(units: list[SourceUnit], max_topics: int = 6) -> list[Topic]
         name="Unclassified material",
         description="Topic extraction could not identify concepts for this source yet.",
         locators=locators[:200],
+        subtopics=[],
     )]
 
 
@@ -169,12 +175,14 @@ def extract_topics(
                 for loc in (_valid_locator(raw_loc, valid) for raw_loc in raw.get("locators", []) or [])
                 if loc
             ]
+            subs = _valid_subtopics(raw.get("subtopics"), valid)
             topics.append(
                 Topic(
                     slug=slug,
                     name=name[:80],
                     description=str(raw.get("description", "")).strip()[:300],
                     locators=locators,
+                    subtopics=subs,
                 )
             )
         semantic = [t for t in topics if not re.fullmatch(
@@ -230,6 +238,57 @@ def assign_topics(
 
     best = sims.argmax(axis=1)
     return [topics[int(i)].slug for i in best]
+
+
+def _valid_subtopic(raw: object, valid: set[tuple[str, str]]) -> dict | None:
+    """One subtopic entry: slug, names, up to 6 concepts, locators that exist."""
+    if not isinstance(raw, dict):
+        return None
+    name = str(raw.get("name", "")).strip()
+    if not name:
+        return None
+    locators = [
+        loc
+        for loc in (_valid_locator(raw_loc, valid) for raw_loc in raw.get("locators", []) or [])
+        if loc
+    ]
+    concepts = [
+        str(c).strip()[:80]
+        for c in (raw.get("concepts", []) or [])
+        if str(c).strip()
+    ][:6]
+    return {
+        "slug": _slugify(str(raw.get("id") or name)),
+        "name": name[:80],
+        "description": str(raw.get("description", "")).strip()[:300],
+        "concepts": concepts,
+        "locators": locators[:60],
+    }
+
+
+def _valid_subtopics(raw: object, valid: set[tuple[str, str]]) -> list[dict]:
+    """At most 5 subtopics; empty when the model invents nothing usable."""
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for entry in raw[:5]:
+        sub = _valid_subtopic(entry, valid)
+        if sub is None or sub["slug"] in seen:
+            continue
+        seen.add(sub["slug"])
+        out.append(sub)
+    return out
+
+
+def subtopic_for_locator(subtopics: list[dict], locator: tuple[str, str]) -> str | None:
+    """Slug of the subtopic evidencing `locator`, if any (unit to subtopic tag)."""
+    kind, value = locator
+    for sub in subtopics or []:
+        for loc in sub.get("locators", []) or []:
+            if (str(loc.get("kind")), str(loc.get("value"))) == (kind, value):
+                return str(sub.get("slug", ""))
+    return None
 
 
 def merge_locators(existing: list[dict] | None, incoming: list[dict]) -> list[dict]:
