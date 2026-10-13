@@ -22,9 +22,11 @@ likewise unregistered — `scripts/smoke_test.py` asserts a `.zip` is refused.
 from __future__ import annotations
 
 import csv
+import io
 import logging
 import re
 from datetime import date, datetime
+from html import escape
 from pathlib import Path
 
 from ..config import Settings
@@ -188,15 +190,24 @@ def _format_cell(value) -> str:
     return str(value).strip()
 
 
+def _table_cell(value: str) -> str:
+    # Keep a literal pipe or multiline cell inside its Markdown table column.
+    return escape(value, quote=False).replace("\\", "\\\\").replace("|", "\\|").replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
+
+
 def parse_xlsx(path: Path, settings: Settings) -> ParsedSource:  # noqa: ARG001
     try:
         import openpyxl
     except ImportError as exc:
         raise ParserError(f"openpyxl is not installed: {exc}") from exc
 
+    wb = formulas = None
     try:
         wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+        formulas = openpyxl.load_workbook(str(path), read_only=True, data_only=False)
     except Exception as exc:
+        if wb is not None:
+            wb.close()
         raise ParserError(f"Could not open {path.name} as .xlsx: {exc}") from exc
 
     units: list[SourceUnit] = []
@@ -208,40 +219,67 @@ def parse_xlsx(path: Path, settings: Settings) -> ParsedSource:  # noqa: ARG001
             names = names[:50]
         for name in names:
             ws = wb[name]
-            rows = [[_format_cell(c) for c in row] for row in ws.iter_rows(values_only=True)]
-            # Drop trailing empties; keep the rectangular shape for tables.
-            rows = [r for r in rows if any(r)]
+            rows = []
+            row_numbers = []
+            missing_formulas = 0
+            missing_examples = []
+            # Bound iteration before reading, including sheets with formatting
+            # extending to Excel's final row. Keep original row coordinates.
+            last_row_to_read = min(ws.max_row or _XLSX_MAX_ROWS, _XLSX_MAX_ROWS)
+            values = ws.iter_rows(max_row=last_row_to_read, values_only=True)
+            expressions = formulas[name].iter_rows(max_row=last_row_to_read)
+            for row_number, (cached, original) in enumerate(zip(values, expressions), 1):
+                row = []
+                for value, cell in zip(cached, original):
+                    if value is None and cell.data_type == "f":
+                        formula = getattr(cell.value, "text", cell.value)
+                        value = f"Formula {formula} (result unavailable; not calculated)"
+                        missing_formulas += 1
+                        if len(missing_examples) < 5:
+                            missing_examples.append(cell.coordinate)
+                    row.append(_format_cell(value))
+                if any(row):
+                    rows.append(row)
+                    row_numbers.append(row_number)
+            if missing_formulas:
+                warnings.append(
+                    f"Sheet '{name}': {missing_formulas} formula cell(s) have no saved result "
+                    f"({', '.join(missing_examples)}). Formula text was preserved, not calculated. "
+                    "Recalculate and save the workbook in Excel or LibreOffice, then upload it again for numeric results."
+                )
+            if (ws.max_row or 0) > _XLSX_MAX_ROWS:
+                warnings.append(f"Sheet '{name}': only the first {_XLSX_MAX_ROWS} worksheet rows were read.")
             if not rows:
                 continue
-            width = max(len(r) for r in rows)
-            rows = [r + [""] * (width - len(r)) for r in rows]
-            if len(rows) > _XLSX_MAX_ROWS:
-                warnings.append(f"Sheet '{name}': only the first {_XLSX_MAX_ROWS} of {len(rows)} rows were read.")
-                rows = rows[:_XLSX_MAX_ROWS]
+            width = max(i + 1 for r in rows for i, value in enumerate(r) if value)
+            rows = [r[:width] + [""] * max(0, width - len(r)) for r in rows]
 
             header, data = rows[0], rows[1:]
             if not data or len(rows) <= _XLSX_SINGLE_SHEET_MAX_ROWS:
-                table = ["| " + " | ".join(header) + " |", "| " + " | ".join(["---"] * width) + " |"]
-                table += ["| " + " | ".join(r) + " |" for r in data]
+                table = ["| " + " | ".join(map(_table_cell, header)) + " |", "| " + " | ".join(["---"] * width) + " |"]
+                table += ["| " + " | ".join(map(_table_cell, r)) + " |" for r in data]
                 units.append(SourceUnit(index=len(units) + 1, text="\n".join(table), locator_kind=SHEET, locator_value=name))
             else:
                 for start in range(0, len(data), _TABULAR_GROUP_ROWS):
                     group = data[start : start + _TABULAR_GROUP_ROWS]
-                    lines = [f"Sheet '{name}' rows {start + 2}-{start + 1 + len(group)}."]
+                    first_row = row_numbers[start + 1]
+                    last_row = row_numbers[start + len(group)]
+                    lines = [f"Sheet '{name}' rows {first_row}-{last_row}."]
                     lines += [" | ".join(f"{h}: {v}" for h, v in zip(header, r) if v) for r in group]
                     units.append(
                         SourceUnit(
                             index=len(units) + 1,
                             text="\n".join(lines),
                             locator_kind=ROW,
-                            locator_value=f"{name}!{start + 2}:{start + 1 + len(group)}",
+                            locator_value=f"{name}!{first_row}:{last_row}",
                         )
                     )
     finally:
-        try:
-            wb.close()
-        except Exception:  # noqa: BLE001
-            pass
+        for book in (wb, formulas):
+            try:
+                book.close()
+            except Exception:  # noqa: BLE001
+                pass
     return ParsedSource(units=units, parser="xlsx", warnings=warnings)
 
 
@@ -251,20 +289,26 @@ def parse_xlsx(path: Path, settings: Settings) -> ParsedSource:  # noqa: ARG001
 def parse_csv(path: Path, settings: Settings, *, delimiter: str = ",") -> ParsedSource:
     text = _read_text(path)
     try:
-        rows = list(csv.reader(text.splitlines(), delimiter=delimiter))
+        rows = []
+        for number, row in enumerate(csv.reader(io.StringIO(text, newline=None), delimiter=delimiter), 1):
+            if any(c.strip() for c in row):
+                rows.append((number, row))
+                if len(rows) > _CSV_MAX_ROWS + 1:
+                    break
     except Exception as exc:
         raise ParserError(f"Could not parse {path.name} as CSV: {exc}") from exc
-    rows = [r for r in rows if any(c.strip() for c in r)]
     if not rows:
         return ParsedSource(units=[], parser="csv")
 
-    header, data = rows[0], rows[1:]
+    header_number, header = rows[0]
+    data = rows[1:]
     if len(data) > _CSV_MAX_ROWS:
-        truncated = len(data) - _CSV_MAX_ROWS
         data = data[:_CSV_MAX_ROWS]
-        warn = f"Only the first {_CSV_MAX_ROWS} of {len(rows) - 1} data rows were read ({truncated} truncated)."
+        warn = f"Only the first {_CSV_MAX_ROWS} nonempty data rows were read. Additional rows were truncated."
     else:
         warn = ""
+    width = max([len(header), *(len(row) for _, row in data)])
+    header = [(header[i].strip() if i < len(header) else "") or f"Column {i + 1}" for i in range(width)]
 
     units: list[SourceUnit] = []
     for start in range(0, max(len(data), 1), _TABULAR_GROUP_ROWS):
@@ -272,10 +316,10 @@ def parse_csv(path: Path, settings: Settings, *, delimiter: str = ",") -> Parsed
         if not group:
             # Header-only file: the header itself is the content.
             units.append(
-                SourceUnit(index=1, text="Columns: " + ", ".join(header), locator_kind=ROW, locator_value="1:1")
+                SourceUnit(index=1, text="Columns: " + ", ".join(header), locator_kind=ROW, locator_value=f"{header_number}:{header_number}")
             )
             break
-        lines = [" | ".join(f"{h}: {v.strip()}" for h, v in zip(header, r) if v.strip()) for r in group]
+        lines = [" | ".join(f"{h}: {v.strip()}" for h, v in zip(header, r) if v.strip()) for _, r in group]
         lines = [ln for ln in lines if ln]
         if not lines:
             continue
@@ -284,7 +328,7 @@ def parse_csv(path: Path, settings: Settings, *, delimiter: str = ",") -> Parsed
                 index=len(units) + 1,
                 text="\n".join(lines),
                 locator_kind=ROW,
-                locator_value=f"{start + 2}:{start + 1 + len(group)}",
+                locator_value=f"{group[0][0]}:{group[-1][0]}",
             )
         )
     return ParsedSource(units=units, parser="csv", warnings=[warn] if warn else [])

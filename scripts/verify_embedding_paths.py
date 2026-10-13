@@ -22,6 +22,9 @@ def main():
             embedding_local_model_file="weights.gguf",
             embedding_local_mmproj_file="projector.gguf",
             embedding_local_ctx=4096,
+            embedding_local_ubatch_size=512,
+            embedding_local_batch_size=512,
+            embedding_local_video_fps=1,
             embedding_local_host="127.0.0.1",
             embedding_local_port=8899,
         )

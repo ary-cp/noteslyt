@@ -1,3 +1,4 @@
+import { buildSchedule } from "./studySchedule";
 import type * as React from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -18,6 +19,7 @@ import { RiMindMap } from "react-icons/ri";
 import { createExam, createFlashcards, createQuiz, fetchLearner, getQuizAnswers, getReport, getTopicGraph, listStudioJobs, listTopics, refreshTopicGraph, saveStudioArtifact, submitAnswer } from "../../lib/api";
 import type { AnswerOut, AssessmentReportOut, LearnerOut, QuizOut, SourceOut, StudioJob, TopicGraph, TopicSummary } from "../../lib/types";
 import { useToast } from "../../lib/toast";
+import { advanceReview, readReview, type ReviewGrade } from "./flashcardReview";
 import { Button, IconButton } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/Feedback";
 import { Modal } from "../../components/ui/Modal";
@@ -73,7 +75,6 @@ export function StudioPanel({
   const [genTool, setGenTool] = useState<StudioTool | null>(null);
   const [busy, setBusy] = useState(false);
   const [count, setCount] = useState(10);
-  const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("medium");
   const [topicId, setTopicId] = useState("");
   const [mapStyle, setMapStyle] = useState<"star" | "flow">("star");
   const [graphBusy, setGraphBusy] = useState(false);
@@ -197,11 +198,17 @@ export function StudioPanel({
         setJobs((prev) => [job, ...prev.filter((j) => j.id !== job.id)]);
         push("Flashcard generation started", { tone: "success" });
       } else if (genTool === "summary" || genTool === "guide" || genTool === "sheet") {
+        const filter = focus.trim().toLocaleLowerCase();
+        const documentTopics = filter ? scopedTopics.filter((t) => `${t.name} ${t.description ?? ""}`.toLocaleLowerCase().includes(filter)) : scopedTopics;
+        if (filter && documentTopics.length === 0) {
+          push("No matching topics", { detail: "Try a word from a topic name or description.", tone: "warning" });
+          return;
+        }
         const names = selectedSources.map((s) => s.filename).join(", ");
         const md = [
           `# ${genTool === "guide" ? "Study guide" : genTool === "sheet" ? "Cheat sheet" : "Summary"}`,
           ``,
-          `_From ${scopeLabel} · ${difficulty}${focus ? ` · focus: ${focus}` : ""}_`,
+          `_Topic overview from ${scopeLabel}${filter ? ` · topic filter: ${focus.trim()}` : ""}_`,
           ``,
           `## What this covers`,
           ``,
@@ -210,10 +217,10 @@ export function StudioPanel({
           ``,
           `## Key points`,
           ``,
-          ...(scopedTopics.slice(0, 8).map((t, i) => `${i + 1}. **${t.name}** — ${t.description || `covered in ${t.sources.filter((s) => selectedIdSet.has(s.source_id)).map((s) => s.filename).join(", ") || "your sources"}`}`)),
+          ...(documentTopics.slice(0, 8).map((t, i) => `${i + 1}. **${t.name}** — ${t.description || `covered in ${t.sources.filter((s) => selectedIdSet.has(s.source_id)).map((s) => s.filename).join(", ") || "your sources"}`}`)),
           ...(scopedTopics.length === 0 ? [`1. Upload completes → key points appear here, each linked to its source.`] : []),
           ``,
-          ...learnFirstLine(),
+          ...(filter ? [] : learnFirstLine()),
           `## Next step`,
           ``,
           `Generate a quiz from the same scope to check recall, or ask the chat to explain any point above.`,
@@ -454,18 +461,12 @@ export function StudioPanel({
               )}
             </div>
           )}
-          {genTool !== "quiz" && genTool !== "exam" && genTool !== "flashcards" && genTool !== "mindmap" && genTool !== "slides" && genTool !== "schedule" && <><Field label="Difficulty">
-            <RadioGroup value={difficulty} onChange={setDifficulty} ariaLabel="Difficulty" options={[
-              { value: "easy", label: "Easy" },
-              { value: "medium", label: "Medium" },
-              { value: "hard", label: "Hard" },
-            ]} />
-          </Field>
-          <Field label="Focus (optional)" hint="Narrow the generation to part of your material.">
+          {genTool !== "quiz" && genTool !== "exam" && genTool !== "flashcards" && genTool !== "mindmap" && genTool !== "slides" && genTool !== "schedule" && <>
+          <Field label="Topic filter (optional)" hint="Include topics whose name or description contains this text.">
             <input
               value={focus}
               onChange={(e) => setFocus(e.target.value)}
-              placeholder="e.g. only chapter 4"
+              placeholder="e.g. entropy"
               className="h-9 w-full rounded-[7px] border border-[var(--border)] bg-[var(--input)] px-2.5 text-sm outline-none focus:border-[var(--accent)]"
             />
           </Field>
@@ -533,55 +534,6 @@ function buildSlides(
 }
 
 /**
- * Heuristic revision planner (frontend-only, labelled as such in the output):
- * weakest topics first, revisits on expanding gaps, capped by minutes/day.
- * This schedules practice — it never claims to measure forgetting curves.
- */
-function buildSchedule(items: { name: string; p: number }[], examDateISO: string, mins: number): string {
-  if (!items.length) return `# Study schedule\n\n_Add sources first — topics appear here once indexing extracts them._`;
-  const ordered = [...items].sort((a, b) => a.p - b.p);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const end = new Date(`${examDateISO}T00:00:00`);
-  let days = Math.round((end.getTime() - today.getTime()) / 86400000) + 1;
-  if (!Number.isFinite(days) || days < 1) days = 1;
-  days = Math.min(days, 30);
-  const perDay = Math.max(1, Math.min(3, Math.round(mins / 30)));
-  const perTopic = Math.max(10, Math.round(mins / perDay));
-  const tasks = ["Learn", "Practice", "Revise"];
-  const queue = ordered.map((t, i) => ({ ...t, due: i < perDay ? 0 : 1, round: 0 }));
-  const lines = [
-    `# Study schedule`,
-    ``,
-    `_Heuristic plan to ${end.toLocaleDateString()} — weakest topics first, revisits on expanding gaps (${perTopic} min each, ${mins} min/day)._`,
-    ``,
-    `| Day | Date | Focus |`,
-    `| --- | --- | --- |`,
-  ];
-  for (let d = 0; d < days; d++) {
-    const date = new Date(today);
-    date.setDate(date.getDate() + d);
-    const dueNow = queue
-      .filter((q) => q.due <= d)
-      .sort((a, b) => a.p - b.p || a.round - b.round)
-      .slice(0, perDay);
-    const focus = d === days - 1 && days > 1
-      ? "Exam eve — light review only"
-      : dueNow.length
-        ? dueNow.map((q) => {
-            const task = tasks[Math.min(q.round, tasks.length - 1)];
-            q.round += 1;
-            q.due = d + (q.round === 1 ? 2 : 5);
-            q.p = Math.min(0.95, q.p + 0.15);
-            return `${task}: ${q.name}`;
-          }).join("; ")
-        : "Rest or catch up";
-    lines.push(`| ${d + 1} | ${date.toLocaleDateString()} | ${focus} |`);
-  }
-  return lines.join("\n");
-}
-
-/**
  * The learner sees one number only: overall mastery across the project's
  * topics. Per-topic names, attempt counts and coverage stay server-side —
  * they drive adaptive quizzes but are never disclosed.
@@ -627,7 +579,7 @@ function ArtifactViewer({ artifact, onClose, onAnswered }: { artifact: Artifact 
       {artifact.kind === "quiz" || artifact.kind === "exam" ? (
         <QuizRunner quiz={artifact.payload as QuizOut} exam={artifact.kind === "exam"} onAnswered={onAnswered} />
       ) : artifact.kind === "flashcards" ? (
-        <Flashcards cards={(artifact.payload as { cards: { front: string; back: string }[] }).cards ?? []} requested={(artifact.payload as { requested?: number }).requested} />
+        <Flashcards key={artifact.id} reviewKey={artifact.id} cards={(artifact.payload as { cards: { front: string; back: string }[] }).cards ?? []} requested={(artifact.payload as { requested?: number }).requested} />
       ) : artifact.kind === "mindmap" ? (
         <MindMapView mermaid={(artifact.payload as { mermaid: string }).mermaid} />
       ) : artifact.kind === "slides" ? (
@@ -722,32 +674,39 @@ function SlidesViewer({ slides }: { slides: { title: string; bullets: string[] }
 
 /* ---------------- flashcards ---------------- */
 
-function Flashcards({ cards, requested }: { cards: { front: string; back: string }[]; requested?: number }) {
-  const [i, setI] = useState(0);
+function Flashcards({ cards, requested, reviewKey }: { cards: { front: string; back: string }[]; requested?: number; reviewKey: string }) {
+  const storageKey = `noteslyt:flashcard-review:${reviewKey}`;
+  const [queue, setQueue] = useState<number[]>(() => {
+    try { return readReview(localStorage.getItem(storageKey), cards.length); }
+    catch { return readReview(null, cards.length); }
+  });
   const [flipped, setFlipped] = useState(false);
-  const [grades, setGrades] = useState<Record<number, string>>({});
+  const saveQueue = (next: number[]) => {
+    setQueue(next);
+    try { localStorage.setItem(storageKey, JSON.stringify({ count: cards.length, queue: next })); } catch { /* In-memory review remains available. */ }
+  };
+  const i = queue[0];
   if (cards.length === 0) return <p className="text-sm text-[var(--text-muted)]">No cards in this set.</p>;
-  if (i >= cards.length) return (
+  if (i === undefined) return (
     <div className="py-6 text-center">
       <p className="text-lg font-semibold">Set complete</p>
       <p className="mt-1 text-sm text-[var(--text-secondary)]">You reviewed all {cards.length} cards.</p>
-      <Button className="mt-4" variant="secondary" onClick={() => { setI(0); setFlipped(false); setGrades({}); }}>Review again</Button>
+      <Button className="mt-4" variant="secondary" onClick={() => { saveQueue(readReview(null, cards.length)); setFlipped(false); }}>Review again</Button>
     </div>
   );
   const card = cards[i];
 
-  const grade = (g: string) => {
-    setGrades((prev) => ({ ...prev, [i]: g }));
+  const grade = (g: ReviewGrade) => {
     setFlipped(false);
-    setI((v) => v + 1);
+    saveQueue(advanceReview(queue, g));
   };
 
   return (
     <div>
       {requested && cards.length < requested && <p className="mb-3 rounded-lg bg-[var(--surface-secondary)] p-3 text-xs text-[var(--text-secondary)]">Created {cards.length} of {requested} requested cards from the available material.</p>}
-      <p className="mb-2 text-center font-mono text-xs text-[var(--text-muted)]">{Math.min(i + 1, cards.length)} / {cards.length}</p>
+      <p className="mb-2 text-center font-mono text-xs text-[var(--text-muted)]">{queue.length} remaining · {cards.length - queue.length} / {cards.length} complete</p>
       <div className="h-1 overflow-hidden rounded-full bg-[var(--border)]">
-        <div className="h-full bg-[var(--accent)]" style={{ width: `${((i + 1) / cards.length) * 100}%` }} />
+        <div className="h-full bg-[var(--accent)]" style={{ width: `${((cards.length - queue.length) / cards.length) * 100}%` }} />
       </div>
       <button
         type="button"
@@ -771,13 +730,14 @@ function Flashcards({ cards, requested }: { cards: { front: string; back: string
         </span>
       </button>
       <p className="mt-2 text-center text-xs text-[var(--text-muted)]">Click or press Space to flip</p>
+      <p className="mt-1 text-center text-xs text-[var(--text-muted)]">Again: retry soon · Hard: retry later · Good/Easy: complete. Progress saved in this browser.</p>
       <div className="mt-3 flex justify-center gap-2">
         {(["Again", "Hard", "Good", "Easy"] as const).map((g) => (
           <button
             key={g}
             onClick={() => grade(g)}
             disabled={!flipped}
-            className={`h-8 cursor-pointer rounded-[7px] border px-3 text-[13px] font-medium disabled:cursor-not-allowed disabled:opacity-40 ${grades[i] === g ? "border-[var(--accent-border)] bg-[var(--accent-soft)]" : "border-[var(--border)] hover:bg-[var(--surface-secondary)]"}`}
+            className="h-8 cursor-pointer rounded-[7px] border border-[var(--border)] px-3 text-[13px] font-medium hover:bg-[var(--surface-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
           >
             {g}
           </button>

@@ -145,7 +145,7 @@ export function SourceReader({
     return () => {
       live = false;
     };
-  }, [source.id, kind]);
+  }, [source.id, source.status, kind]);
 
   useEffect(() => {
     if (kind !== "video" && kind !== "audio" && kind !== "image" && kind !== "text" && kind !== "pdf") return;
@@ -170,7 +170,7 @@ export function SourceReader({
       live = false;
       if (obj) URL.revokeObjectURL(obj);
     };
-  }, [source.id, kind]);
+  }, [source.id, source.status, kind]);
 
   const download = () => {
     fetchSourceBlob(source.id)
@@ -226,7 +226,16 @@ export function SourceReader({
 
       {/* reader body */}
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {kind === "image" ? (
+        {!!source.warnings?.length && <details className="mb-3 rounded-lg border border-[var(--border)] p-3 text-xs text-[var(--text-secondary)]">
+          <summary className="cursor-pointer">Source notes ({source.warnings.length})</summary>
+          <ul className="mt-2 list-disc space-y-1 pl-4">{source.warnings.map((warning, i) => <li key={i}>{typeof warning === "string" ? warning : JSON.stringify(warning)}</li>)}</ul>
+        </details>}
+        {source.status === "failed" ? (
+          <div role="alert" className="rounded-lg border border-[var(--border)] p-4 text-sm text-[var(--text-secondary)]">
+            <p className="font-medium">Could not process this source.</p>
+            <p className="mt-2 break-words">{source.status_detail || "Check the file and retry from the Sources panel."}</p>
+          </div>
+        ) : kind === "image" ? (
           blobUrl ? (
             <img src={blobUrl} alt={source.filename} className="w-full rounded-[8px] border border-[var(--border)] object-contain" />
           ) : (

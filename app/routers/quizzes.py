@@ -161,7 +161,7 @@ async def list_studio_jobs(project_id: uuid.UUID, user: CurrentUser,
 def save_studio_artifact(project_id: uuid.UUID, payload: StudioJobCreate, user: CurrentUser,
     projects: Annotated[ProjectRepo, Depends(get_projects)], studio=Depends(get_studio)):
     require_project(projects, str(project_id), user.id)
-    if payload.kind not in {"summary", "guide", "sheet", "mindmap"}:
+    if payload.kind not in {"summary", "guide", "sheet", "mindmap", "slides", "schedule"}:
         raise HTTPException(status_code=422, detail="Unsupported Studio artifact type.")
     return _job_out(studio.create(str(project_id), user.id, payload.kind, payload.title, payload.payload, "ready"))
 
