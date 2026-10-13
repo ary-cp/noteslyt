@@ -224,6 +224,21 @@ class SourceRepo(Repo):
         )
         return to_records(SourceRecord, rows)  # type: ignore[return-value]
 
+    def fail_stale_inflight(self) -> int:
+        """Fail rows stuck in a non-terminal status from a previous process.
+
+        A restart (or crash) mid-ingest orphans `queued`/`parsing`/`embedding`
+        rows: no worker will ever settle them, and retry refuses them with
+        409 "still processing". Failing them loudly makes the learner's retry
+        button work again. Returns the number of rows failed.
+        """
+        return self._execute(
+            "update sources set status = 'failed', status_detail = %s "
+            "where status in (%s, %s, %s)",
+            ("Interrupted before it could finish (server restarted or crashed) — retry it.",
+             "queued", "parsing", "embedding"),
+        )
+
     def delete_owned(self, source_id: str, user_id: str) -> bool:
         return (
             self._execute(

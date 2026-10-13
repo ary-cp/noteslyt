@@ -140,6 +140,8 @@ class IngestionPipeline:
         try:
             if not path.is_file():
                 raise IngestionError(f"Stored file is missing on disk: {path}")
+            if self._abort_if_deleted(source, result):
+                return result
 
             # 1. Parse -> units --------------------------------------------
             self.sources.set_status(source.id, "parsing", f"parsing {source.filename}")
@@ -168,7 +170,9 @@ class IngestionPipeline:
             # 2b. Persist the parsed markdown for the viewer ------------------
             # Best-effort: the learner should see what the model ingested even
             # if a later step fails, and a content write must never fail the
-            # ingest itself.
+            # ingest itself. Skipped when the row is gone (deleted mid-ingest).
+            if self._abort_if_deleted(source, result):
+                return result
             try:
                 markdown, truncated = render_parsed_markdown(
                     source.filename, parsed.units, MAX_PARSED_CHARS,
@@ -191,6 +195,8 @@ class IngestionPipeline:
             self.sources.set_status(
                 source.id, "embedding", f"embedding {len(chunks)} chunks"
             )
+            if self._abort_if_deleted(source, result):
+                return result
             existing = self.topics.list_for_project(source.project_id)
             image_url = None
             if source.source_type == "image":
@@ -279,6 +285,10 @@ class IngestionPipeline:
             # Chunk ids are derived with uuid5 rather than "<uuid>:<index>" so
             # they are real UUIDs (the column type) while staying deterministic:
             # re-ingesting a source overwrites its chunks instead of duplicating.
+            # Skipped when the row is gone: chunk rows FK-reference it, and the
+            # vector store would otherwise keep orphans for a deleted source.
+            if self._abort_if_deleted(source, result):
+                return result
             try:
                 self.store.upsert(
                     project_id=source.project_id,
@@ -362,6 +372,27 @@ class IngestionPipeline:
         return result
 
     # ================================================================ helpers
+    def _source_alive(self, source_id: str) -> bool:
+        """False when the source row was deleted mid-ingest.
+
+        Every write below FK-references the row (`source_contents`,
+        `topic_sources`, `chunks`): without this check a deleted source
+        crashes with `IntegrityError` instead of aborting quietly.
+        """
+        try:
+            return self.sources.get(source_id) is not None
+        except Exception:  # noqa: BLE001 — a read failure is not a deletion
+            log.exception("Liveness check failed for source %s", source_id)
+            return True
+
+    def _abort_if_deleted(self, source: SourceRecord, result: IngestResult) -> bool:
+        """Stop quietly when the learner deleted the source mid-ingest."""
+        if self._source_alive(source.id):
+            return False
+        log.info("Ingest %s aborted: source was deleted during ingestion", source.filename)
+        result.status = "failed"
+        result.detail = "Source was deleted during ingestion."
+        return True
     def _parse_with_reuse(self, source: SourceRecord, path: Path,
                           result: IngestResult, *, reuse_parsed: bool):
         """Parse step with stored-parse reuse for re-embeds (see ingest_source)."""
