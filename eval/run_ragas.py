@@ -1,5 +1,5 @@
 """
-RAGAS-style eval over `testset.json` — Phase G.32/G.33.
+RAGAS-style eval over `testset.json` â€” Phase G.32/G.33.
 
     uv run python eval/run_ragas.py [http://localhost:8000]
 
@@ -7,16 +7,14 @@ No `ragas` package needed: the four metrics are computed with this repo's own
 LLM client + embedder, so the eval runs offline against `scripts/mock_llm.py`
 exactly like the rest of the suite:
 
-  * faithfulness  — fraction of answer claims supported by retrieved context.
-    An LLM judge (`judge faithfulness`) splits and checks claims; when its
-    output is unusable (the mock cannot judge), it falls back to
-    citation-grounding: every surviving citation resolves to a retrieved
-    locator (the server audit guarantees the direction; this measures it).
-    The method used is reported per item.
-  * answer_relevancy — cosine(question, answer) via the configured embedder.
-  * context_precision / context_recall — retrieved labels vs the testset's
+  * source faithfulness — LLM-judged claims against the actual fixture text.
+    This is source grounding, not a claim that the exact retrieved context was
+    sufficient. An unavailable judge is reported as unavailable, never replaced
+    by a keyword score. Mock runs are smoke checks only.
+  * answer_relevancy â€” cosine(question, answer) via the configured embedder.
+  * context_precision / context_recall â€” retrieved labels vs the testset's
     expected locators (locator-level, deterministic).
-  * refusal accuracy — off-material items must return the exact refusal,
+  * refusal accuracy â€” off-material items must return the exact refusal,
     ungrounded. (Plan target: 100%.)
 
 Gates (plan.md Phase G): faithfulness >= 0.8 and refusal accuracy == 100%.
@@ -61,7 +59,7 @@ failures: list[str] = []
 
 
 def check(label: str, ok: bool, detail: str = "") -> None:
-    print(f"  [{'PASS' if ok else 'FAIL'}] {label}" + (f" — {detail}" if detail else ""))
+    print(f"  [{'PASS' if ok else 'FAIL'}] {label}" + (f" â€” {detail}" if detail else ""))
     if not ok:
         failures.append(label)
 
@@ -81,31 +79,35 @@ def expected_labels(item: dict) -> list[str]:
     return [citation_label(loc["kind"], loc["value"]) for loc in item.get("expected", [])]
 
 
-def judge_faithfulness(
-    llm: LLMClient, answer: str, retrieved: list[str], keywords: list[str],
-) -> tuple[float, str]:
-    """Claim-level judge; falls back to keyword recall when unusable.
+def fixture_texts() -> dict[str, str]:
+    """Reference text from the same fixture generators used for upload."""
+    from make_sample_pdf import SLIDES
+    return {
+        "linear_pdf": "\n".join(f"Page {i}: {title}\n{body}" for i, (title, body) in enumerate(SLIDES, 1)),
+        "notes_docx": "Thermodynamics: Entropy is the measure of disorder in a system.\nFirst law: Energy is conserved in every thermodynamic process.",
+        "costs_xlsx": "Operating Costs: item | cost\nsteel | 120\ncoke | 80\nlabor | 200",
+    }
 
-    The fallback is what runs offline: the mock cannot judge claims, so we
-    check the answer states the expected content words. Citation direction
-    (shown => retrieved) is enforced server-side by the audit on every turn.
-    """
+
+def judge_faithfulness(llm: LLMClient, answer: str, source_text: str) -> tuple[float | None, str]:
+    """No evidence-free judge or optimistic keyword fallback."""
+    if not source_text.strip():
+        return None, "unavailable (no source text)"
     try:
         data = llm.complete_json(
             JUDGE_SYSTEM,
-            f"ANSWER:\n{answer[:2000]}\n\nThe answer cites: {', '.join(retrieved) or '(nothing)'}",
-            max_tokens=1024,
+            f"SOURCE EXCERPTS:\n{source_text}\n\nANSWER:\n{answer}",
+            max_tokens=2048,
         )
-        claims = data.get("claims", [])
-        if not claims:
-            raise ValueError("no claims")
-        score = sum(1 for cl in claims if cl.get("supported")) / len(claims)
-        return round(score, 3), f"llm ({len(claims)} claims)"
+        claims = data.get("claims")
+        if not isinstance(claims, list) or not claims or any(
+            not isinstance(cl, dict) or type(cl.get("supported")) is not bool for cl in claims
+        ):
+            raise ValueError("invalid judge claims")
+        score = sum(cl["supported"] for cl in claims) / len(claims)
+        return round(score, 3), f"llm source-grounding ({len(claims)} claims)"
     except Exception:
-        if not keywords:
-            return 1.0, "citation (no keywords)"
-        hit = sum(1 for w in keywords if w.lower() in answer.lower())
-        return round(hit / len(keywords), 3), "keyword (judge unusable)"
+        return None, "unavailable (judge failed; keyword presence is not faithfulness)"
 
 
 def cosine(a: list[float], b: list[float]) -> float:
@@ -123,6 +125,8 @@ def main() -> int:
     embedder = build_embedder(settings)
     testset = json.loads((Path(__file__).parent / "testset.json").read_text(encoding="utf-8"))
     files = fixtures()
+    references = fixture_texts()
+    project_text = {p["key"]: "\n\n".join(references[k] for k in p["fixtures"]) for p in testset["projects"]}
     tag = uuid.uuid4().hex[:8]
     c = httpx.Client(base_url=BASE, timeout=TIMEOUT_S)
 
@@ -159,11 +163,11 @@ def main() -> int:
             continue
         exp = expected_labels(item)
         got = ans["retrieved"]
-        inter = [label for label in got if label in exp]
-        precision = len(inter) / len(got) if got else 0.0
-        recall = len(inter) / len(exp) if exp else 1.0
+        inter = set(got) & set(exp)
+        precision = len(inter) / len(set(got)) if got else 0.0
+        recall = len(inter) / len(set(exp)) if exp else 1.0
         keywords = [w for w in item.get("must_contain", []) if w.lower() in ans["answer"].lower()]
-        faith, method = judge_faithfulness(llm, ans["answer"], got, item.get("must_contain", []))
+        faith, method = judge_faithfulness(llm, ans["answer"], project_text[item["project"]])
         rel = round(cosine(*embedder.embed([item["question"], ans["answer"]])), 3)
         print(f"  [info] {item['id']}: faith={faith} ({method}) rel={rel} "
               f"P={precision:.2f} R={recall:.2f} kw={len(keywords)}/{len(item.get('must_contain', []))}")
@@ -173,9 +177,15 @@ def main() -> int:
     print("\naggregate")
     grounded = [r for r in rows if "faith" in r]
     refused = [r for r in rows if "refused" in r]
-    faith = sum(r["faith"] for r in grounded) / len(grounded) if grounded else 0.0
+    judged = [r for r in grounded if r["faith"] is not None]
+    faith = sum(r["faith"] for r in judged) / len(judged) if judged else None
     refusal = sum(r["refused"] for r in refused) / len(refused) if refused else 0.0
-    check("faithfulness >= 0.8", faith >= FAITHFULNESS_MIN, f"{faith:.3f}")
+    if len(judged) == len(grounded) and faith is not None:
+        check("source faithfulness >= 0.8", faith >= FAITHFULNESS_MIN, f"{faith:.3f}")
+    elif settings.llm_model == "mock":
+        print("  [info] Faithfulness UNAVAILABLE: this mock run only checks plumbing.")
+    else:
+        check("all answers have a valid source-grounding judgment", False, f"{len(judged)}/{len(grounded)} judged")
     check("refusal accuracy == 100%", refusal == 1.0, f"{refusal:.0%}")
     if grounded:
         print(f"  [info] mean relevancy {sum(r['rel'] for r in grounded) / len(grounded):.3f}, "
@@ -194,7 +204,7 @@ def main() -> int:
         for f in failures:
             print("  -", f)
         return 1
-    print("EVAL PASSED")
+    print("EVAL PASSED" + (" (mock smoke checks only; not real accuracy)" if settings.llm_model == "mock" else ""))
     return 0
 
 

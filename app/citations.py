@@ -176,7 +176,15 @@ def audit_citations(answer: str, chunks: list) -> AuditResult:
         # the returned citation list, which the frontend renders as footnotes.
         return f"[{seen.index(key) + 1}]"
 
-    cleaned = CITATION_RE.sub(_replace, answer)
+    # Models commonly group references as [1, 3]. Expand before resolving so
+    # every number is validated and renumbered against the returned footnotes.
+    protected = r"(```[\s\S]*?```|`[^`\n]+`|\$\$[\s\S]*?\$\$|\$[^$\n]+\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\))"
+    parts = re.split(protected, answer)
+    for i in range(0, len(parts), 2):
+        parts[i] = re.sub(r"\[(\d{1,3}(?:\s*,\s*\d{1,3})+)\]",
+                          lambda m: "".join(f"[{n.strip()}]" for n in m.group(1).split(",")), parts[i])
+        parts[i] = CITATION_RE.sub(_replace, parts[i])
+    cleaned = "".join(parts)
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r" +([.,;:!?])", r"\1", cleaned).strip()
 
@@ -201,6 +209,24 @@ def audit_citations(answer: str, chunks: list) -> AuditResult:
             )
         )
     return AuditResult(answer=cleaned, citations=citations)
+
+
+def has_uncited_prose(answer: str) -> bool:
+    """Flag substantial unsupported paragraphs, not headings or math/code blocks.
+
+    This checks citation coverage only, not semantic truth. A citation on a short
+    introduction can cover a compact list; long standalone explanations cannot
+    borrow a citation from an unrelated paragraph.
+    """
+    prose = re.sub(r"```[\s\S]*?```|\$\$[\s\S]*?\$\$", "", answer)
+    for block in re.split(r"\n\s*\n", prose):
+        lines = [line for line in block.splitlines() if not line.lstrip().startswith("#")]
+        block = "\n".join(lines).strip()
+        if block.endswith(":") and len(re.findall(r"\b\w+\b", block)) < 25:
+            continue  # short lead-in; evidence belongs on the list that follows
+        if len(re.findall(r"\b\w+\b", block)) >= 12 and not CITATION_RE.search(block):
+            return True
+    return False
 
 
 __all__ = ["AuditResult", "CITATION_RE", "Citation", "audit_citations", "citation_label", "format_context"]

@@ -17,6 +17,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
+from openai import RateLimitError
 
 from ..chat import ChatNotFoundError
 from ..deps import (
@@ -174,6 +175,8 @@ def send_message(
         )
     except ChatNotFoundError:
         raise HTTPException(status_code=404, detail="Chat not found.") from None
+    except RateLimitError:
+        raise HTTPException(status_code=429, detail="The AI provider's quota is currently exhausted. Please wait before retrying or check the provider quota.") from None
 
     # Bounded global-memory refinement (Phase E.25): every Nth user turn, in
     # the background, never on the request path.
@@ -229,6 +232,8 @@ async def send_message_stream(
             if count % max(1, settings.memory_refine_every) == 0:
                 asyncio.create_task(asyncio.to_thread(service.refine_profile, user.id))
             yield f"data: {json.dumps({'type': 'final', 'value': result}, ensure_ascii=False)}\n\n"
+        except RateLimitError:
+            yield f"data: {json.dumps({'type': 'error', 'value': 'The AI provider quota is currently exhausted. Please wait before retrying or check the provider quota.'})}\n\n"
         except Exception as exc:  # noqa: BLE001 — emit a stream error instead of truncating silently
             log.exception("streamed chat failed for %s", chat_id)
             yield f"data: {json.dumps({'type': 'error', 'value': str(exc)}, ensure_ascii=False)}\n\n"
