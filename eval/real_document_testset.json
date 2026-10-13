@@ -1,0 +1,314 @@
+{
+  "description": "Development benchmark on public primary-source PDFs; page numbers are physical PDF pages, not printed page labels. Review complete answers against source text; keywords alone are not correctness. One false-premise case accepts supported correction or abstention. Regression project uses make_sample_pdf and sample_xlsx fixtures.",
+  "documents": [
+    {
+      "id": "nasa",
+      "url": "https://www.nasa.gov/wp-content/uploads/2018/09/nasa_systems_engineering_handbook_0.pdf",
+      "pages": 297,
+      "sha256": "8eeb4887a4dc57a23049da7dd2ed556833cf98e214b240468d987873164ff688"
+    },
+    {
+      "id": "nist",
+      "url": "https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.100-1.pdf",
+      "pages": 48,
+      "sha256": "7576edb531d9848825814ee88e28b1795d3a84b435b4b797d3670eafdc4a89f1"
+    }
+  ],
+  "items": [
+    {
+      "id": "nasa-design",
+      "doc": "nasa",
+      "question": "Name the four system design processes in the systems engineering engine.",
+      "pages": [
+        16
+      ],
+      "reference": "Stakeholder Expectations Definition; Technical Requirements Definition; Logical Decomposition; Design Solution Definition.",
+      "must_refuse": false
+    },
+    {
+      "id": "nasa-pre-a",
+      "doc": "nasa",
+      "question": "What is the purpose of Pre-Phase A concept studies?",
+      "pages": [
+        32
+      ],
+      "reference": "Generate broad mission ideas and alternatives; assess feasibility, mission concepts, draft requirements, performance/cost/schedule and technology needs.",
+      "must_refuse": false
+    },
+    {
+      "id": "nasa-e",
+      "doc": "nasa",
+      "question": "What is Phase E for and what happens if major system architecture changes are needed?",
+      "pages": [
+        41
+      ],
+      "reference": "Operations and sustainment; conduct prime mission and support initial need. Major architecture changes are new needs and restart project life cycle.",
+      "must_refuse": false
+    },
+    {
+      "id": "nasa-tailor",
+      "doc": "nasa",
+      "question": "How do tailoring and customization differ regarding waivers and the SEMP?",
+      "pages": [
+        44
+      ],
+      "reference": "Tailoring seeks relief from NPR requirements, leads to waivers/deviations recorded in SEMP. Customization modifies recommended practices without waivers/deviations; significant changes documented in SEMP.",
+      "must_refuse": false
+    },
+    {
+      "id": "nasa-method",
+      "doc": "nasa",
+      "question": "In Table 4.2-2, what four verification methods are recorded in requirements metadata?",
+      "pages": [
+        69
+      ],
+      "reference": "Test, inspection, analysis, demonstration.",
+      "must_refuse": false
+    },
+    {
+      "id": "nasa-ccb",
+      "doc": "nasa",
+      "question": "After SRR in late Phase A, who approves requirement changes?",
+      "pages": [
+        143
+      ],
+      "reference": "Configuration Control Board or equivalent authority; requirements under formal configuration control.",
+      "must_refuse": false
+    },
+    {
+      "id": "nasa-trace",
+      "doc": "nasa",
+      "question": "What does the Traced from field in requirements metadata capture?",
+      "pages": [
+        69
+      ],
+      "reference": "Bidirectional traceability of parent and derived requirements and relationships between requirements.",
+      "must_refuse": false
+    },
+    {
+      "id": "nasa-closeout",
+      "doc": "nasa",
+      "question": "What is the purpose of Phase F closeout?",
+      "pages": [
+        41
+      ],
+      "reference": "Implement decommissioning/disposal plans and analyze returned data/samples; archive technical information.",
+      "must_refuse": false
+    },
+    {
+      "id": "nist-bias",
+      "doc": "nist",
+      "question": "What are the three major categories of AI bias?",
+      "pages": [
+        23
+      ],
+      "reference": "Systemic; computational and statistical; human-cognitive.",
+      "must_refuse": false
+    },
+    {
+      "id": "nist-explain",
+      "doc": "nist",
+      "question": "How does explainability differ from interpretability?",
+      "pages": [
+        21
+      ],
+      "reference": "Explainability describes mechanisms of operation; interpretability is meaning of output in context of functional purpose.",
+      "must_refuse": false
+    },
+    {
+      "id": "nist-order",
+      "doc": "nist",
+      "question": "Must the four AI RMF functions always run in a fixed sequential order?",
+      "pages": [
+        26
+      ],
+      "reference": "No; assuming governance, functions may run in any order across lifecycle; iterative cross-reference. Most start MAP after GOVERN.",
+      "must_refuse": false
+    },
+    {
+      "id": "nist-map",
+      "doc": "nist",
+      "question": "What does MAP 1.5 require?",
+      "pages": [
+        31
+      ],
+      "reference": "Organizational risk tolerances determined and documented.",
+      "must_refuse": false
+    },
+    {
+      "id": "nist-measure",
+      "doc": "nist",
+      "question": "Under MEASURE 2.5 what must be demonstrated and which limitations documented?",
+      "pages": [
+        34
+      ],
+      "reference": "Valid and reliable deployment system; limitations on generalizability beyond development conditions documented.",
+      "must_refuse": false
+    },
+    {
+      "id": "nist-unmeasured",
+      "doc": "nist",
+      "question": "What should happen to risks or trustworthiness characteristics that cannot be measured?",
+      "pages": [
+        34
+      ],
+      "reference": "Properly document them, MEASURE 1.1.",
+      "must_refuse": false
+    },
+    {
+      "id": "nist-monitor",
+      "doc": "nist",
+      "question": "Under MANAGE 4.1, which mechanisms belong in post-deployment monitoring plans?",
+      "pages": [
+        38
+      ],
+      "reference": "User and other actor input capture/evaluation; appeal and override; decommissioning; incident response; recovery; change management.",
+      "must_refuse": false
+    },
+    {
+      "id": "nist-profile",
+      "doc": "nist",
+      "question": "How do Current and Target Profiles differ, and what does comparing them reveal?",
+      "pages": [
+        38
+      ],
+      "reference": "Current existing management/risk outcomes; Target desired outcomes; compare identifies gaps for action plans and prioritized mitigation.",
+      "must_refuse": false
+    },
+    {
+      "id": "nist-transparent",
+      "doc": "nist",
+      "question": "Does transparency alone guarantee an accurate, secure, fair or privacy-enhanced AI system?",
+      "pages": [
+        21
+      ],
+      "reference": "No. Transparent is not necessarily accurate/privacy-enhanced/secure/fair; opacity makes assessment difficult.",
+      "must_refuse": false
+    },
+    {
+      "id": "nist-drift",
+      "doc": "nist",
+      "question": "Why might AI systems need more frequent corrective maintenance than traditional software?",
+      "pages": [
+        43
+      ],
+      "reference": "Data, model or concept drift.",
+      "must_refuse": false
+    },
+    {
+      "id": "absent-cost",
+      "doc": "nasa",
+      "question": "What exact dollar budget does this handbook assign to Project Zephyr-731?",
+      "pages": [],
+      "reference": "Exact refusal, project budget absent.",
+      "must_refuse": true
+    },
+    {
+      "id": "cross-project",
+      "doc": "nist",
+      "question": "What does NASA Table 4.2-2 say about verification methods?",
+      "pages": [],
+      "reference": "Exact refusal; NASA document is in another project.",
+      "must_refuse": true
+    },
+    {
+      "id": "absent-threshold",
+      "doc": "nist",
+      "question": "What universal numeric risk tolerance threshold does the AI RMF mandate for every organization?",
+      "pages": [
+        12
+      ],
+      "reference": "The framework does not prescribe risk tolerance; no universal numeric threshold is supplied. A cited correction of the false premise or refusal to invent a number is acceptable.",
+      "must_refuse": false,
+      "allow_refusal": true
+    },
+    {
+      "id": "outside",
+      "doc": "nasa",
+      "question": "Who won the 2022 FIFA World Cup?",
+      "pages": [],
+      "reference": "Exact refusal.",
+      "must_refuse": true
+    },
+    {
+      "id": "zero-det",
+      "doc": "regression",
+      "question": "What does a zero determinant mean geometrically?",
+      "pages": [
+        4
+      ],
+      "reference": "Map collapses space onto lower dimension. No unsolicited examples not in notes.",
+      "must_refuse": false
+    },
+    {
+      "id": "aluminium",
+      "doc": "regression",
+      "question": "How much does aluminium cost?",
+      "pages": [],
+      "reference": "Exact refusal; sheet contains only steel, coke and labor.",
+      "must_refuse": true
+    }
+  ],
+  "holdout_items": [
+    {
+      "id": "holdout-assumptions",
+      "doc": "nasa",
+      "question": "According to the good-requirement checklist, when should assumptions be confirmed?",
+      "pages": [
+        209
+      ],
+      "reference": "Before the document can be baselined.",
+      "must_refuse": false
+    },
+    {
+      "id": "holdout-verifiable",
+      "doc": "nasa",
+      "question": "Why should requirements avoid words such as user-friendly and robust, and what must verification criteria permit?",
+      "pages": [
+        210
+      ],
+      "reference": "These are unverifiable terms; require precise measurable test/demonstration/inspection/analysis to verify compliance at stated system level.",
+      "must_refuse": false
+    },
+    {
+      "id": "holdout-needed",
+      "doc": "nasa",
+      "question": "What question does the Traceability checklist suggest asking to decide whether a requirement is necessary?",
+      "pages": [
+        209
+      ],
+      "reference": "What is the worst that could happen if the requirement was not included?",
+      "must_refuse": false
+    },
+    {
+      "id": "holdout-reliable",
+      "doc": "nist",
+      "question": "How is reliability defined in section 3.1, including its time and conditions qualifications?",
+      "pages": [
+        18
+      ],
+      "reference": "Ability of an item to perform as required without failure for a given time interval under given conditions.",
+      "must_refuse": false
+    },
+    {
+      "id": "holdout-experts",
+      "doc": "nist",
+      "question": "How can subject matter experts help make TEVV evaluations contextually appropriate?",
+      "pages": [
+        18
+      ],
+      "reference": "Evaluate TEVV findings; work with product/deployment teams to align parameters with requirements and deployment conditions.",
+      "must_refuse": false
+    },
+    {
+      "id": "holdout-govern",
+      "doc": "nist",
+      "question": "What does GOVERN 1.1 say about legal and regulatory requirements involving AI?",
+      "pages": [
+        27
+      ],
+      "reference": "Understood, managed and documented.",
+      "must_refuse": false
+    }
+  ]
+}

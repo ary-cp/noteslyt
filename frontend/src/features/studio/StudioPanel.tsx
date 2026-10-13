@@ -1,3 +1,4 @@
+import { SlideDeck } from "../viewer/SlideDeck";
 import { buildSchedule } from "./studySchedule";
 import type * as React from "react";
 import { useEffect, useMemo, useState } from "react";
@@ -18,6 +19,7 @@ import { createExam, createFlashcards, createQuiz, fetchLearner, getQuizAnswers,
 import type { AnswerOut, AssessmentReportOut, LearnerOut, QuizOut, SourceOut, StudioJob, TopicGraph, TopicSummary } from "../../lib/types";
 import { useToast } from "../../lib/toast";
 import { advanceReview, readReview, type ReviewGrade } from "./flashcardReview";
+import { examSecondsLeft, readExamClock, type ExamClock } from "./examClock";
 import { Button, IconButton } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/Feedback";
 import { Modal } from "../../components/ui/Modal";
@@ -598,7 +600,7 @@ function LearningProfileCard({ learner, onStartDiagnostic }: { learner: LearnerO
 function ArtifactViewer({ artifact, onClose, onAnswered }: { artifact: Artifact | null; onClose: () => void; onAnswered: () => void }) {
   if (!artifact) return null;
   return (
-    <Modal open onClose={onClose} title={artifact.title} subtitle={`${timeAgo(artifact.createdAt)}`} width={720}>
+    <Modal open onClose={onClose} title={artifact.title} subtitle={`${timeAgo(artifact.createdAt)}`} width={artifact.kind === "slides" ? 1100 : 720}>
       {artifact.kind === "quiz" || artifact.kind === "exam" ? (
         <QuizRunner quiz={artifact.payload as QuizOut} exam={artifact.kind === "exam"} onAnswered={onAnswered} />
       ) : artifact.kind === "flashcards" ? (
@@ -646,53 +648,8 @@ function MindMapView({ mermaid }: { mermaid: string }) {
 /* ---------------- slide deck ---------------- */
 
 function SlidesViewer({ slides }: { slides: { title: string; bullets: string[] }[] }) {
-  const [idx, setIdx] = useState(0);
-  const n = Math.max(1, slides.length);
-  const go = (dir: number) => setIdx((v) => Math.min(n - 1, Math.max(0, v + dir)));
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "ArrowRight" || e.key === " ") {
-        e.preventDefault();
-        go(1);
-      } else if (e.key === "ArrowLeft") {
-        go(-1);
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [n]);
-  const slide = slides[idx] ?? { title: "No slides", bullets: [] as string[] };
-  return (
-    <div>
-      <p className="mb-2 text-center font-mono text-xs text-[var(--text-muted)]">{Math.min(idx + 1, n)} / {n}</p>
-      <div className="min-h-[220px] rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-6">
-        <p className="text-lg font-semibold">{slide.title}</p>
-        <ul className="mt-3 grid gap-2">
-          {slide.bullets.map((b, i) => (
-            <li key={i} className="flex gap-2 text-[15px]">
-              <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
-              <span className="min-w-0 flex-1"><MarkdownBody text={b} /></span>
-            </li>
-          ))}
-        </ul>
-      </div>
-      <div className="mt-3 flex items-center justify-between">
-        <Button variant="ghost" onClick={() => go(-1)} disabled={idx === 0}>Back</Button>
-        <div className="flex gap-1">
-          {slides.map((_, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => setIdx(i)}
-              aria-label={`Go to slide ${i + 1}`}
-              className={`h-1.5 cursor-pointer rounded-full transition-colors ${i === idx ? "w-6 bg-[var(--accent)]" : "w-1.5 bg-[var(--border-strong)]"}`}
-            />
-          ))}
-        </div>
-        <Button variant="ghost" onClick={() => go(1)} disabled={idx >= n - 1}>Next</Button>
-      </div>
-    </div>
-  );
+  const pages = useMemo(() => slides.map(slide => ({ title: slide.title, markdown: slide.bullets.map(b => `- ${b}`).join("\n\n") })), [slides]);
+  return <div className="studio-slide-deck"><SlideDeck slides={pages} /></div>;
 }
 
 /* ---------------- flashcards ---------------- */
@@ -871,13 +828,45 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
   const [done, setDone] = useState(false);
   const [left, setLeft] = useState(exam ? quiz.questions.length * 120 : 0);
+  const [clock, setClock] = useState<ExamClock | null>(null);
+  const clockKey = `noteslyt:exam-clock:${quiz.quiz_id}`;
+  const allAnswered = quiz.questions.length > 0 && quiz.questions.every((q) => !!answers[q.id]);
+  const examFinished = exam && (!!clock?.completed || allAnswered);
 
   useEffect(() => {
-    if (!exam || done) return;
-    const t = window.setInterval(() => setLeft((s) => Math.max(0, s - 1)), 1000);
+    if (!exam || loadingAnswers || resumeError || clock) return;
+    let raw: string | null = null;
+    try { raw = localStorage.getItem(clockKey); } catch { /* In-memory timer still works. */ }
+    const saved = readExamClock(raw, quiz.questions.length);
+    if (allAnswered || examSecondsLeft(saved) === 0) saved.completed = true;
+    setClock(saved);
+    setLeft(examSecondsLeft(saved));
+    if (saved.completed) setDone(true);
+  }, [exam, loadingAnswers, resumeError, clock, clockKey, quiz.questions.length, allAnswered]);
+
+  useEffect(() => {
+    if (!clock) return;
+    try { localStorage.setItem(clockKey, JSON.stringify(clock)); } catch { /* In-memory timer still works. */ }
+  }, [clockKey, clock]);
+
+  useEffect(() => {
+    if (!exam || !clock || clock.completed) return;
+    if (allAnswered) {
+      setClock({ ...clock, completed: true });
+      return;
+    }
+    const tick = () => {
+      const remaining = examSecondsLeft(clock);
+      setLeft(remaining);
+      if (remaining === 0) {
+        setClock({ ...clock, completed: true });
+        setDone(true);
+      }
+    };
+    tick();
+    const t = window.setInterval(tick, 1000);
     return () => window.clearInterval(t);
-  }, [exam, done]);
-  useEffect(() => { if (exam && left === 0) setDone(true); }, [exam, left]);
+  }, [exam, clock, allAnswered]);
 
   const q = quiz.questions[i];
   const correct = Object.values(answers).filter((a) => a.correct).length;
@@ -887,7 +876,7 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
   if (!q) return <p className="text-sm text-[var(--text-muted)]">No questions generated.</p>;
 
   const submit = async () => {
-    if (submitting || answers[q.id]) return;
+    if (submitting || answers[q.id] || examFinished || (exam && clock && examSecondsLeft(clock) === 0)) return;
     const given = q.qtype === "mcq" ? (picked ?? "") : text.trim();
     if (given === "" || given === null) return;
     setSubmitting(true);
@@ -933,7 +922,7 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
     <div>
       <div className="mb-3 flex items-center justify-between text-[13px] text-[var(--text-secondary)]">
         <span>Question {i + 1} of {quiz.questions.length}</span>
-        {exam && <span className="font-mono">{Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")}</span>}
+        {exam && <span className="font-mono">{examFinished ? "Completed" : `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`}</span>}
         {exam && (
           <button
             type="button"
@@ -954,7 +943,7 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
             <button
               key={idx}
               onClick={() => setPicked(idx)}
-              disabled={submitting || answered}
+              disabled={submitting || answered || examFinished}
               aria-pressed={(answered ? Number(answers[q.id].given) : picked) === idx}
               className={`flex cursor-pointer items-center gap-2.5 rounded-[8px] border px-3 py-2.5 text-left text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
                 answers[q.id] && opt === answers[q.id].expected ? "border-[var(--accent-border)] bg-[var(--accent-soft)]/50" :
@@ -976,7 +965,7 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
       ) : (
         <textarea
           value={answers[q.id] ? String(answers[q.id].given) : text}
-          disabled={submitting || !!answers[q.id]}
+          disabled={submitting || !!answers[q.id] || examFinished}
           onChange={(e) => setText(e.target.value)}
           rows={3}
           placeholder="Type your answer…"
@@ -994,10 +983,13 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
       <div className="mt-4 flex items-center justify-between">
         <Button variant="ghost" onClick={() => { setI((v) => Math.max(0, v - 1)); setPicked(null); setText(""); }} disabled={i === 0 || submitting}>Back</Button>
         <div className="flex gap-2">
-          {!answers[q.id] ? (
+          {!answers[q.id] && !examFinished ? (
+            <>
+            {exam && i + 1 < quiz.questions.length && <Button variant="ghost" disabled={submitting} onClick={() => { setI((v) => v + 1); setPicked(null); setText(""); }}>Skip</Button>}
             <Button variant="primary" onClick={() => void submit()} loading={submitting} disabled={submitting || (q.options.length > 0 && picked === null) || (q.options.length === 0 && !text.trim())}>
               Check
             </Button>
+            </>
           ) : i + 1 < quiz.questions.length ? (
             <Button variant="primary" onClick={() => { setI((v) => v + 1); setPicked(null); setText(""); }}>Next</Button>
           ) : (
@@ -1005,7 +997,7 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
           )}
         </div>
       </div>
-      {exam && quiz.questions.length > 6 && (
+      {exam && quiz.questions.length > 1 && (
         <div className="mt-3 flex flex-wrap gap-1">
           {quiz.questions.map((qq, idx) => (
             <button

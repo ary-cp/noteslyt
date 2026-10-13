@@ -114,6 +114,10 @@ class SourceOut(BaseModel):
     created_at: str
 
 
+class TranscriptSpellingsRequest(BaseModel):
+    replacements: dict[str, str] = Field(min_length=1, max_length=50)
+
+
 class SourceUploadAccepted(BaseModel):
     """Returned by POST /projects/{id}/sources — ingestion runs in the background."""
 

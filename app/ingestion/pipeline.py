@@ -157,6 +157,14 @@ class IngestionPipeline:
             if source.source_type == "video" and not result.reused_parse:
                 self._caption_video_frames(source, path, parsed.units, result)
 
+            if source.source_type in ("audio", "video"):
+                from ..transcript_spellings import load_spellings, correct_spellings
+                spellings = load_spellings(path)
+                if spellings:
+                    for unit in parsed.units:
+                        unit.text = correct_spellings(unit.text, spellings)
+                    result.warnings.append("Transcript includes user-confirmed spelling corrections; original audio is unchanged.")
+
             # 2. Chunk (never crosses a locator boundary) -------------------
             chunks = chunk_units(
                 parsed.units, self.settings.chunk_size, self.settings.chunk_overlap

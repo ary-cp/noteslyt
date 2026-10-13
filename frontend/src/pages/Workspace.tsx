@@ -73,6 +73,8 @@ export default function Workspace({
   const [project, setProject] = useState<ProjectOut | null>(null);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [sources, setSources] = useState<SourceOut[]>([]);
+  const [sourcesLoadedProject, setSourcesLoadedProject] = useState("");
+  const [sourcesError, setSourcesError] = useState("");
   const selectedProjectRef = useRef("");
   const selectionTouchedRef = useRef(false);
   const newlyUploaded = useRef(new Set<string>());
@@ -87,7 +89,7 @@ export default function Workspace({
   const [rightOpen, setRightOpen] = useState(true);
   const [sourceSidebarWidth, setSourceSidebarWidth] = useState(300);
   const [studioSidebarWidth, setStudioSidebarWidth] = useState(330);
-  const [mobileTab, setMobileTab] = useState<"sources" | "chat" | "studio">("chat");
+  const [mobileTab, setMobileTab] = useState<"sources" | "chat" | "studio">(initialSourceId ? "sources" : "chat");
   // Collapsed-rail shortcut: which Studio tool to open when the slim right
   // rail expands the panel (null = just expand, keep current view).
   const [studioToolReq, setStudioToolReq] = useState<{ tool: StudioTool; nonce: number } | null>(null);
@@ -124,6 +126,8 @@ export default function Workspace({
       const list = await listSources(projectId);
       if (currentProjectRef.current !== projectId) return;
       setSources(list);
+      setSourcesError("");
+      setSourcesLoadedProject(projectId);
       if (selectedProjectRef.current !== projectId) {
         selectedProjectRef.current = projectId;
         selectionTouchedRef.current = false;
@@ -137,9 +141,18 @@ export default function Workspace({
         return new Set([...prev].filter((id) => readyIds.has(id)).concat(added));
       });
     } catch {
-      /* panel surfaces its own errors */
+      if (currentProjectRef.current === projectId) {
+        setSourcesError("Could not load sources. Please retry.");
+        setSourcesLoadedProject(projectId);
+      }
     }
   }, [projectId]);
+
+  useEffect(() => {
+    const update = () => { void refreshSources(); };
+    window.addEventListener("noteslyt:sources-updated", update);
+    return () => window.removeEventListener("noteslyt:sources-updated", update);
+  }, [refreshSources]);
 
   const refreshChats = useCallback(async () => {
     if (!projectId) return;
@@ -271,8 +284,8 @@ export default function Workspace({
       // The reader lives inside the left sidebar — a citation click from the
       // collapsed icon rail (or anywhere else) must re-expand it, otherwise
       // the URL changes with nowhere to show the source.
-      if (isMobile) setMobileTab("sources");
-      else setLeftOpen(true);
+      setMobileTab("sources");
+      setLeftOpen(true);
     },
     [navigate, projectId, isMobile],
   );
@@ -283,8 +296,14 @@ export default function Workspace({
     navigate(`/project/${projectId}${activeChatId ? `/chat/${activeChatId}` : ""}`, { replace: true });
   }, [navigate, projectId, activeChatId]);
 
+  const documentReader = !!reader && sources.some(s => s.id === reader.sourceId && (s.source_type === "pdf" || s.source_type === "pptx"));
+  const [documentWidth, setDocumentWidth] = useState(640);
+  const readerWidth = documentReader ? Math.min(documentWidth, Math.max(300, window.innerWidth * .6)) : sourceSidebarWidth;
   const resizeSidebar = (side: "sources" | "studio", clientX: number) => {
-    if (side === "sources") setSourceSidebarWidth(Math.min(520, Math.max(220, clientX)));
+    if (side === "sources") {
+      if (documentReader) setDocumentWidth(Math.min(900, Math.max(300, clientX)));
+      else setSourceSidebarWidth(Math.min(520, Math.max(220, clientX)));
+    }
     else setStudioSidebarWidth(Math.min(560, Math.max(240, window.innerWidth - clientX)));
   };
 
@@ -308,7 +327,10 @@ export default function Workspace({
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         event.preventDefault();
         const delta = event.key === "ArrowRight" ? 16 : -16;
-        if (side === "sources") setSourceSidebarWidth((width) => Math.min(520, Math.max(220, width + delta)));
+        if (side === "sources") {
+          if (documentReader) setDocumentWidth(Math.min(900, Math.max(300, value + delta)));
+          else setSourceSidebarWidth((width) => Math.min(520, Math.max(220, width + delta)));
+        }
         else setStudioSidebarWidth((width) => Math.min(560, Math.max(240, width - delta)));
       }}
     >
@@ -396,7 +418,7 @@ export default function Workspace({
     );
   }
 
-  const leftVisible = isMobile ? mobileTab === "sources" : leftOpen;
+  const leftVisible = isMobile ? mobileTab === "sources" : leftOpen || reader !== null;
   const rightVisible = isMobile ? mobileTab === "studio" : rightOpen;
   const chatVisible = !isMobile || mobileTab === "chat";
 
@@ -465,15 +487,23 @@ export default function Workspace({
         {leftVisible ? (
           <aside
             className={`${isMobile ? "flex-1" : "shrink-0"} flex min-h-0 flex-col border-r border-[var(--border)] bg-[var(--sidebar-bg)]`}
-            style={!isMobile ? { width: sourceSidebarWidth, flexBasis: sourceSidebarWidth } : undefined}
+            style={!isMobile ? { width: readerWidth, flexBasis: readerWidth } : undefined}
             aria-label={reader ? "Source reader" : "Sources and chats"}
           >
             {(() => {
               const open = reader ? sources.find((s) => s.id === reader.sourceId) ?? null : null;
               if (reader && open) {
-                return <SourceReader source={open} target={reader} onBack={closeReader} />;
+                return <SourceReader key={open.id} source={open} target={reader} onBack={closeReader} />;
               }
               if (reader) {
+                if (sourcesLoadedProject !== projectId || sourcesError) {
+                  return (
+                    <div role="status" className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-[var(--text-secondary)]">
+                      <p>{sourcesError || "Loading source…"}</p>
+                      {sourcesError && <button type="button" onClick={() => void refreshSources()} className="rounded-md border border-[var(--border)] px-3 py-2">Retry</button>}
+                    </div>
+                  );
+                }
                 return (
                   <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
                     <p className="text-sm font-medium">Source not available</p>
@@ -548,7 +578,7 @@ export default function Workspace({
           )
         )}
 
-        {leftVisible && !isMobile && resizeHandle("sources", sourceSidebarWidth)}
+        {leftVisible && !isMobile && resizeHandle("sources", readerWidth)}
 
         {chatVisible && (
           <main className="flex min-w-0 flex-1 flex-col bg-[var(--main-bg)]" aria-label="Chat">

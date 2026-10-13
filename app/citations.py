@@ -188,6 +188,9 @@ def _expand_multi_refs(answer: str) -> str:
     return _MULTI_REF_RE.sub(_split, answer)
 
 
+_PROTECTED_CONTENT = r"(```[\s\S]*?```|`[^`\n]+`|\$\$[\s\S]*?\$\$|\$[^$\n]+\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\))"
+
+
 def audit_citations(answer: str, chunks: list) -> AuditResult:
     """
     Strip every citation whose locator was not retrieved.
@@ -196,7 +199,6 @@ def audit_citations(answer: str, chunks: list) -> AuditResult:
     are normalised to canonical form; dangling punctuation left by a dropped
     citation ("word .") is tidied.
     """
-    answer = _expand_multi_refs(answer)
     by_locator: dict[tuple[str, str, str], object] = {}
     for c in chunks:  # best-ranked chunk per locator wins
         by_locator.setdefault((c.source_id, c.locator_kind, c.locator_value), c)
@@ -219,7 +221,13 @@ def audit_citations(answer: str, chunks: list) -> AuditResult:
         # the returned citation list, which the frontend renders as footnotes.
         return f"[{seen.index(key) + 1}]"
 
-    cleaned = CITATION_RE.sub(_replace, answer)
+    # Models commonly group references as [1, 3]. Expand before resolving so
+    # every number is validated and renumbered against the returned footnotes.
+    parts = re.split(_PROTECTED_CONTENT, answer)
+    for i in range(0, len(parts), 2):
+        parts[i] = _expand_multi_refs(parts[i])
+        parts[i] = CITATION_RE.sub(_replace, parts[i])
+    cleaned = "".join(parts)
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r" +([.,;:!?])", r"\1", cleaned).strip()
 
@@ -244,6 +252,27 @@ def audit_citations(answer: str, chunks: list) -> AuditResult:
             )
         )
     return AuditResult(answer=cleaned, citations=citations)
+
+
+def has_uncited_prose(answer: str) -> bool:
+    """Flag substantial unsupported paragraphs, not headings or math/code blocks.
+
+    This checks citation coverage only, not semantic truth. A citation on a short
+    introduction can cover a compact list; long standalone explanations cannot
+    borrow a citation from an unrelated paragraph.
+    """
+    # Literal array indices and math references are not source citations. Use
+    # the same protected spans as the audit, otherwise `[1]` in inline code
+    # can incorrectly satisfy citation coverage for an unrelated paragraph.
+    prose = re.sub(_PROTECTED_CONTENT, " ", answer)
+    for block in re.split(r"\n\s*\n", prose):
+        lines = [line for line in block.splitlines() if not line.lstrip().startswith("#")]
+        block = "\n".join(lines).strip()
+        if block.endswith(":") and len(re.findall(r"\b\w+\b", block)) < 25:
+            continue  # short lead-in; evidence belongs on the list that follows
+        if len(re.findall(r"\b\w+\b", block)) >= 12 and not CITATION_RE.search(block):
+            return True
+    return False
 
 
 __all__ = ["AuditResult", "CITATION_RE", "Citation", "audit_citations", "citation_label", "format_context"]

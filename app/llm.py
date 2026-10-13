@@ -21,16 +21,40 @@ import json
 import logging
 import math
 import re
+import time
+import threading
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Protocol, TypeVar
 
 import httpx
-from openai import BadRequestError, InternalServerError, OpenAI
+from openai import APIConnectionError, BadRequestError, InternalServerError, OpenAI, RateLimitError
 from pydantic import BaseModel
 
 from .config import Settings
 
 log = logging.getLogger(__name__)
 TStructured = TypeVar("TStructured", bound=BaseModel)
+
+
+def rate_limit_delay(exc: RateLimitError, attempt: int = 0) -> float | None:
+    """Honor temporary provider cooldowns; never retry exhausted daily/billing quotas."""
+    detail = str(exc).lower()
+    if any(term in detail for term in ("insufficient_quota", "perday", "per day", "daily quota", "limit: 0")):
+        return None
+    header = exc.response.headers.get("retry-after")
+    if header:
+        try:
+            delay = float(header)
+        except ValueError:
+            try:
+                delay = parsedate_to_datetime(header).timestamp() - time.time()
+            except (ValueError, TypeError, OverflowError):
+                delay = 5 * (attempt + 1)
+    else:
+        # Gemini's OpenAI-compatible endpoint places RetryInfo in the JSON body.
+        match = re.search(r'(?:retryDelay[\W_]+|retry in\s+)(\d+(?:\.\d+)?)s', str(exc), re.I)
+        delay = float(match.group(1)) if match else 5 * (attempt + 1)
+    return max(0.1, delay) if delay <= 60 else None
 
 # Reasoning models (DeepSeek-R1, Qwen3 in LM Studio, ...) wrap their chain of
 # thought in <think> tags. We never want that in a student's chat window.
@@ -64,11 +88,42 @@ class LLMClient:
     """Thin wrapper over `openai.OpenAI(...).chat.completions`."""
 
     def __init__(self, settings: Settings):
-        self._client = OpenAI(base_url=settings.llm_base_url, api_key=settings.llm_api_key)
+        self._client = OpenAI(base_url=settings.llm_base_url, api_key=settings.llm_api_key, max_retries=0)
         self.model = settings.llm_model
         self.temperature = settings.llm_temperature
         self.max_tokens = settings.llm_max_tokens
         self.base_url = settings.llm_base_url
+        self._cooldown_until = 0.0
+        self._cooldown_lock = threading.Lock()
+
+    def _create(self, **kwargs):
+        """Retry before output starts, sharing cooldown with auxiliary callers.
+
+        Never replay a partially consumed stream. Own the retry budget rather
+        than stacking SDK retries with body-RetryInfo retries.
+        """
+        started = time.monotonic()
+        for attempt in range(3):
+            delay = max(0.0, getattr(self, "_cooldown_until", 0.0) - time.monotonic())
+            if delay:
+                time.sleep(delay)
+            try:
+                return self._client.chat.completions.create(**kwargs)
+            except RateLimitError as exc:
+                delay = rate_limit_delay(exc, attempt)
+                if delay is None or attempt == 2 or time.monotonic() - started + delay > 120:
+                    raise
+                lock = getattr(self, "_cooldown_lock", None)
+                if lock is None:  # lightweight test doubles created without __init__
+                    self._cooldown_lock = lock = threading.Lock()
+                with lock:
+                    self._cooldown_until = max(getattr(self, "_cooldown_until", 0.0),
+                                               time.monotonic() + delay + 0.1)
+                log.warning("Chat provider rate limited; retrying in %.1fs (%d/2)", delay, attempt + 1)
+            except (APIConnectionError, InternalServerError):
+                if attempt == 2:
+                    raise
+                time.sleep(0.5 * (2 ** attempt))
 
     def chat(
         self,
@@ -80,7 +135,7 @@ class LLMClient:
     ) -> str:
         """Plain text completion over an explicit message list."""
         if on_chunk is not None:
-            stream = self._client.chat.completions.create(
+            stream = self._create(
                 model=self.model,
                 messages=messages,  # type: ignore[arg-type]
                 temperature=self.temperature if temperature is None else temperature,
@@ -105,7 +160,7 @@ class LLMClient:
             if not answer:
                 raise RuntimeError("The model returned no answer. It may have exhausted its output limit while reasoning; retry or check the model settings.")
             return answer
-        response = self._client.chat.completions.create(
+        response = self._create(
             model=self.model,
             messages=messages,  # type: ignore[arg-type]
             temperature=self.temperature if temperature is None else temperature,
@@ -134,7 +189,7 @@ class LLMClient:
         """
         system_json = system + "\n\nRespond with ONE valid JSON object and nothing else — no prose, no code fences."
         if json_mode:
-            response = self._client.chat.completions.create(
+            response = self._create(
                 model=self.model,
                 messages=[{"role": "system", "content": system_json}, {"role": "user", "content": user}],
                 temperature=0.0,
@@ -168,7 +223,7 @@ class LLMClient:
         for response_format in formats:
             kwargs = {"response_format": response_format} if response_format else {}
             try:
-                response = self._client.chat.completions.create(
+                response = self._create(
                     model=self.model,
                     messages=[{"role": "system", "content": instruction}, {"role": "user", "content": user}],
                     temperature=0.0, max_tokens=max_tokens, **kwargs,

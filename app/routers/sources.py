@@ -48,7 +48,7 @@ from ..ingestion.registry import parse_source
 from ..repo.projects import ProjectRepo
 from ..repo.sources import SourceRepo
 from ..repo.topics import TopicRepo
-from ..schemas import ParsedContentOut, SourceOut, SourceSegmentOut, SourceUploadAccepted, TopicGraphOut, TopicSummary
+from ..schemas import TranscriptSpellingsRequest, ParsedContentOut, SourceOut, SourceSegmentOut, SourceUploadAccepted, TopicGraphOut, TopicSummary
 from ..storage import (
     FileStorage,
     content_type_for,
@@ -529,3 +529,63 @@ def delete_source(
     if not sources.delete_for_project(source.id, source.project_id):
         raise HTTPException(status_code=404, detail="Source not found.")
     log.info("source       : %s deleted %s", user.id, source_id)
+
+
+@router.post("/sources/{source_id}/transcript-spellings", response_model=SourceOut, status_code=202)
+def update_transcript_spellings(
+    source_id: str,
+    payload: TranscriptSpellingsRequest,
+    user: CurrentUser,
+    background: BackgroundTasks,
+    sources: Annotated[SourceRepo, Depends(get_sources)],
+    storage: Annotated[FileStorage, Depends(get_storage)],
+    pipeline: Annotated[IngestionPipeline, Depends(get_pipeline)],
+    _drift_guard: NoDrift = None,
+):
+    from ..transcript_spellings import validate_spellings, load_spellings, save_spellings
+    source = sources.get_owned(source_id, user.id)
+    if source is None:
+        raise HTTPException(404, "Source not found.")
+    if source.source_type not in ("audio", "video"):
+        raise HTTPException(422, "Spelling corrections apply to audio/video transcripts.")
+    if source.status != "ready":
+        raise HTTPException(409, "Wait until this source is ready before correcting spellings.")
+    content = sources.get_content(source.id)
+    if not content or content.get("truncated"):
+        raise HTTPException(422, "A complete saved transcript is required for spelling corrections.")
+    from ..ingestion.units import units_from_markdown
+    saved_units, _ = units_from_markdown(content.get("markdown", ""))
+    if not saved_units or any(u.start_ts is None or u.end_ts is None for u in saved_units):
+        raise HTTPException(422, "A saved timestamped transcript is required.")
+    path = storage.open_for_read(source.project_id, source.id, source.filename)
+    if path is None:
+        raise HTTPException(404, "Original source file is missing.")
+    try:
+        corrections = validate_spellings(payload.replacements)
+        from ..transcript_spellings import correct_spellings
+        if correct_spellings(content.get("markdown", ""), corrections) == content.get("markdown", ""):
+            raise ValueError("Current spelling was not found in the saved transcript, or is already correct.")
+        previous = load_spellings(path)
+        # Updating a canonical spelling also updates earlier aliases, so a
+        # future fresh parse and the current saved parse remain consistent.
+        from ..transcript_spellings import correct_spellings
+        previous = {old: correct_spellings(new, corrections) for old, new in previous.items()}
+        corrections = validate_spellings({**previous, **corrections})
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    if not sources.queue_transcript_update(source.id):
+        raise HTTPException(409, "This source is already being updated.")
+    try:
+        save_spellings(path, corrections)
+    except OSError:
+        sources.set_status(source.id, "ready", source.status_detail)
+        raise HTTPException(500, "Could not save spellings. Check disk space and retry.") from None
+    # Re-chunking may produce fewer chunks. Remove old vectors so stale
+    # misspellings cannot survive; queued/failed sources are excluded from RAG.
+    try:
+        pipeline.store.delete_source(source.id)
+    except Exception:
+        sources.mark_failed(source.id, "Could not refresh the search index. Retry this source.")
+        raise HTTPException(500, "Could not refresh search. Retry this source.") from None
+    background.add_task(_background_ingest, pipeline, storage, source, reuse_parsed=True)
+    return _to_out(sources.get_owned(source.id, user.id))
