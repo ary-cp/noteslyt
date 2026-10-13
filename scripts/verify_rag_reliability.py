@@ -137,6 +137,25 @@ def main():
     assert "SOURCE EXCERPTS:\nreal source" in judge.complete_json.call_args.args[1]
     assert judge_faithfulness(judge, "answer", "")[0] is None
     print("PASS: judge receives evidence; missing/invalid judgments cannot score 100%")
+    import tempfile
+    from openpyxl import Workbook
+    from app.config import Settings
+    from app.ingestion.parsers_docs import parse_xlsx
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "sparse.xlsx"
+        book = Workbook()
+        sheet = book.active
+        sheet.title = "Costs"
+        for cell, value in {"A3": "Item", "B3": "Cost", "A5": "Steel", "B5": 120,
+                            "A9": "Wood", "B9": 80}.items():
+            sheet[cell] = value
+        book.save(path)
+        book.close()
+        units = parse_xlsx(path, Settings()).units
+        assert len(units) == 1 and units[0].locator_value == "Costs!5:9"
+        assert "Item: Steel | Cost: 120" in units[0].text
+        assert "Item: Wood | Cost: 80" in units[0].text
+    print("PASS: sparse spreadsheet rows keep physical coordinates and column context")
     print("RAG RELIABILITY VERIFIED")
 
 
