@@ -3,8 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   Search,
   Settings as SettingsIcon,
 } from "lucide-react";
@@ -30,7 +28,8 @@ import { ContextMenu, Popover, type CtxItem } from "../components/ui/Menu";
 import { Modal } from "../components/ui/Modal";
 import { SourcesPanel } from "../features/sources/SourcesPanel";
 import { ChatPanel } from "../features/chat/ChatPanel";
-import { StudioPanel } from "../features/studio/StudioPanel";
+import { StudioPanel, type StudioTool } from "../features/studio/StudioPanel";
+import { SourcesRail, StudioRail } from "../components/layout/SidebarRails";
 import { SourceReader } from "../features/viewer/SourceReader";
 import { CommandPalette } from "../components/layout/CommandPalette";
 import { SettingsModal } from "../components/layout/SettingsModal";
@@ -89,6 +88,9 @@ export default function Workspace({
   const [sourceSidebarWidth, setSourceSidebarWidth] = useState(300);
   const [studioSidebarWidth, setStudioSidebarWidth] = useState(330);
   const [mobileTab, setMobileTab] = useState<"sources" | "chat" | "studio">("chat");
+  // Collapsed-rail shortcut: which Studio tool to open when the slim right
+  // rail expands the panel (null = just expand, keep current view).
+  const [studioToolReq, setStudioToolReq] = useState<{ tool: StudioTool; nonce: number } | null>(null);
   // Sidebar reader: opening a source (or clicking a citation) shows its
   // parsed text in the left sidebar — no right-side popup.
   const [reader, setReader] = useState<ViewerTarget | null>(() => {
@@ -454,9 +456,9 @@ export default function Workspace({
         </div>
       )}
 
-      {/* three regions, one workspace */}
+      {/* three regions, one workspace — plus slim icon rails when hidden (NotebookLM-style) */}
       <div className="flex min-h-0 flex-1">
-        {(
+        {leftVisible ? (
           <aside
             className={`${isMobile ? "flex-1" : "shrink-0"} flex min-h-0 flex-col border-r border-[var(--border)] bg-[var(--sidebar-bg)]`}
             style={!isMobile ? { width: sourceSidebarWidth, flexBasis: sourceSidebarWidth } : undefined}
@@ -526,17 +528,26 @@ export default function Workspace({
               );
             })()}
           </aside>
+        ) : (
+          !isMobile && (
+            <SourcesRail
+              sources={sources}
+              selectedIds={selectedIds}
+              onExpand={() => setLeftOpen(true)}
+              onFiles={(f) => void onFiles(f)}
+              onOpenSource={(id) => {
+                setLeftOpen(true);
+                openSource(id);
+              }}
+              onNewChat={() => void newChat()}
+            />
+          )
         )}
 
         {leftVisible && !isMobile && resizeHandle("sources", sourceSidebarWidth)}
 
         {chatVisible && (
           <main className="flex min-w-0 flex-1 flex-col bg-[var(--main-bg)]" aria-label="Chat">
-            {!leftOpen && !isMobile && (
-              <button type="button" onClick={() => setLeftOpen(true)} aria-label="Show sources" className="absolute mt-2 ml-2 cursor-pointer rounded-md border border-[var(--border)] bg-[var(--surface)] p-1 text-[var(--text-secondary)]">
-                <ChevronRight size={14} />
-              </button>
-            )}
             <ChatPanel
               projectId={projectId}
               chatId={activeChatId}
@@ -557,7 +568,7 @@ export default function Workspace({
           </main>
         )}
 
-        {rightVisible && (
+        {rightVisible ? (
           <>
           {!isMobile && resizeHandle("studio", studioSidebarWidth)}
           <aside
@@ -565,11 +576,11 @@ export default function Workspace({
             style={!isMobile ? { width: studioSidebarWidth, flexBasis: studioSidebarWidth } : undefined}
             aria-label="Studio"
           >
-            {!rightOpen && !isMobile ? null : null}
             <StudioPanel
               projectId={projectId}
               sources={sources}
               selectedSources={selectedSources}
+              openRequest={studioToolReq}
               onHide={() => {
                 if (isMobile) setMobileTab("chat");
                 else setRightOpen(false);
@@ -577,14 +588,18 @@ export default function Workspace({
             />
           </aside>
           </>
+        ) : (
+          !isMobile && (
+            <StudioRail
+              onExpand={() => setRightOpen(true)}
+              onPickTool={(tool) => {
+                setStudioToolReq({ tool, nonce: Date.now() });
+                setRightOpen(true);
+              }}
+            />
+          )
         )}
       </div>
-
-      {!isMobile && !rightOpen && (
-        <button type="button" onClick={() => setRightOpen(true)} aria-label="Show studio" className="absolute right-2 bottom-16 cursor-pointer rounded-md border border-[var(--border)] bg-[var(--surface)] p-1 text-[var(--text-secondary)]">
-          <ChevronLeft size={14} />
-        </button>
-      )}
 
       <Popover open={switcherOpen} onClose={() => setSwitcherOpen(false)} anchor={switcherAnchor} width={300}>
         <p className="px-2 pt-1 pb-2 text-xs font-medium text-[var(--text-muted)]">Switch project</p>
