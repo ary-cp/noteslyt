@@ -183,10 +183,11 @@ class ChatService:
             messages.append({"role": "system", "content": "Response style: be precise and concise. Lead with the direct answer, include only necessary explanation, and retain citations."})
         elif response_style == "explanatory":
             messages.append({"role": "system", "content": "Response style: explain the reasoning step by step in learner-friendly language. Define important terms and give a short example when useful. Retain citations."})
-        # Buffer until the citation audit chooses the final answer. Streaming
-        # raw tokens before validation made a good answer appear and then get
-        # replaced by the fallback refusal in the same turn.
-        raw = self.llm.chat(messages)
+        # Stream raw tokens live (word-by-word, ChatGPT-style) while buffering
+        # the full text for the citation audit. The audited answer replaces the
+        # streamed text in the final payload, so the display always settles on
+        # validated, cited content.
+        raw = self.llm.chat(messages, on_chunk=on_chunk)
         if _is_refusal(raw):
             self.chats.add_message(chat_id, "assistant", REFUSAL, [], False)
             after_turn(user_id, chat, question, REFUSAL, [], nudge=False)
@@ -199,7 +200,8 @@ class ChatService:
             retry = self.llm.chat(
                 messages
                 + [{"role": "assistant", "content": raw},
-                   {"role": "user", "content": "Revise your answer. Cite each factual statement supported by CONTEXT using its numbered reference. Do not invent citations. If a useful detail is not in CONTEXT but you can answer it reliably, put it in a separate paragraph starting **Outside your sources:**. If you cannot answer reliably, reply with the exact refusal sentence."}]
+                   {"role": "user", "content": "Revise your answer. Cite each factual statement supported by CONTEXT using its numbered reference. Do not invent citations. If a useful detail is not in CONTEXT but you can answer it reliably, put it in a separate paragraph starting **Outside your sources:**. If you cannot answer reliably, reply with the exact refusal sentence."}],
+                on_chunk=on_chunk,
             )
             if _is_refusal(retry):
                 self.chats.add_message(chat_id, "assistant", REFUSAL, [], False)
@@ -214,8 +216,6 @@ class ChatService:
             result.citations = []
 
         stored = [self._citation_dict(c) for c in result.citations]
-        if on_chunk is not None:
-            on_chunk(result.answer)
         self.chats.add_message(chat_id, "assistant", result.answer, stored, bool(stored))
 
         # First exchange names the chat: AI 2-3 word summary of the question.

@@ -56,7 +56,7 @@ def main():
     service._rewrite = lambda question, prior: (question, False)
     service._blocks = lambda *_: ('','')
     service._after_turn = Mock()
-    service._generate_title = Mock(side_effect=AssertionError('Auxiliary LLM call blocked the live answer'))
+    service._generate_title = Mock(return_value='Diagram Summary')
     queued = []
     received = []
     def reply(messages, on_chunk=None):
@@ -73,9 +73,10 @@ def main():
                               source_ids=['image-source'], defer=lambda *a, **k: queued.append((a,k)))
     assert received == ['A diagram ', '[1].']
     assert result['grounded'] and result['citations'][0]['source_id'] == 'image-source'
+    assert result['chat_title'] == 'Diagram Summary'
     assert persisted[-1][1] == 'assistant'
     service._after_turn.assert_not_called()
-    service._generate_title.assert_not_called()
+    service._generate_title.assert_called_once()
     assert len(queued) == 1
     args, kwargs = queued[0]; args[0](*args[1:], **kwargs)
     service._after_turn.assert_called_once()
