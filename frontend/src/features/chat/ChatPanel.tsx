@@ -6,7 +6,7 @@ import rehypeRaw from "rehype-raw";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { AlertTriangle, Check, Copy, Maximize2, Pencil, RefreshCw, Send, Square } from "lucide-react";
-import { ChatStreamError, createChat, getChat, renameChat, streamMessage } from "../../lib/api";
+import { ChatStreamError, createChat, getChat, renameChat, streamEditMessage, streamMessage } from "../../lib/api";
 import type { ChatCitation, ChatMessageOut, CitationLocator, SourceOut } from "../../lib/types";
 import { useToast } from "../../lib/toast";
 import { ErrorState } from "../../components/ui/Feedback";
@@ -146,9 +146,67 @@ function linkifyMultiCitations(text: string): string {
   });
 }
 
-const ChatMessage = memo(function ChatMessage({ msg, sources, onOpenSource, onEdit }: { msg: ChatMessageOut; sources: SourceOut[]; onOpenSource: (id: string | null, locator?: CitationLocator) => void; onEdit?: (content: string) => void }) {
+const ChatMessage = memo(function ChatMessage({ msg, sources, onOpenSource, onSaveEdit, editDisabled }: { msg: ChatMessageOut; sources: SourceOut[]; onOpenSource: (id: string | null, locator?: CitationLocator) => void; onSaveEdit?: (messageId: string, content: string) => Promise<void>; editDisabled?: boolean }) {
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState(msg.content);
+  const [saving, setSaving] = useState(false);
   if (msg.role === "user") {
-    const editable = onEdit && !msg.id.startsWith("local-") && !msg.id.startsWith("stream-");
+    const editable = onSaveEdit && !msg.id.startsWith("local-") && !msg.id.startsWith("stream-") && !msg.id.startsWith("edit-");
+    if (editing) {
+      return (
+        <div className="flex flex-col items-end gap-2">
+          <textarea
+            autoFocus
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && editValue.trim() && !saving) {
+                e.preventDefault();
+                setSaving(true);
+                void onSaveEdit?.(msg.id, editValue.trim()).finally(() => {
+                  setSaving(false);
+                  setEditing(false);
+                });
+              } else if (e.key === "Escape") {
+                setEditValue(msg.content);
+                setEditing(false);
+              }
+            }}
+            aria-label="Edit question"
+            rows={3}
+            disabled={saving}
+            className="max-h-[140px] w-full max-w-[85%] resize-none rounded-[10px] rounded-br-[4px] border border-[var(--accent)] bg-[var(--surface-secondary)] px-3.5 py-2.5 text-[15px] outline-none"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => {
+                setEditValue(msg.content);
+                setEditing(false);
+              }}
+              className="h-7 cursor-pointer rounded-[6px] border border-[var(--border)] px-2.5 text-xs font-medium hover:bg-[var(--surface-secondary)] disabled:opacity-40"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={saving || !editValue.trim() || editValue.trim() === msg.content}
+              onClick={() => {
+                setSaving(true);
+                void onSaveEdit?.(msg.id, editValue.trim()).finally(() => {
+                  setSaving(false);
+                  setEditing(false);
+                });
+              }}
+              className="h-7 cursor-pointer rounded-[6px] bg-[var(--accent)] px-2.5 text-xs font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-40"
+            >
+              {saving ? "Asking…" : "Save & re-ask"}
+            </button>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="group/q flex flex-col items-end gap-1">
         <div className="max-w-[85%] rounded-[10px] rounded-br-[4px] border border-[var(--border)] bg-[var(--surface-secondary)] px-3.5 py-2.5 text-[15px] whitespace-pre-wrap">
@@ -157,10 +215,14 @@ const ChatMessage = memo(function ChatMessage({ msg, sources, onOpenSource, onEd
         {editable && (
           <button
             type="button"
-            onClick={() => onEdit(msg.content)}
+            disabled={editDisabled}
+            onClick={() => {
+              setEditValue(msg.content);
+              setEditing(true);
+            }}
             aria-label="Edit question"
-            title="Edit and re-ask in this chat"
-            className="inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-xs text-[var(--text-muted)] opacity-0 transition-opacity group-hover/q:opacity-100 hover:text-[var(--text-primary)] focus:opacity-100 focus-visible:opacity-100"
+            title="Edit this question in place"
+            className="inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-xs text-[var(--text-muted)] opacity-0 transition-opacity group-hover/q:opacity-100 hover:text-[var(--text-primary)] focus:opacity-100 focus-visible:opacity-100 disabled:opacity-40"
           >
             <Pencil size={13} /> Edit
           </button>
@@ -253,7 +315,6 @@ export function ChatPanel({
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
-  const composerRef = useRef<HTMLTextAreaElement>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const loadedChatRef = useRef<string | null>(null);
   const createdChatRef = useRef<string | null>(null);
@@ -415,14 +476,96 @@ export function ChatPanel({
     setRenameValue(title);
   };
 
-  // Load a sent question back into the composer so it can be edited and
-  // re-asked in the same chat as a new turn (history is append-only).
-  const editQuestion = (content: string) => {
-    setDraft(content);
+  // Edit a sent question in place: the old text is replaced where it was and
+  // the answer regenerates (the server drops that turn and everything after).
+  const resendEdit = async (messageId: string, content: string) => {
+    const question = content.trim();
+    if (!question || controllerRef.current || loading || sending) return;
+    const id = chatId;
+    if (!id) return;
+    const idx = messages.findIndex((m) => m.id === messageId);
+    if (idx < 0 || messages[idx]?.role !== "user") return;
+    if (!hasReady) {
+      push("Add a source first", { detail: "The AI answers from your project files.", tone: "warning" });
+      onNeedSources();
+      return;
+    }
+    if (!selectedSourceIds.length) {
+      push("Select a source", { detail: "Choose at least one ready source for this chat.", tone: "warning" });
+      onNeedSources();
+      return;
+    }
     setSendError("");
+    setFailedQuestion("");
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    setSending(true);
     nearBottom.current = true;
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-    window.setTimeout(() => composerRef.current?.focus(), 0);
+    const edited: ChatMessageOut = {
+      id: `edit-${Date.now()}`,
+      role: "user",
+      content: question,
+      citations: [],
+      grounded: null,
+      created_at: new Date().toISOString(),
+    };
+    const streamingId = `stream-${Date.now()}`;
+    const streaming: ChatMessageOut = {
+      id: streamingId,
+      role: "assistant",
+      content: "",
+      citations: [],
+      grounded: null,
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev.slice(0, idx), edited, streaming]);
+
+    let buffered = "";
+    let frame: number | null = null;
+    const flush = () => {
+      frame = null;
+      const text = buffered; buffered = "";
+      if (text && !controller.signal.aborted) setMessages((prev) => prev.map((m) => m.id === streamingId ? { ...m, content: m.content + text } : m));
+    };
+    try {
+      const res = await streamEditMessage(id, messageId, question, (token) => {
+        buffered += token;
+        if (frame === null) frame = window.requestAnimationFrame(flush);
+      }, model, selectedSourceIds, controller.signal);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      flush();
+      if (controller.signal.aborted) return;
+      setMessages((prev) => prev.map((m) => m.id === streamingId
+        ? { ...m, content: res.answer, citations: res.citations, grounded: res.grounded }
+        : m));
+      if (res.chat_title) setTitle(res.chat_title);
+      onChatUpdated();
+    } catch (e) {
+      if (controller.signal.aborted) return;
+      // The server truncates before regenerating, so reload its truth instead
+      // of keeping the optimistic text when the answer never arrived.
+      try {
+        const fresh = await getChat(id);
+        const saved = fresh.total > fresh.messages.length ? await getChat(id, 200, Math.max(0, fresh.total - 200)) : fresh;
+        if (!controller.signal.aborted) {
+          setMessages(saved.messages);
+          setTitle(saved.chat.title);
+          onChatUpdated();
+        }
+      } catch {
+        /* fall through to the banner below */
+      }
+      if (controller.signal.aborted) return;
+      setSendError(e instanceof Error ? e.message : "The edited question could not be answered.");
+      setFailedQuestion(question);
+      setMessages((prev) => prev.filter((m) => m.id !== streamingId || m.content.trim()));
+    } finally {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+        setSending(false);
+      }
+    }
   };
 
   return (
@@ -474,7 +617,7 @@ export function ChatPanel({
               </button>}
             </div>
           ) : (
-            messages.map((m) => <ChatMessage key={m.id} msg={m} sources={sources} onOpenSource={onOpenSource} onEdit={editQuestion} />)
+            messages.map((m) => <ChatMessage key={m.id} msg={m} sources={sources} onOpenSource={onOpenSource} onSaveEdit={resendEdit} editDisabled={sending || loading} />)
           )}
           {!sending && (sendError || (!loading && messages.at(-1)?.role === "user")) && (
             <div role="alert" className="rounded-lg border border-[var(--danger)]/30 bg-[var(--danger-soft)] p-3 text-sm">
@@ -499,7 +642,6 @@ export function ChatPanel({
       <div className="shrink-0 px-4 pt-2 pb-4">
         <div className="chat-composer mx-auto max-w-[760px] rounded-[12px] border border-[var(--border)] bg-[var(--input)] transition-colors">
           <textarea
-            ref={composerRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {

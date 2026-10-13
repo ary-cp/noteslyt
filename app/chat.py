@@ -86,6 +86,14 @@ class ChatNotFoundError(RuntimeError):
     pass
 
 
+class ChatMessageNotFoundError(RuntimeError):
+    pass
+
+
+class NoReadySourcesError(RuntimeError):
+    pass
+
+
 class ChatService:
     def __init__(
         self,
@@ -225,6 +233,49 @@ class ChatService:
                             getattr(self._chunk_by_label(chunks, c), "start_ts", None))
              for c in result.citations],
             best,
+        )
+
+    def edit_and_resend(
+        self, user_id: str, chat_id: str, message_id: str, content: str,
+        on_chunk: Callable[[str], None] | None = None,
+        response_style: str = "default",
+        source_ids: list[str] | None = None,
+        defer: Callable[..., None] | None = None,
+    ) -> dict:
+        """Replace a question in place and regenerate from that point.
+
+        The target user message and every later turn are deleted, then the
+        edited question flows through the normal `send()` pipeline — so the
+        old prompt shows the new text and the answer below it is fresh. Raises
+        `ChatNotFoundError` / `ChatMessageNotFoundError` for foreign ids,
+        `ValueError` for non-question messages, and `NoReadySourcesError` when
+        nothing could answer (history is left untouched in that case).
+        """
+        question = content.strip()
+        if not question:
+            raise ValueError("Edited question must not be empty.")
+        chat = self.chats.get_owned(chat_id, user_id)
+        if chat is None:
+            raise ChatNotFoundError(chat_id)
+        target = self.chats.get_message_owned(chat_id, message_id, user_id)
+        if target is None:
+            raise ChatMessageNotFoundError(message_id)
+        if target.role != "user":
+            raise ValueError("Only your questions can be edited.")
+        ready_ids = self.sources.ready_ids(chat.project_id)
+        if source_ids is not None:
+            selected = set(source_ids)
+            ready_ids = [source_id for source_id in ready_ids if source_id in selected]
+        if not ready_ids:
+            raise NoReadySourcesError("No ready sources available for this chat.")
+        if not self.chats.truncate_from(chat_id, message_id):
+            raise ChatMessageNotFoundError(message_id)
+        return self.send(
+            user_id, chat_id, question,
+            on_chunk=on_chunk,
+            response_style=response_style,
+            source_ids=source_ids,
+            defer=defer,
         )
 
     def _generate_title(self, question: str, answer: str) -> str:
