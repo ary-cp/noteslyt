@@ -254,6 +254,9 @@ def parse_xlsx(path: Path, settings: Settings) -> ParsedSource:  # noqa: ARG001
             rows = [r[:width] + [""] * max(0, width - len(r)) for r in rows]
 
             header, data = rows[0], rows[1:]
+            # Unnamed columns still contain source evidence. Give them stable
+            # physical column labels instead of silently dropping their cells.
+            header = [label or f"Column {i + 1}" for i, label in enumerate(header)]
             # Keep spreadsheet records self-contained for embedding. A whole
             # small sheet serialized as Markdown is later split by character
             # count, often detaching rows from their column names. Instead,

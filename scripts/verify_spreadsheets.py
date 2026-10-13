@@ -42,10 +42,20 @@ def main():
         text = parsed.units[0].text
         check("uncached formula is explicit, not silently blank", "=SUM(1,2)" in text and "not calculated" in text)
         check("warning identifies formula cell", len(parsed.warnings) == 1 and "B2" in parsed.warnings[0])
-        check("cached zero preserved without formula fallback", "| Zero | 0 |" in text and "=1-1" not in text)
-        check("pipe, newline and HTML-like cell text preserved", "a\\|b<br>&lt;literal&gt; &amp; text" in text)
-        check("boolean false preserved", "| Boolean | False |" in text)
+        check("cached zero preserved without formula fallback", "Item: Zero | Value: 0" in text and "=1-1" not in text)
+        check("pipe, newline and HTML-like cell text preserved", "Value: a|b\n<literal> & text" in text)
+        check("boolean false preserved", "Item: Boolean | Value: False" in text)
         check("empty sheets skipped", len(parsed.units) == 1)
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["Item", None, "Cost"])
+        ws.append(["Widget", "Hidden specification", 12])
+        ws.append(["Zero", 0, 0])
+        wb.save(path)
+        parsed = parse_xlsx(path, None)
+        check("data under blank column headings retained", "Column 2: Hidden specification" in parsed.units[0].text)
+        check("unnamed column keeps zero and physical position", "Item: Zero | Column 2: 0 | Cost: 0" in parsed.units[0].text)
 
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -72,7 +82,7 @@ def main():
         with patch.object(ReadOnlyWorksheet, "iter_rows", bounded):
             parsed = parse_xlsx(path, None)
         check("row limit applied before materializing workbook", "Beyond limit" not in parsed.units[0].text and any("5000" in w for w in parsed.warnings))
-        check("format-only trailing columns omitted", parsed.units[0].text.splitlines()[0] == "| Column |")
+        check("format-only trailing columns omitted", parsed.units[0].text.splitlines() == ["Sheet: Sheet. Columns: Column.", "Column: Included"])
         # Every open read-only workbook should be closed, including on Windows.
         path.unlink()
         csv_path = Path(tmp) / "test.csv"

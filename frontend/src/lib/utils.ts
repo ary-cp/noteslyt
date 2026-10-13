@@ -112,9 +112,29 @@ export function useMediaQuery(query: string): boolean {
   const [match, setMatch] = useState(() => window.matchMedia(query).matches);
   useEffect(() => {
     const mq = window.matchMedia(query);
-    const fn = () => setMatch(mq.matches);
+    let timer = 0;
+    // Fullscreen can cross a responsive breakpoint. Replacing the surrounding
+    // layout then unmounts the fullscreen player and immediately exits it.
+    // Keep the layout stable until fullscreen ends, then apply the new size.
+    const fn = () => {
+      window.clearTimeout(timer);
+      if (document.fullscreenElement) return;
+      // Browsers may dispatch fullscreenchange before restoring viewport size.
+      // Let that resize settle rather than briefly mounting the desktop layout.
+      timer = window.setTimeout(() => {
+        if (!document.fullscreenElement) setMatch(mq.matches);
+      }, 100);
+    };
     mq.addEventListener("change", fn);
-    return () => mq.removeEventListener("change", fn);
+    document.addEventListener("fullscreenchange", fn);
+    window.addEventListener("resize", fn);
+    fn();
+    return () => {
+      mq.removeEventListener("change", fn);
+      document.removeEventListener("fullscreenchange", fn);
+      window.removeEventListener("resize", fn);
+      window.clearTimeout(timer);
+    };
   }, [query]);
   return match;
 }

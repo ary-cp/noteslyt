@@ -73,6 +73,8 @@ export default function Workspace({
   const [project, setProject] = useState<ProjectOut | null>(null);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [sources, setSources] = useState<SourceOut[]>([]);
+  const [sourcesLoadedProject, setSourcesLoadedProject] = useState("");
+  const [sourcesError, setSourcesError] = useState("");
   const selectedProjectRef = useRef("");
   const selectionTouchedRef = useRef(false);
   const newlyUploaded = useRef(new Set<string>());
@@ -87,7 +89,7 @@ export default function Workspace({
   const [rightOpen, setRightOpen] = useState(true);
   const [sourceSidebarWidth, setSourceSidebarWidth] = useState(300);
   const [studioSidebarWidth, setStudioSidebarWidth] = useState(330);
-  const [mobileTab, setMobileTab] = useState<"sources" | "chat" | "studio">("chat");
+  const [mobileTab, setMobileTab] = useState<"sources" | "chat" | "studio">(initialSourceId ? "sources" : "chat");
   // Collapsed-rail shortcut: which Studio tool to open when the slim right
   // rail expands the panel (null = just expand, keep current view).
   const [studioToolReq, setStudioToolReq] = useState<{ tool: StudioTool; nonce: number } | null>(null);
@@ -124,6 +126,8 @@ export default function Workspace({
       const list = await listSources(projectId);
       if (currentProjectRef.current !== projectId) return;
       setSources(list);
+      setSourcesError("");
+      setSourcesLoadedProject(projectId);
       if (selectedProjectRef.current !== projectId) {
         selectedProjectRef.current = projectId;
         selectionTouchedRef.current = false;
@@ -137,7 +141,10 @@ export default function Workspace({
         return new Set([...prev].filter((id) => readyIds.has(id)).concat(added));
       });
     } catch {
-      /* panel surfaces its own errors */
+      if (currentProjectRef.current === projectId) {
+        setSourcesError("Could not load sources. Please retry.");
+        setSourcesLoadedProject(projectId);
+      }
     }
   }, [projectId]);
 
@@ -277,8 +284,8 @@ export default function Workspace({
       // The reader lives inside the left sidebar — a citation click from the
       // collapsed icon rail (or anywhere else) must re-expand it, otherwise
       // the URL changes with nowhere to show the source.
-      if (isMobile) setMobileTab("sources");
-      else setLeftOpen(true);
+      setMobileTab("sources");
+      setLeftOpen(true);
     },
     [navigate, projectId, isMobile],
   );
@@ -402,7 +409,7 @@ export default function Workspace({
     );
   }
 
-  const leftVisible = isMobile ? mobileTab === "sources" : leftOpen;
+  const leftVisible = isMobile ? mobileTab === "sources" : leftOpen || reader !== null;
   const rightVisible = isMobile ? mobileTab === "studio" : rightOpen;
   const chatVisible = !isMobile || mobileTab === "chat";
 
@@ -480,6 +487,14 @@ export default function Workspace({
                 return <SourceReader source={open} target={reader} onBack={closeReader} />;
               }
               if (reader) {
+                if (sourcesLoadedProject !== projectId || sourcesError) {
+                  return (
+                    <div role="status" className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-[var(--text-secondary)]">
+                      <p>{sourcesError || "Loading source…"}</p>
+                      {sourcesError && <button type="button" onClick={() => void refreshSources()} className="rounded-md border border-[var(--border)] px-3 py-2">Retry</button>}
+                    </div>
+                  );
+                }
                 return (
                   <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
                     <p className="text-sm font-medium">Source not available</p>
