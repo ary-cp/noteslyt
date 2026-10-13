@@ -313,6 +313,12 @@ class LocalEmbeddingServer:
         s = self.settings
         weights = Path(s.embedding_local_model_path).expanduser().resolve() if s.embedding_local_model_path else None
         mmproj = Path(s.embedding_local_mmproj_path).expanduser().resolve() if s.embedding_local_mmproj_path else None
+        # Existing configured filenames are authoritative. Autodetection must
+        # not mistake a custom-named projector for weights on a size tie.
+        managed_weights = self.models_dir / s.embedding_local_model_file
+        managed_mmproj = self.models_dir / s.embedding_local_mmproj_file
+        weights = weights or (managed_weights if managed_weights.is_file() else None)
+        mmproj = mmproj or (managed_mmproj if managed_mmproj.is_file() else None)
         if weights is None or mmproj is None:
             auto_weights, auto_mmproj = self._autodetect_gguf()
             weights = weights or auto_weights
@@ -351,7 +357,12 @@ class LocalEmbeddingServer:
             return None, None
         mmproj_hits = [p for p in files if "mmproj" in p.name.lower()]
         mmproj = max(mmproj_hits, key=lambda p: p.stat().st_size if p.exists() else 0) if mmproj_hits else None
-        rest = [p for p in files if p != mmproj]
+        configured_projector = self.models_dir / self.settings.embedding_local_mmproj_file
+        explicit_projector = self.settings.embedding_local_mmproj_path
+        excluded = {configured_projector.resolve()}
+        if explicit_projector:
+            excluded.add(Path(explicit_projector).expanduser().resolve())
+        rest = [p for p in files if "mmproj" not in p.name.lower() and p.resolve() not in excluded]
         weights = max(rest, key=lambda p: p.stat().st_size if p.exists() else 0) if rest else None
         return weights, mmproj
 

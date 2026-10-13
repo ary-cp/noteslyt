@@ -375,9 +375,9 @@ button, input, textarea, select { font-family: inherit; }
 .pdf-reader:fullscreen > .viewer-toolbar { position: relative; flex: 0 0 auto; max-height: 40%; overflow-y: auto; z-index: 10; }
 .pdf-reader:fullscreen > nav { flex-shrink: 0; max-height: 64px; overflow-y: auto; }
 .pdf-reader:fullscreen > button, .pdf-reader:fullscreen > p { flex-shrink: 0; }
-.pdf-reader:fullscreen .pdf-viewport { flex: 1 1 0%; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.pdf-reader:fullscreen .pdf-viewport { flex: 1 1 0%; min-height: 0; overflow: hidden; }
 .pdf-reader:fullscreen .pdf-page-surface { width: max-content; min-width: 100%; overflow: visible; }
-.pdf-reader:fullscreen .react-pdf__Page { width: max-content; margin-inline: auto; }
+.pdf-stage .react-pdf__Page { width: max-content; margin-inline: auto; }
 .pdf-reader:fullscreen .viewer-toolbar button { min-width: 32px; min-height: 32px; }
 
 /* Restrained motion and compact controls for reading and listening. */
@@ -393,3 +393,30 @@ button, input, textarea, select { font-family: inherit; }
   .viewer-reveal { animation: none; }
   .media-player *, .pdf-reader * { transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* A bounded reader with independent page navigation and document scrolling. */
+.pdf-reader, .slide-deck { display: flex; flex: 1 1 0%; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.pdf-reader > .viewer-toolbar { flex-shrink: 0; position: relative; margin-bottom: 8px; }
+.pdf-reader > nav, .pdf-reader > button, .pdf-reader > p { flex-shrink: 0; }
+.pdf-viewport { flex: 1 1 0%; min-height: 0; overflow: hidden; }
+.document-layout { display: flex; gap: 10px; height: 100%; min-height: 0; min-width: 0; overflow: hidden; }
+.slide-deck > .document-layout { flex: 1 1 0%; }
+.page-rail { position: relative; flex: 0 0 100px; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 3px 6px 12px 2px; border-right: 1px solid var(--border); scrollbar-width: thin; }
+.page-rail-item { display: flex; flex-direction: column; align-items: center; width: 100%; height: 128px; margin-bottom: 8px; padding: 5px 3px; border: 1px solid transparent; border-radius: 7px; color: var(--text-muted); cursor: pointer; }
+.page-rail-item:hover { background: var(--surface-secondary); }
+.page-rail-item[aria-current="page"] { border-color: var(--accent); background: var(--accent-soft); color: var(--text-primary); }
+.page-rail-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.page-rail-preview { display: flex; align-items: center; justify-content: center; height: 96px; width: 76px; overflow: hidden; background: var(--surface-secondary); border-radius: 2px; pointer-events: none; }
+.page-rail-preview canvas { max-height: 96px; object-fit: contain; }
+.page-rail-number { font-size: 11px; padding-top: 4px; font-variant-numeric: tabular-nums; }
+.pdf-stage, .slide-stage { flex: 1 1 0%; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; background: var(--surface-secondary); border-radius: 8px; }
+.pdf-page-surface { width: max-content; min-width: 100%; min-height: 100%; overflow: visible; }
+.deck-toolbar { display: flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 12px; margin-bottom: 8px; font-size: 12px; color: var(--text-muted); }
+.deck-toolbar button { padding: 8px; border-radius: 6px; }
+.deck-toolbar button:hover { background: var(--surface-secondary); }
+.slide-thumbnail { display: flex; flex-direction: column; gap: 5px; width: 100%; height: 100%; padding: 6px; text-align: left; font-size: 7px; overflow: hidden; color: var(--text-secondary); }
+.slide-thumbnail strong { font-size: 8px; }
+.slide-paper { min-height: 100%; padding: clamp(16px, 3vw, 36px); background: var(--surface); overflow-wrap: anywhere; }
+.slide-paper > h2 { font-size: clamp(18px, 2vw, 28px); font-weight: 600; margin-bottom: 20px; }
+.studio-slide-deck { display: flex; height: min(65vh, 720px); min-height: 260px; }
+@media (max-width: 480px) { .page-rail { flex-basis: 82px; } .page-rail-preview { width: 66px; } .document-layout { gap: 6px; } }

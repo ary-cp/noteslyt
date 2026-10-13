@@ -1,3 +1,4 @@
+import { SlideDeck } from "./SlideDeck";
 /**
  * SourceReader — the left sidebar in reading mode.
  *
@@ -99,11 +100,20 @@ export function SourceReader({
   const [transcriptRevision, setTranscriptRevision] = useState(0);
   const transcriptUpdated = useCallback(() => setTranscriptRevision(v => v + 1), []);
   const [markdown, setMarkdown] = useState<string | null>(null);
+  const slides = useMemo(() => {
+    if (source.source_type !== "pptx" || !markdown) return [];
+    const markers = [...markdown.matchAll(/^## slide (\d+)\s*$/gim)];
+    return markers.map((match, i) => {
+      const body = markdown.slice(match.index! + match[0].length, markers[i + 1]?.index ?? markdown.length).trim();
+      const heading = body.match(/^# ([^\n]+)\n?/);
+      return { number: Number(match[1]), title: heading?.[1] ?? `Slide ${match[1]}`, markdown: heading ? body.slice(heading[0].length).trim() : body };
+    });
+  }, [markdown, source.source_type]);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [rawText, setRawText] = useState<string | null>(null);
   const [error, setError] = useState("");
 
-  const citedPage = target?.kind === "page" ? parsePage(target.value) : null;
+  const citedPage = (target?.kind === "page" || target?.kind === "slide") ? parsePage(target.value) : null;
   // Image-kind citations from rendered documents carry the page number as
   // their value — anchor the reader to that page's marker line.
   const citedImagePage =
@@ -123,13 +133,9 @@ export function SourceReader({
         ? citationLabel(target.kind, target.value)
         : "";
 
-  // Parsed / Original tabs (pdf + audio/video have both views).
-  // Citation clicks land on parsed text for PDFs (the cited lines are
-  // highlighted there) but keep the original player for audio/video so the
-  // cited timestamp starts playback. Plain source opens follow the same
-  // default: PDFs read best as parsed text, AV as the player.
+  // Open the original PDF at its cited page; parsed text remains available.
   const hasOriginal = kind === "pdf" || kind === "video" || kind === "audio";
-  const defaultTab: "parsed" | "original" = kind === "pdf" ? "parsed" : hasOriginal ? "original" : "parsed";
+  const defaultTab: "parsed" | "original" = hasOriginal ? "original" : "parsed";
   const [tab, setTab] = useState<"parsed" | "original">(defaultTab);
   const prevTarget = useRef(target?.nonce ?? -1);
   useEffect(() => {
@@ -229,7 +235,7 @@ export function SourceReader({
       </div>
 
       {/* reader body */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <div className={`min-h-0 flex-1 px-3 py-3 ${kind === "pdf" && tab === "original" || slides.length ? "flex flex-col overflow-hidden" : "overflow-y-auto"}`}>
         {(kind === "audio" || kind === "video") && <TranscriptSpellings key={source.id} sourceId={source.id} ready={source.status === "ready"} onUpdated={transcriptUpdated} />}
         {!!source.warnings?.length && <details className="mb-3 rounded-lg border border-[var(--border)] p-3 text-xs text-[var(--text-secondary)]">
           <summary className="cursor-pointer">Source notes ({source.warnings.length})</summary>
@@ -258,10 +264,12 @@ export function SourceReader({
           ) : (
             <ReaderLoading label="Loading document…" />
           )
+        ) : slides.length ? (
+          <><p className="mb-2 shrink-0 text-xs text-[var(--text-muted)]">Slide text preview · Download for the original formatting.</p><SlideDeck slides={slides} page={anchorPage} seekKey={target?.nonce} /></>
         ) : markdown !== null || hasOriginal ? (
-          <div>
+          <div className={kind === "pdf" && tab === "original" ? "flex min-h-0 flex-1 flex-col" : undefined}>
             {hasOriginal && (
-              <div className="mb-3 flex gap-1 border-b border-[var(--border)]" role="tablist" aria-label="Source view">
+              <div className="mb-3 flex shrink-0 gap-1 border-b border-[var(--border)]" role="tablist" aria-label="Source view">
                 {(["parsed", "original"] as const).map((id) => (
                   <button
                     key={id}
@@ -283,7 +291,7 @@ export function SourceReader({
             <div hidden={tab !== "parsed" && hasOriginal}>
               <CitedMarkdown text={markdown ?? ""} snippet={target?.snippet ?? null} page={anchorPage} nonce={target?.nonce ?? 0} jumpTick={0} />
             </div>
-            {hasOriginal && <div hidden={tab !== "original"}>
+            {hasOriginal && <div hidden={tab !== "original"} className={kind === "pdf" && tab === "original" ? "flex min-h-0 flex-1 flex-col" : undefined}>
               <OriginalPane key={source.id} source={source} kind={kind} url={blobUrl} page={anchorPage} time={citedTime} stopAt={citedEnd}
                 seekKey={target?.nonce ?? 0} active={tab === "original"} markdown={markdown ?? ""} snippet={target?.snippet} />
             </div>}

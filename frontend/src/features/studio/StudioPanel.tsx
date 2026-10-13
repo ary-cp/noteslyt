@@ -1,3 +1,4 @@
+import { SlideDeck } from "../viewer/SlideDeck";
 import { buildSchedule } from "./studySchedule";
 import type * as React from "react";
 import { useEffect, useMemo, useState } from "react";
@@ -599,7 +600,7 @@ function LearningProfileCard({ learner, onStartDiagnostic }: { learner: LearnerO
 function ArtifactViewer({ artifact, onClose, onAnswered }: { artifact: Artifact | null; onClose: () => void; onAnswered: () => void }) {
   if (!artifact) return null;
   return (
-    <Modal open onClose={onClose} title={artifact.title} subtitle={`${timeAgo(artifact.createdAt)}`} width={720}>
+    <Modal open onClose={onClose} title={artifact.title} subtitle={`${timeAgo(artifact.createdAt)}`} width={artifact.kind === "slides" ? 1100 : 720}>
       {artifact.kind === "quiz" || artifact.kind === "exam" ? (
         <QuizRunner quiz={artifact.payload as QuizOut} exam={artifact.kind === "exam"} onAnswered={onAnswered} />
       ) : artifact.kind === "flashcards" ? (
@@ -647,53 +648,8 @@ function MindMapView({ mermaid }: { mermaid: string }) {
 /* ---------------- slide deck ---------------- */
 
 function SlidesViewer({ slides }: { slides: { title: string; bullets: string[] }[] }) {
-  const [idx, setIdx] = useState(0);
-  const n = Math.max(1, slides.length);
-  const go = (dir: number) => setIdx((v) => Math.min(n - 1, Math.max(0, v + dir)));
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "ArrowRight" || e.key === " ") {
-        e.preventDefault();
-        go(1);
-      } else if (e.key === "ArrowLeft") {
-        go(-1);
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [n]);
-  const slide = slides[idx] ?? { title: "No slides", bullets: [] as string[] };
-  return (
-    <div>
-      <p className="mb-2 text-center font-mono text-xs text-[var(--text-muted)]">{Math.min(idx + 1, n)} / {n}</p>
-      <div className="min-h-[220px] rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-6">
-        <p className="text-lg font-semibold">{slide.title}</p>
-        <ul className="mt-3 grid gap-2">
-          {slide.bullets.map((b, i) => (
-            <li key={i} className="flex gap-2 text-[15px]">
-              <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
-              <span className="min-w-0 flex-1"><MarkdownBody text={b} /></span>
-            </li>
-          ))}
-        </ul>
-      </div>
-      <div className="mt-3 flex items-center justify-between">
-        <Button variant="ghost" onClick={() => go(-1)} disabled={idx === 0}>Back</Button>
-        <div className="flex gap-1">
-          {slides.map((_, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => setIdx(i)}
-              aria-label={`Go to slide ${i + 1}`}
-              className={`h-1.5 cursor-pointer rounded-full transition-colors ${i === idx ? "w-6 bg-[var(--accent)]" : "w-1.5 bg-[var(--border-strong)]"}`}
-            />
-          ))}
-        </div>
-        <Button variant="ghost" onClick={() => go(1)} disabled={idx >= n - 1}>Next</Button>
-      </div>
-    </div>
-  );
+  const pages = useMemo(() => slides.map(slide => ({ title: slide.title, markdown: slide.bullets.map(b => `- ${b}`).join("\n\n") })), [slides]);
+  return <div className="studio-slide-deck"><SlideDeck slides={pages} /></div>;
 }
 
 /* ---------------- flashcards ---------------- */

@@ -296,8 +296,14 @@ export default function Workspace({
     navigate(`/project/${projectId}${activeChatId ? `/chat/${activeChatId}` : ""}`, { replace: true });
   }, [navigate, projectId, activeChatId]);
 
+  const documentReader = !!reader && sources.some(s => s.id === reader.sourceId && (s.source_type === "pdf" || s.source_type === "pptx"));
+  const [documentWidth, setDocumentWidth] = useState(640);
+  const readerWidth = documentReader ? Math.min(documentWidth, Math.max(300, window.innerWidth * .6)) : sourceSidebarWidth;
   const resizeSidebar = (side: "sources" | "studio", clientX: number) => {
-    if (side === "sources") setSourceSidebarWidth(Math.min(520, Math.max(220, clientX)));
+    if (side === "sources") {
+      if (documentReader) setDocumentWidth(Math.min(900, Math.max(300, clientX)));
+      else setSourceSidebarWidth(Math.min(520, Math.max(220, clientX)));
+    }
     else setStudioSidebarWidth(Math.min(560, Math.max(240, window.innerWidth - clientX)));
   };
 
@@ -321,7 +327,10 @@ export default function Workspace({
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         event.preventDefault();
         const delta = event.key === "ArrowRight" ? 16 : -16;
-        if (side === "sources") setSourceSidebarWidth((width) => Math.min(520, Math.max(220, width + delta)));
+        if (side === "sources") {
+          if (documentReader) setDocumentWidth(Math.min(900, Math.max(300, value + delta)));
+          else setSourceSidebarWidth((width) => Math.min(520, Math.max(220, width + delta)));
+        }
         else setStudioSidebarWidth((width) => Math.min(560, Math.max(240, width - delta)));
       }}
     >
@@ -478,13 +487,13 @@ export default function Workspace({
         {leftVisible ? (
           <aside
             className={`${isMobile ? "flex-1" : "shrink-0"} flex min-h-0 flex-col border-r border-[var(--border)] bg-[var(--sidebar-bg)]`}
-            style={!isMobile ? { width: sourceSidebarWidth, flexBasis: sourceSidebarWidth } : undefined}
+            style={!isMobile ? { width: readerWidth, flexBasis: readerWidth } : undefined}
             aria-label={reader ? "Source reader" : "Sources and chats"}
           >
             {(() => {
               const open = reader ? sources.find((s) => s.id === reader.sourceId) ?? null : null;
               if (reader && open) {
-                return <SourceReader source={open} target={reader} onBack={closeReader} />;
+                return <SourceReader key={open.id} source={open} target={reader} onBack={closeReader} />;
               }
               if (reader) {
                 if (sourcesLoadedProject !== projectId || sourcesError) {
@@ -569,7 +578,7 @@ export default function Workspace({
           )
         )}
 
-        {leftVisible && !isMobile && resizeHandle("sources", sourceSidebarWidth)}
+        {leftVisible && !isMobile && resizeHandle("sources", readerWidth)}
 
         {chatVisible && (
           <main className="flex min-w-0 flex-1 flex-col bg-[var(--main-bg)]" aria-label="Chat">
