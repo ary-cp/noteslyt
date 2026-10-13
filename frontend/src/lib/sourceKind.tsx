@@ -1,4 +1,15 @@
-import { BookOpen, FileAudio, FileImage, FileSpreadsheet, FileText, FileVideo, Presentation } from "lucide-react";
+import { FileVideo } from "lucide-react";
+import { FaFileCode } from "react-icons/fa";
+import { MdOutlinePictureAsPdf } from "react-icons/md";
+import { PiFileAudioFill, PiFileMdLight, PiFilePptBold, PiImagesSquareFill, PiMicrosoftExcelLogoFill } from "react-icons/pi";
+import { SiGoogledocs } from "react-icons/si";
+import { TbFileTypeTxt } from "react-icons/tb";
+
+const CODE_TYPES = new Set([
+  "py", "js", "jsx", "ts", "tsx", "java", "c", "h", "cpp", "hpp", "cs", "go",
+  "rs", "rb", "php", "swift", "kt", "scala", "sh", "json", "yaml", "yml",
+  "toml", "xml", "html", "css", "scss", "sql", "r", "ipynb",
+]);
 
 export type SourceKind = "pdf" | "docx" | "pptx" | "xlsx" | "csv" | "md" | "txt" | "audio" | "video" | "image" | "other";
 
@@ -15,13 +26,16 @@ export function mediaKind(sourceType: string): "pdf" | "video" | "audio" | "imag
 export function SourceTypeIcon({ type, size = 16 }: { type: string; size?: number }) {
   const cls = "shrink-0 text-[var(--text-secondary)]";
   const kind = mediaKind(type);
-  if (kind === "pdf") return <BookOpen size={size} className={cls} />;
+  if (kind === "pdf") return <MdOutlinePictureAsPdf size={size} className={cls} />;
   if (kind === "video") return <FileVideo size={size} className={cls} />;
-  if (kind === "audio") return <FileAudio size={size} className={cls} />;
-  if (kind === "image") return <FileImage size={size} className={cls} />;
-  if (type === "pptx") return <Presentation size={size} className={cls} />;
-  if (type === "xlsx" || type === "csv" || type === "tsv") return <FileSpreadsheet size={size} className={cls} />;
-  return <FileText size={size} className={cls} />;
+  if (kind === "audio") return <PiFileAudioFill size={size} className={cls} />;
+  if (kind === "image") return <PiImagesSquareFill size={size} className={cls} />;
+  if (type === "pptx" || type === "ppt") return <PiFilePptBold size={size} className={cls} />;
+  if (type === "xlsx" || type === "csv" || type === "tsv") return <PiMicrosoftExcelLogoFill size={size} className={cls} />;
+  if (type === "md") return <PiFileMdLight size={size} className={cls} />;
+  if (type === "txt") return <TbFileTypeTxt size={size} className={cls} />;
+  if (CODE_TYPES.has(type)) return <FaFileCode size={size} className={cls} />;
+  return <SiGoogledocs size={size} className={cls} />;
 }
 
 export function statusTone(status: string): "accent" | "danger" | "warning" | "neutral" {

@@ -474,7 +474,8 @@ class IngestionPipeline:
         out: dict[str, str] = {}
         for topic in proposed:
             record = self.topics.upsert(
-                source.project_id, topic.slug, topic.name, topic.description
+                source.project_id, topic.slug, topic.name, topic.description,
+                subtopics=topic.subtopics,
             )
             out[topic.slug] = record.id
             if not topic.locators:

@@ -33,7 +33,8 @@ from .citations import citation_label
 from .config import Settings
 from .ingestion.topics import extract_topics
 from .ingestion.units import SourceUnit
-from .learner.bkt import BKTParams
+from .learner.bkt import BKTParams, calibrate
+from .learner.sm2 import is_due
 from .llm import Embedder, LLMClient
 from .repo.memory import ProjectMemoryRepo
 from .repo.profile import ProfileRepo
@@ -52,7 +53,7 @@ GENERATE_SYSTEM = """You write quiz questions grounded in study material. Output
 {"questions": [{"type": "mcq|short_answer|numerical", "topic_slug": "...",
 "stem": "...", "options": ["...","...","...","..."], "correct_index": 0,
 "key_points": ["..."], "sample_answer": "...",
-"value": 0.0, "tolerance": 0.0, "unit": "",
+"value": 0.0, "tolerance": 0.0, "unit": "", "difficulty": 0.0-1.0,
 "explanation": "...", "locator": {"kind": "...", "value": "...", "source_id": "..."}}]}
 Rules: exactly the requested number of questions, round-robin over the requested types;
 MCQ needs 4 options with exactly one correct; short_answer needs 2-4 key_points plus a
@@ -68,7 +69,7 @@ solving the question before returning it. correct_index is a zero-based integer 
 Use Markdown and LaTeX math delimited by $...$ or $$...$$ in stems, options and explanations.
 Wrap complete quantities and units in math delimiters too; never leave raw m/s^2, x^2, subscripts or LaTeX commands in plain text.
 Escape every LaTeX backslash correctly for JSON. Never wrap math in code fences.
-Explanations teach: restate the rule, then the application. Difficulty 0-1."""
+Explanations teach: restate the rule, then the application. Rate each question difficulty 0.0 (simple recall) to 1.0 (multi-step application)."""
 
 FLASHCARD_SYSTEM = """You create study flashcards from the supplied study material. Output ONE JSON object:
 {"cards": [{"front": "a concise question or prompt", "back": "a concise accurate answer",
@@ -430,7 +431,10 @@ class QuizService:
             p_before = float(mem_before.p_mastery) if mem_before else self.bkt.p_init
             p_after = p_before
             if question.topic_id:
-                updated = self.memory.apply_result(user_id, quiz.project_id, question.topic_id, correct, self.bkt)
+                guess, slip = calibrate(question.qtype, len(question.options or []),
+                                      question.difficulty, self.bkt)
+                updated = self.memory.apply_result(user_id, quiz.project_id, question.topic_id,
+                                                correct, self.bkt, guess=guess, slip=slip)
                 p_after = float(updated["p_mastery"])
             self.quizzes.record_answer(quiz.id, question.id, user_id, _given_text(answer), correct, p_before, p_after, feedback=feedback, missed=missed)
             topic = self._topic_memory(user_id, quiz.project_id, question.topic_id)
@@ -452,6 +456,7 @@ class QuizService:
             "topics": topics,
             "weakest": weak,
             "coverage": coverage,
+            "due_review": sum(1 for t in topics if t.get("due_at") and is_due(t["due_at"])),
             "streak": self.memory.streak(user_id, project_id),
             "recent_quizzes": self.quizzes.recent_quizzes(user_id, project_id),
         }
@@ -526,7 +531,8 @@ class QuizService:
             all_chunks.extend(chunks)
             sections.append(
                 f"TOPIC {topic.slug} ({topic.name}):\n"
-                f"Locators: {', '.join(sorted({(c.source_id + ' / ' + c.locator_kind + ':' + c.locator_value) for c in chunks}))}\n"
+                + _subtopic_line(topic)
+                + f"Locators: {', '.join(sorted({(c.source_id + ' / ' + c.locator_kind + ':' + c.locator_value) for c in chunks}))}\n"
                 + "\n\n".join(f"SOURCE {c.source_id} LOCATOR {c.locator_kind}:{c.locator_value}\n{c.text[:3000]}" for c in chunks)
             )
         type_list = ", ".join(types)
@@ -833,6 +839,18 @@ def _public_question(record, slug: str) -> dict:
     }
 
 
+def _subtopic_line(topic) -> str:
+    """Subtopic/concept outline appended to quiz grounding per topic."""
+    subs = [s for s in (getattr(topic, "subtopics", None) or []) if isinstance(s, dict)]
+    if not subs:
+        return ""
+    parts = []
+    for s in subs[:8]:
+        concepts = ", ".join(s.get("concepts", []) or [])
+        parts.append(f"- {s.get('name', s.get('slug', ''))}" + (f": {concepts}" if concepts else ""))
+    return "Subtopics to cover in questions:\n" + "\n".join(parts) + "\n"
+
+
 def _memory_dict(row, memory: ProjectMemoryRepo) -> dict:
     return {
         "topic_id": row.topic_id,
@@ -843,6 +861,10 @@ def _memory_dict(row, memory: ProjectMemoryRepo) -> dict:
         "attempts": row.attempts,
         "correct": row.correct,
         "coverage_status": row.coverage_status,
+        "easiness": float(getattr(row, "easiness", 2.5) or 2.5),
+        "repetitions": int(getattr(row, "repetitions", 0) or 0),
+        "interval_days": float(getattr(row, "interval_days", 0.0) or 0.0),
+        "due_at": row.due_at.isoformat() if getattr(row, "due_at", None) else None,
         "label": memory.mastery_label(float(row.p_mastery)),
         "last_practiced_at": row.last_practiced_at.isoformat() if row.last_practiced_at else None,
     }

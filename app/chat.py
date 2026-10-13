@@ -189,7 +189,8 @@ class ChatService:
             messages.append({"role": "system", "content": "Response style: be precise and concise. Lead with the direct answer, include only necessary explanation, and retain citations."})
         elif response_style == "explanatory":
             messages.append({"role": "system", "content": "Response style: explain the supported reasoning step by step. Define terms from the context. Only use examples explicitly present in the sources. Cite each explanation; refuse when the requested fact is missing."})
-        raw = self.llm.chat(messages, on_chunk=on_chunk)
+        # Publish only the audited answer so repairs cannot flash unsupported text.
+        raw = self.llm.chat(messages)
         if _is_refusal(raw):
             self.chats.add_message(chat_id, "assistant", REFUSAL, [], False)
             after_turn(user_id, chat, question, REFUSAL, [], nudge=False)
@@ -219,6 +220,8 @@ class ChatService:
                                  _retrieved_labels(chunks), best)
 
         stored = [self._citation_dict(c) for c in result.citations]
+        if on_chunk is not None:
+            on_chunk(result.answer)
         self.chats.add_message(chat_id, "assistant", result.answer, stored, bool(stored))
 
         # First exchange names the chat (cheap, no LLM call).

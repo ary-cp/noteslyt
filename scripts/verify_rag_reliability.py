@@ -47,7 +47,7 @@ def main():
     assert precise in result
     print("PASS: whole-chunk budget, deduplication and source identity")
     grouped = audit_citations("Facts [2, 1, 99].", chunks)
-    assert grouped.answer == "Facts [1][2]."
+    assert grouped.answer == "Facts [1] [2]."
     assert [c.locator_value for c in grouped.citations] == ["2", "1"]
     math = audit_citations("Vector $[1, 2]$, code `[1, 2]` and facts [2, 1].", chunks)
     assert "$[1, 2]$" in math.answer and "`[1, 2]`" in math.answer
@@ -77,6 +77,11 @@ def main():
     service._generate_title.assert_not_called()
     service.llm.chat = Mock(side_effect=[unsupported, unsupported])
     assert service.send("user", "chat", "Explain")["answer"] == REFUSAL
+    received = []
+    service.llm.chat = Mock(side_effect=[unsupported, "A supported fact [1]."])
+    service.send("user", "chat", "Explain", on_chunk=received.append)
+    assert received == ["A supported fact [1]."]
+    assert all("on_chunk" not in call.kwargs for call in service.llm.chat.call_args_list)
     print("PASS: repair uncited paragraphs once; refuse if repair remains unsupported")
 
     assert rate_limit_delay(quota()) == 39.5

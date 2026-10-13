@@ -211,6 +211,7 @@ export interface TopicSummary {
   slug: string;
   name: string;
   description: string;
+  subtopics: { slug: string; name: string; description: string; concepts: string[]; locators: { kind: string; value: string }[] }[];
   sources: {
     source_id: string;
     filename: string;
@@ -346,6 +347,10 @@ export interface TopicMemory {
   coverage_status: string;
   label: string;
   last_practiced_at: string | null;
+  easiness: number;
+  repetitions: number;
+  interval_days: number;
+  due_at: string | null;
 }
 
 /** `app/schemas.py: ProjectMemoryOut` */
@@ -435,6 +440,7 @@ export interface LearnerOut {
   weakest: TopicMemory[];
   coverage: Record<string, number>;
   streak: Record<string, number>;
+  due_review: number;
   recent_quizzes: RecentQuizOut[];
 }
 

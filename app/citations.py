@@ -146,6 +146,48 @@ def format_context(chunks: list, *, numbered: bool = False) -> str:
     return "\n\n---\n\n".join(blocks)
 
 
+# Models often group several references in one bracket pair ("[1, 2, 4]",
+# "[1][2]" is already fine, "[1-3]"). The audit below only recognises one
+# reference per pair, so grouped forms used to slip through unaudited and
+# render as dead text. Expand them into singletons first; each number is
+# then resolved (or dropped as hallucinated) on its own.
+_MULTI_REF_RE = re.compile(r"\[(\d[\d\s,;–\-]*?)\]")
+
+
+def _expand_multi_refs(answer: str) -> str:
+    """Split grouped references ("[1, 2, 4]", "[1-3]") into "[1] [2] [4]"."""
+
+    def _split(match: re.Match) -> str:
+        inner = match.group(1)
+        # Single reference — leave it for the main audit pass.
+        if re.fullmatch(r"\s*\d{1,3}\s*", inner):
+            return match.group(0)
+        # Anything with letters/colons (timestamps, labels) is not a
+        # grouped reference list — leave it alone.
+        if re.search(r"[A-Za-z:]", inner):
+            return match.group(0)
+        nums: list[str] = []
+        for part in re.split(r"[,;]", inner):
+            part = part.strip()
+            if not part:
+                continue
+            ranged = re.fullmatch(r"(\d{1,3})\s*[–\-]\s*(\d{1,3})", part)
+            if ranged:
+                lo, hi = sorted((int(ranged.group(1)), int(ranged.group(2))))
+                if hi - lo > 20:  # sanity cap — not a real citation range
+                    return match.group(0)
+                nums.extend(str(n) for n in range(lo, hi + 1))
+            elif re.fullmatch(r"\d{1,3}", part):
+                nums.append(part)
+            else:
+                return match.group(0)
+        if not nums:
+            return match.group(0)
+        return " ".join(f"[{n}]" for n in nums)
+
+    return _MULTI_REF_RE.sub(_split, answer)
+
+
 def audit_citations(answer: str, chunks: list) -> AuditResult:
     """
     Strip every citation whose locator was not retrieved.
@@ -181,8 +223,7 @@ def audit_citations(answer: str, chunks: list) -> AuditResult:
     protected = r"(```[\s\S]*?```|`[^`\n]+`|\$\$[\s\S]*?\$\$|\$[^$\n]+\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\))"
     parts = re.split(protected, answer)
     for i in range(0, len(parts), 2):
-        parts[i] = re.sub(r"\[(\d{1,3}(?:\s*,\s*\d{1,3})+)\]",
-                          lambda m: "".join(f"[{n.strip()}]" for n in m.group(1).split(",")), parts[i])
+        parts[i] = _expand_multi_refs(parts[i])
         parts[i] = CITATION_RE.sub(_replace, parts[i])
     cleaned = "".join(parts)
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
