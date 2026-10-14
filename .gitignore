@@ -4,6 +4,7 @@ __pycache__/
 **/__pycache__/
 data/
 .env
+.env-test
 
 # Node
 frontend/node_modules/

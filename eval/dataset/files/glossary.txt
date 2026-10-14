@@ -1,0 +1,5 @@
+Glossary (MARKER-GLOSSARY-TXT)
+vector: ordered list of numbers.
+basis: independent spanning set.
+eigenvector: Av = lambda v direction preserved.
+entropy: disorder measure.

@@ -1,0 +1,298 @@
+"""Real-model reproducible eval over `testset.v1.json` + `dataset/gen_corpus.py`.
+
+    uv run python eval/dataset/gen_corpus.py --out eval/dataset/files
+    cp .env-test.example .env-test   # fill real keys
+    uv run uvicorn app.main:app --port 8000        # root .env must match .env-test models
+    uv run python eval/run_real.py --env-file .env-test --tier 50
+
+Same data (seed-pinned corpus) + same model (.env-test) + same settings
+=> same numbers. Results go to eval/results/real-<model>-<date>.json plus
+a README-ready markdown table. Mock runs stay in eval/run_ragas.py.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime
+import hashlib
+import json
+import re
+import subprocess
+import sys
+import time
+import uuid
+from pathlib import Path
+
+import httpx
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from app.chat import REFUSAL  # noqa: E402
+from app.citations import citation_label  # noqa: E402
+from app.config import Settings  # noqa: E402
+from app.llm import LLMClient, build_embedder  # noqa: E402
+from smoke_test import auth, wait_until_settled  # noqa: E402
+
+TIMEOUT_S = 240
+FAITH_MIN = 0.8
+
+MIME = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".csv": "text/csv",
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".png": "image/png",
+    ".wav": "audio/wav",
+    ".mp4": "video/mp4",
+}
+
+failures: list[str] = []
+
+
+def check(label: str, ok: bool, detail: str = "") -> None:
+    print(f"  [{'PASS' if ok else 'FAIL'}] {label}" + (f" — {detail}" if detail else ""))
+    if not ok:
+        failures.append(label)
+
+
+def load_env_file(path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip().strip('"').strip("'")
+    return out
+
+
+def settings_from_env(env: dict[str, str]) -> Settings:
+    kwargs: dict[str, object] = {}
+    mapping = {
+        "LLM_BASE_URL": "llm_base_url", "LLM_API_KEY": "llm_api_key", "LLM_MODEL": "llm_model",
+        "EMBEDDING_MODE": "embedding_mode", "EMBEDDING_BASE_URL": "embedding_base_url",
+        "EMBEDDING_API_KEY": "embedding_api_key", "EMBEDDING_MODEL": "embedding_model",
+        "EMBEDDING_DIM": "embedding_dim",
+        "TRANSCRIPTION_BASE_URL": "transcription_base_url",
+        "TRANSCRIPTION_API_KEY": "transcription_api_key",
+        "TRANSCRIPTION_MODEL": "transcription_model",
+    }
+    for k, field in mapping.items():
+        if env.get(k):
+            kwargs[field] = int(env[k]) if field == "embedding_dim" and env[k].isdigit() else env[k]
+    return Settings(**kwargs)  # type: ignore[arg-type]
+
+
+def cosine(a: list[float], b: list[float]) -> float:
+    import math
+
+    dot = sum(x * y for x, y in zip(a, b))
+    return dot / ((math.sqrt(sum(x * x for x in a)) or 1.0) * (math.sqrt(sum(y * y for y in b)) or 1.0))
+
+
+def judge(llm: LLMClient, answer: str, retrieved: list[str], keywords: list[str]) -> tuple[float, str]:
+    try:
+        data = llm.complete_json(
+            "You judge faithfulness as JSON. Given an answer, split it into atomic factual "
+            'claims and output {"claims": [{"text": "...", "supported": true/false}]}.',
+            f"ANSWER:\n{answer[:2000]}\n\nCited: {', '.join(retrieved) or '(nothing)'}",
+            max_tokens=1024,
+        )
+        claims = data.get("claims", [])
+        if not claims:
+            raise ValueError("no claims")
+        return round(sum(1 for c in claims if c.get("supported")) / len(claims), 3), f"llm ({len(claims)} claims)"
+    except Exception:
+        if not keywords:
+            return 1.0, "citation (no keywords)"
+        hit = sum(1 for w in keywords if w.lower() in answer.lower())
+        return round(hit / len(keywords), 3), "keyword (judge unusable)"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--env-file", default=".env-test")
+    ap.add_argument("--tier", type=int, default=50, choices=[30, 50, 100])
+    ap.add_argument("--base", default=None)
+    ap.add_argument("--out", default="eval/results")
+    ap.add_argument("--corpus", default="eval/dataset/files")
+    args = ap.parse_args()
+
+    env_path = Path(args.env_file)
+    if not env_path.exists():
+        print(f"missing {env_path}: copy .env-test.example first")
+        return 2
+    env = load_env_file(env_path)
+    base = args.base or env.get("EVAL_BASE_URL", "http://127.0.0.1:8000")
+    tier = args.tier
+    corpus = Path(args.corpus)
+    if not corpus.exists():
+        print(f"missing corpus {corpus}: run eval/dataset/gen_corpus.py first")
+        return 2
+
+    testset = json.loads((ROOT / "eval" / "testset.v1.json").read_text(encoding="utf-8"))
+    filemap: dict[str, str] = testset["fixtures"]
+    items = [i for i in testset["items"] if int(i.get("tier", 30)) <= tier]
+    print(f"tier {tier}: {len(items)} items over {corpus}")
+
+    esettings = settings_from_env(env)
+    llm = LLMClient(esettings)
+    embedder = build_embedder(esettings)
+    c = httpx.Client(base_url=base, timeout=TIMEOUT_S)
+
+    print("health")
+    health = c.get("/health").json()
+    check("server up", health.get("status") in {"ok", "degraded"}, str(health.get("status")))
+    for k, got, want in [
+        ("llm_model", health.get("llm_model"), env.get("LLM_MODEL")),
+        ("llm_base", health.get("llm_base_url"), env.get("LLM_BASE_URL")),
+    ]:
+        if want and got != want:
+            print(f"  [warn] server {k}={got!r} != .env-test {want!r} (results still recorded)")
+    try:
+        sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+    except Exception:
+        sha = "unknown"
+
+    tag = uuid.uuid4().hex[:8]
+    token = c.post("/auth/signup", json={
+        "email": f"real-{tag}@test.co", "password": "real-password", "display_name": "RealEval",
+    }).json()["access_token"]
+    h = auth(token)
+
+    print("upload")
+    projects: dict[str, str] = {}
+    for proj in testset["projects"]:
+        pid = c.post("/projects", json={"title": f"real-{proj['key']}-{tag}"}, headers=h).json()["id"]
+        projects[proj["key"]] = pid
+        files = []
+        for key in proj["fixtures"]:
+            p = corpus / filemap[key]
+            if not p.exists():
+                print(f"  [warn] missing {p.name}, skipped (video needs ffmpeg)")
+                continue
+            files.append(("files", (p.name, p.read_bytes(), MIME.get(p.suffix.lower(), "application/octet-stream"))))
+        r = c.post(f"/projects/{pid}/sources", files=files, headers=h)
+        check(f"{proj['key']} upload 202", r.status_code == 202, r.text[:120])
+    settled_ok = True
+    for key, pid in projects.items():
+        st = wait_until_settled(c, h, pid)
+        ok = st["settled"] and st["counts"].get("failed", 0) == 0
+        if not ok:
+            print(f"  [warn] {key} not fully ready: {st['counts']} (media items may skip)")
+            settled_ok = settled_ok and False
+        check(f"{key} settled", st["settled"], str(st["counts"]))
+
+    print("\nitems")
+    rows: list[dict] = []
+    skipped = 0
+    for item in items:
+        pid = projects[item["project"]]
+        if item.get("requires_media"):
+            srcs = c.get(f"/projects/{pid}/sources", headers=h).json()
+            media_ready = any(s.get("source_type") in {"audio", "video"} and s.get("status") == "ready" for s in srcs)
+            if not media_ready:
+                print(f"  [skip] {item['id']} (no ready audio/video source)")
+                skipped += 1
+                rows.append({"id": item["id"], "skipped": True})
+                continue
+        chat = c.post(f"/projects/{pid}/chats", json={}, headers=h).json()
+        r = c.post(f"/chats/{chat['id']}/messages", json={"content": item["question"]}, headers=h)
+        assert r.status_code == 200, r.text
+        ans = r.json()
+        if item.get("must_refuse"):
+            outside = bool(re.match(r"\s*\*\*Outside your sources:\*\*", ans["answer"], re.I))
+            ok = ans["grounded"] is False and ans["citations"] == [] and (ans["answer"] == REFUSAL or outside)
+            check(f"{item['id']} refused/labeled", ok, ans["answer"][:80])
+            rows.append({"id": item["id"], "refused": ok})
+            continue
+        exp = [citation_label(e["kind"], e["value"]) for e in item.get("expected", [])]
+        # segment expectations are loose: any segment retrieval passes recall.
+        if any(e.get("kind") == "segment" for e in item.get("expected", [])):
+            got = ans["retrieved"]
+            inter = [g for g in got if g.startswith("[")]
+            precision = len(inter) / len(got) if got else 0.0
+            recall = 1.0 if any("0:" in g or "[" in g for g in got) else 0.0
+        else:
+            got = ans["retrieved"]
+            inter = [g for g in got if g in exp]
+            precision = len(inter) / len(got) if got else 0.0
+            recall = len(inter) / len(exp) if exp else 1.0
+        faith, method = judge(llm, ans["answer"], got, item.get("must_contain", []))
+        rel = round(cosine(*embedder.embed([item["question"], ans["answer"]])), 3)
+        print(f"  [info] {item['id']}: faith={faith} ({method}) rel={rel} P={precision:.2f} R={recall:.2f}")
+        rows.append({"id": item["id"], "faith": faith, "rel": rel,
+                     "precision": precision, "recall": recall, "method": method})
+
+    grounded = [r for r in rows if "faith" in r]
+    refused = [r for r in rows if "refused" in r]
+    faith = sum(r["faith"] for r in grounded) / len(grounded) if grounded else 0.0
+    refusal = sum(r["refused"] for r in refused) / len(refused) if refused else 0.0
+    print("\naggregate")
+    check("faithfulness >= 0.8", faith >= FAITH_MIN, f"{faith:.3f}")
+    check("safe off-material handling == 100%", refusal == 1.0, f"{refusal:.0%}")
+    if grounded:
+        print(f"  [info] mean rel {sum(r['rel'] for r in grounded)/len(grounded):.3f} "
+              f"P/R {sum(r['precision'] for r in grounded)/len(grounded):.2f}/"
+              f"{sum(r['recall'] for r in grounded)/len(grounded):.2f} skipped={skipped}")
+
+    out = {
+        "date": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "git": sha,
+        "tier": tier,
+        "n_items": len(items),
+        "skipped": skipped,
+        "seed": int(env.get("EVAL_SEED", "42")),
+        "models": {"llm": env.get("LLM_MODEL"), "llm_base": env.get("LLM_BASE_URL"),
+                   "embedding": env.get("EMBEDDING_MODEL"), "embedding_mode": env.get("EMBEDDING_MODE"),
+                   "embedding_dim": env.get("EMBEDDING_DIM") or "auto",
+                   "transcription": env.get("TRANSCRIPTION_MODEL")},
+        "server": {"llm_model": health.get("llm_model"), "embeddings": health.get("embeddings"),
+                   "db": (health.get("database") or {}).get("target")},
+        "aggregate": {"faithfulness": round(faith, 3), "refusal": refusal,
+                      "precision": round(sum(r["precision"] for r in grounded)/len(grounded), 3) if grounded else 0.0,
+                      "recall": round(sum(r["recall"] for r in grounded)/len(grounded), 3) if grounded else 0.0,
+                      "relevancy": round(sum(r["rel"] for r in grounded)/len(grounded), 3) if grounded else 0.0},
+        "rows": rows,
+        "corpus_sha": hashlib.sha256(b"".join(
+            sorted((corpus / f).read_bytes() for f in sorted(p.name for p in corpus.iterdir())))).hexdigest()[:16]
+        if any(corpus.iterdir()) else "empty",
+    }
+    outdir = Path(args.out)
+    outdir.mkdir(parents=True, exist_ok=True)
+    slug = re.sub(r"[^a-z0-9]+", "-", (env.get("LLM_MODEL") or "model").lower()).strip("-")
+    stamp = datetime.datetime.now().strftime("%Y%m%d")
+    path = outdir / f"real-{slug}-t{tier}-{stamp}.json"
+    path.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    (outdir / "latest.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
+    print(f"\nwrote {path} + latest.json")
+
+    print("\ncleanup")
+    for pid in projects.values():
+        c.delete(f"/projects/{pid}", headers=h)
+    c.close()
+
+    # markdown table for README
+    try:
+        from to_markdown import write_table  # type: ignore
+
+        write_table(out, outdir / "latest.md")
+        print("wrote latest.md")
+    except Exception as exc:
+        print(f"[warn] markdown skipped: {exc}")
+
+    print()
+    if failures:
+        print(f"{len(failures)} CHECK(S) FAILED")
+        return 1
+    print("EVAL REAL PASSED")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

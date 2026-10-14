@@ -1,0 +1,103 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R] /Count 6 >>
+endobj
+3 0 obj
+<< /Length 223 >>
+stream
+BT /F1 28 Tf 60 505 Td (1. Vectors) Tj ET
+BT /F1 16 Tf 60 455 Td (A vector is an ordered list of numbers. Vectors add component-wise.) Tj ET
+BT /F1 16 Tf 60 431 Td (MARKER-VEC-P1. The span is all linear combinations.) Tj ET
+endstream
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 1 0 R >> >> /Contents 3 0 R >>
+endobj
+5 0 obj
+<< /Length 314 >>
+stream
+BT /F1 28 Tf 60 505 Td (2. Vector spaces) Tj ET
+BT /F1 16 Tf 60 455 Td (A vector space is closed under addition and scalar multiplication.) Tj ET
+BT /F1 16 Tf 60 431 Td (Examples R^n and polynomials degree <= n. A basis is a linearly) Tj ET
+BT /F1 16 Tf 60 407 Td (independent spanning set. MARKER-BASIS-P2.) Tj ET
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 1 0 R >> >> /Contents 5 0 R >>
+endobj
+7 0 obj
+<< /Length 322 >>
+stream
+BT /F1 28 Tf 60 505 Td (3. Matrix operations) Tj ET
+BT /F1 16 Tf 60 455 Td (Matrices are rectangular arrays. Matrix multiplication is associative) Tj ET
+BT /F1 16 Tf 60 431 Td (but NOT commutative. MARKER-COMM-P3. Transpose swaps rows and columns.) Tj ET
+BT /F1 16 Tf 60 407 Td (Invertible iff determinant non-zero.) Tj ET
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 1 0 R >> >> /Contents 7 0 R >>
+endobj
+9 0 obj
+<< /Length 284 >>
+stream
+BT /F1 28 Tf 60 505 Td (4. Determinants) Tj ET
+BT /F1 16 Tf 60 455 Td (The determinant of a 2x2 matrix [[a,b],[c,d]] is ad - bc. MARKER-) Tj ET
+BT /F1 16 Tf 60 431 Td (DET-P4. Geometrically it scales area/volume. Zero determinant) Tj ET
+BT /F1 16 Tf 60 407 Td (collapses space.) Tj ET
+endstream
+endobj
+10 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 1 0 R >> >> /Contents 9 0 R >>
+endobj
+11 0 obj
+<< /Length 232 >>
+stream
+BT /F1 28 Tf 60 505 Td (5. Eigenvalues) Tj ET
+BT /F1 16 Tf 60 455 Td (An eigenvector of A is non-zero v with Av = lambda v. MARKER-) Tj ET
+BT /F1 16 Tf 60 431 Td (EIGENVEC-P5. Eigenvalues are roots of det\(A - lambda I\) = 0.) Tj ET
+endstream
+endobj
+12 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 1 0 R >> >> /Contents 11 0 R >>
+endobj
+13 0 obj
+<< /Length 294 >>
+stream
+BT /F1 28 Tf 60 505 Td (6. Diagonalisation) Tj ET
+BT /F1 16 Tf 60 455 Td (A matrix with n independent eigenvectors factors as A = P D P^-1.) Tj ET
+BT /F1 16 Tf 60 431 Td (MARKER-DIAG-P6. Symmetric matrices have real eigenvalues and) Tj ET
+BT /F1 16 Tf 60 407 Td (orthogonal eigenvectors.) Tj ET
+endstream
+endobj
+14 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 1 0 R >> >> /Contents 13 0 R >>
+endobj
+15 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+xref
+0 16
+0000000000 65535 f 
+0000000009 00000 n 
+0000000079 00000 n 
+0000000169 00000 n 
+0000000443 00000 n 
+0000000569 00000 n 
+0000000934 00000 n 
+0000001060 00000 n 
+0000001433 00000 n 
+0000001559 00000 n 
+0000001894 00000 n 
+0000002021 00000 n 
+0000002305 00000 n 
+0000002433 00000 n 
+0000002779 00000 n 
+0000002907 00000 n 
+trailer
+<< /Size 16 /Root 15 0 R >>
+startxref
+2957
+%%EOF
