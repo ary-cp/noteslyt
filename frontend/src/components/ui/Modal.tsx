@@ -12,6 +12,7 @@ export function Modal({
   footer,
   width = 480,
   labelledBy,
+  dismissable = true,
 }: {
   open: boolean;
   onClose: () => void;
@@ -21,22 +22,31 @@ export function Modal({
   footer?: React.ReactNode;
   width?: number;
   labelledBy?: string;
+  /** False: backdrop click + Escape don't close (the ✕ button still works).
+   * Used for in-progress quizzes/exams so a misclick never loses the attempt. */
+  dismissable?: boolean;
 }) {
   const titleId = useRef(labelledBy ?? `modal-${Math.random().toString(36).slice(2)}`);
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
+    if (dismissable) {
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === "Escape") onClose();
+      };
+      document.addEventListener("keydown", onKey);
+      return () => document.removeEventListener("keydown", onKey);
+    }
+  }, [open, onClose, dismissable]);
+
+  useEffect(() => {
+    if (!open) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
-      document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
   return createPortal(
@@ -45,7 +55,7 @@ export function Modal({
       style={{ ["--z-modal" as string]: 60, zIndex: 60 }}
       role="presentation"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (dismissable && e.target === e.currentTarget) onClose();
       }}
     >
       <div

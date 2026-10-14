@@ -248,7 +248,11 @@ class QuizService:
             )
 
         stems = [q["stem"] for q in kept]
-        vectors = self.embedder.embed(stems)
+        try:
+            vectors: list = self.embedder.embed(stems)
+        except Exception as exc:  # noqa: BLE001 — novelty vectors are nice-to-have
+            log.warning("Stem embedding skipped, storing questions without vectors: %s", exc)
+            vectors = [None] * len(kept)
         slugs = {q["topic_slug"] for q in kept}
         single_topic = None
         if len(slugs) == 1:
@@ -271,7 +275,7 @@ class QuizService:
                 explanation=q.get("explanation", ""),
                 locator_kind=q["locator"]["kind"], locator_value=q["locator"]["value"],
                 difficulty=float(q.get("difficulty", 0.5)),
-                stem_embedding=list(vec),
+                stem_embedding=list(vec) if vec is not None else None,
             )
             out_questions.append(_public_question(record, topic.slug))
 
@@ -628,13 +632,21 @@ class QuizService:
         return isinstance(q.get("value"), (int, float)) and isinstance(q.get("tolerance"), (int, float))
 
     def _novelty_filter(self, user_id: str, project_id: str, kept: list[dict]) -> list[dict]:
-        """Drop stems within cosine ≥ max of the learner's recent stems (F29)."""
+        """Drop stems within cosine ≥ max of the learner's recent stems (F29).
+
+        Degrades to unfiltered when the embedder is unreachable (e.g. the local
+        server crashed mid-generation): a slightly repetitive quiz beats no quiz.
+        """
         if not kept:
             return kept
         recent = self.quizzes.recent_stems(user_id, project_id)
         import numpy as np
 
-        new_vecs = np.asarray(self.embedder.embed([q["stem"] for q in kept]), dtype=np.float32)
+        try:
+            new_vecs = np.asarray(self.embedder.embed([q["stem"] for q in kept]), dtype=np.float32)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Novelty filter skipped (embedder unreachable): %s", exc)
+            return kept
         new_vecs /= np.linalg.norm(new_vecs, axis=1, keepdims=True) + 1e-9
         sims = None
         if recent:
