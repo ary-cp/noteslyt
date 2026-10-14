@@ -420,6 +420,7 @@ export function StudioPanel({
         onClose={() => !busy && setGenTool(null)}
         title={genTool ? `Generate ${TOOLS.find((t) => t.id === genTool)?.title}` : ""}
         subtitle={`From ${scopeLabel}`}
+        width={600}
         footer={
           <>
             <Button variant="ghost" onClick={() => setGenTool(null)} disabled={busy}>Cancel</Button>
