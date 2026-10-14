@@ -1,6 +1,6 @@
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ChevronDown,
   Search,
@@ -87,9 +87,13 @@ export default function Workspace({
   const [switcherAnchor, setSwitcherAnchor] = useState({ x: 0, y: 0 });
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
+  const [searchParams] = useSearchParams();
   const [sourceSidebarWidth, setSourceSidebarWidth] = useState(300);
   const [studioSidebarWidth, setStudioSidebarWidth] = useState(330);
   const [mobileTab, setMobileTab] = useState<"sources" | "chat" | "studio">(initialSourceId ? "sources" : "chat");
+  useEffect(() => {
+    if (searchParams.has("artifact")) { setRightOpen(true); setMobileTab("studio"); }
+  }, [searchParams]);
   // Collapsed-rail shortcut: which Studio tool to open when the slim right
   // rail expands the panel (null = just expand, keep current view).
   const [studioToolReq, setStudioToolReq] = useState<{ tool: StudioTool; nonce: number } | null>(null);

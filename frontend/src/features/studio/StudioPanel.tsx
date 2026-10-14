@@ -2,7 +2,7 @@ import { SlideDeck } from "../viewer/SlideDeck";
 import { buildSchedule } from "./studySchedule";
 import type * as React from "react";
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ClipboardList,
   FileText,
@@ -74,6 +74,7 @@ export function StudioPanel({
 }) {
   const { push } = useToast();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [topics, setTopics] = useState<TopicSummary[]>([]);
   const [learner, setLearner] = useState<LearnerOut | null>(null);
   const [graph, setGraph] = useState<TopicGraph | null>(null);
@@ -107,6 +108,16 @@ export function StudioPanel({
     }
     setViewing(jobArtifact(job));
   };
+
+  useEffect(() => {
+    const requested = searchParams.get("artifact");
+    const job = jobs.find((item) => item.id === requested && item.status === "ready");
+    if (!job) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("artifact");
+    setSearchParams(next, { replace: true });
+    openArtifact(job);
+  }, [searchParams, jobs, setSearchParams]);
 
   // Collapsed-rail shortcut: clicking a tool icon in the slim right rail
   // expands Studio and opens that tool's dialog.
