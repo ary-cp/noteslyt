@@ -85,6 +85,22 @@ REFINE_SYSTEM = (
     "Set capability_level ONLY on confident evidence of vocabulary depth, else null."
 )
 
+LEARNER_MEMO_SYSTEM = (
+    "You are a learning-style analyst. Given the learner's recent questions, "
+    "write a 2-4 sentence memo describing HOW they learn: pace (fast/slow/deliberate), "
+    "preferred representations (charts, examples, equations, analogies), question depth "
+    "(recall vs application vs out-of-the-box), and confidence. Plain prose, no bullets, "
+    "max 600 characters. If there is too little evidence, reply with exactly: {}"
+)
+
+CHAT_REPORT_SYSTEM = (
+    "You write a short personalised study report as JSON. Given one tutor exchange "
+    "(question + answer) and the learner's topic mastery before/after, output "
+    '{"summary": "...", "strengths": [...], "weaknesses": [...]}. '
+    "Summary is 2-3 sentences: what the learner understood, confidence level, and one "
+    "concrete next step. Strengths/weaknesses are at most 3 short phrases each."
+)
+
 
 class ChatNotFoundError(RuntimeError):
     pass
@@ -345,7 +361,7 @@ class ChatService:
     # ------------------------------------------------------- background E.25
     def refine_profile(self, user_id: str) -> dict:
         """Bounded LLM pass over recent utterances. Never raises — logs and skips."""
-        out = {"counters": {}, "strengths": [], "capability": (False, "unknown")}
+        out = {"counters": {}, "strengths": [], "capability": (False, "unknown"), "memo": ""}
         try:
             messages = self.chats.recent_user_messages(user_id, limit=20)
             if not messages:
@@ -365,9 +381,36 @@ class ChatService:
             out["capability"] = self.profiles.maybe_upgrade_capability(
                 user_id, data.get("capability_level")
             )
+            out["memo"] = self.refresh_learner_memo(user_id, messages)
         except Exception as exc:  # noqa: BLE001 — refinement must never break chat
             log.warning("Profile refinement skipped for %s: %s", user_id, exc)
         return out
+
+    def refresh_learner_memo(self, user_id: str, messages: list[str] | None = None) -> str:
+        """LLM prompt-analyser: rewrite the short learning-style memo from recent prompts."""
+        try:
+            msgs = messages if messages is not None else self.chats.recent_user_messages(user_id, limit=12)
+            if not msgs:
+                return ""
+            profile = self.profiles.get(user_id)
+            previous = (profile.learning_style_notes if profile else "") or ""
+            raw = self.llm.complete(
+                LEARNER_MEMO_SYSTEM,
+                f"Previous memo: {previous[:600] or '(none)'}\n\n"
+                "Recent learner questions:\n" + "\n".join(f"- {m[:300]}" for m in msgs[-12:]),
+                max_tokens=256,
+            ).strip()
+            if not raw or raw.strip() == "{}":
+                return previous
+            memo = " ".join(raw.split())[:600]
+            if memo and memo != previous:
+                self.profiles.update_learning_notes(user_id, memo)
+                return memo
+            return previous
+        except Exception as exc:  # noqa: BLE001 — memo must never break chat
+            log.warning("Learner memo refresh skipped for %s: %s", user_id, exc)
+            profile = self.profiles.get(user_id)
+            return (profile.learning_style_notes if profile else "") or ""
 
     # -------------------------------------------------------------- internals
     def _rewrite(self, question: str, prior: list) -> tuple[str, bool]:
@@ -392,6 +435,9 @@ class ChatService:
             lines.append(f"Capability: {profile.capability_level}; thinking: {profile.thinking_level}.")
             if profile.goals:
                 lines.append(f"Goals: {profile.goals[:200]}")
+            memo = (getattr(profile, "learning_style_notes", "") or "").strip()
+            if memo:
+                lines.append(f"How this learner learns: {memo[:600]}")
             for s in (profile.strengths or [])[: self.settings.memory_max_facts_global]:
                 lines.append(f"Strength: {s}")
             counters = sorted((profile.study_pattern or {}).items())[: self.settings.memory_max_facts_global]
@@ -514,19 +560,31 @@ class ChatService:
         self, user_id: str, chat, question: str, answer: str,
         citations: list[dict], *, nudge: bool,
     ) -> None:
-        """Nudges, summary rollover and counters. Failures are logged, never raised."""
+        """Nudges, summary rollover, counters, memo + personalised report. Never raises."""
         try:
             self.profiles.observe_study_pattern(user_id, chat_turns=1)
+            deltas: list[dict] = []
             if nudge:
-                self._apply_chat_nudges(user_id, chat, question, answer)
+                deltas = self._apply_chat_nudges(user_id, chat, question, answer)
+                try:
+                    self._write_chat_report(user_id, chat, question, answer, deltas)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Chat report skipped for chat %s: %s", chat.id, exc)
+                # Prompt-analyser memo: cheap, every few turns only.
+                try:
+                    total = self.chats.count_messages(chat.id)
+                    if total % 6 < 2:
+                        self.refresh_learner_memo(user_id)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Learner memo skipped for chat %s: %s", chat.id, exc)
             self._maybe_summarize(chat, user_id)
         except Exception as exc:  # noqa: BLE001
             log.warning("Post-turn bookkeeping skipped for chat %s: %s", chat.id, exc)
 
-    def _apply_chat_nudges(self, user_id: str, chat, question: str, answer: str) -> None:
+    def _apply_chat_nudges(self, user_id: str, chat, question: str, answer: str) -> list[dict]:
         topics = self.topics.list_for_project(chat.project_id)
         if not topics:
-            return
+            return []
         by_slug = {t.slug: t for t in topics}
         listing = "\n".join(f"- {t.slug}: {t.name}" for t in topics)
         try:
@@ -536,14 +594,68 @@ class ChatService:
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("Chat classification skipped: %s", exc)
-            return
+            return []
+        deltas: list[dict] = []
         for signal in (data.get("signals") or [])[:8]:
             topic = by_slug.get(str(signal.get("topic_slug", "")))
             if topic is None:
                 continue
-            self.memory.apply_nudge(
-                user_id, chat.project_id, topic.id, bool(signal.get("correct", False))
+            correct = bool(signal.get("correct", False))
+            before_row = self.memory.get(user_id, chat.project_id, topic.id)
+            p_before = float(before_row.p_mastery) if before_row else self.bkt.p_init
+            updated = self.memory.apply_nudge(user_id, chat.project_id, topic.id, correct)
+            try:
+                p_after = float(updated.get("p_mastery", p_before))
+            except (TypeError, ValueError):
+                p_after = p_before
+            deltas.append({
+                "slug": topic.slug, "name": topic.name,
+                "p_before": round(p_before, 4), "p_after": p_after,
+                "correct": correct,
+            })
+        return deltas
+
+    def _write_chat_report(
+        self, user_id: str, chat, question: str, answer: str, deltas: list[dict],
+    ) -> str | None:
+        """Personalised BKT-style report for one conversation turn. Best-effort."""
+        from .repo.learner_reports import LearnerReportRepo
+
+        bkt = {"mastery_delta": deltas[:8], "method": "bkt-nudge(±5%)"}
+        try:
+            mastery_txt = "; ".join(
+                f"{d['name']}: {d['p_before']:.2f}→{d['p_after']:.2f}" for d in deltas[:6]
+            ) or "no topic evidence"
+            data = self.llm.complete_json(
+                CHAT_REPORT_SYSTEM,
+                f"QUESTION: {question[:1000]}\nANSWER: {answer[:2000]}\n"
+                f"MASTERY (BKT nudge): {mastery_txt}",
+                max_tokens=512,
             )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Chat report LLM skipped: %s", exc)
+            data = {}
+        summary = str(data.get("summary") or "").strip()[:1000]
+        if not summary:
+            if not deltas:
+                return None
+            parts = "; ".join(
+                f"{d['name']} {int(d['p_after']*100)}%" for d in deltas[:3]
+            )
+            summary = f"Conversation touched {len(deltas)} topic(s): {parts}."
+        strengths = [str(s)[:120] for s in (data.get("strengths") or [])][:3]
+        weaknesses = [str(s)[:120] for s in (data.get("weaknesses") or [])][:3]
+        try:
+            row = LearnerReportRepo(self.profiles.db).create(
+                user_id, chat.project_id, "chat", ref_id=str(chat.id),
+                summary=summary, bkt=bkt,
+                irt={"method": "nudge-only; no graded outcome"},
+                strengths=strengths, weaknesses=weaknesses,
+            )
+            return str(row.id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Chat report store skipped: %s", exc)
+            return None
 
     def _maybe_summarize(self, chat, user_id: str) -> None:
         """Fold turns older than the window into `chats.summary` past the threshold."""

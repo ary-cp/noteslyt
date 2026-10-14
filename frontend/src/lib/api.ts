@@ -21,11 +21,13 @@ import type {
   HealthResponse,
   IngestStatus,
   LearnerOut,
+  LearnerReport,
   LearnerResponse,
   LlamaStatus,
   ParsedContent,
   ProfileLevels,
   ProfileOut,
+  ProfileOverview,
   ProjectListItem,
   ProjectMemory,
   ProjectOut,
@@ -183,9 +185,15 @@ export const updateProfile = (body: {
   capability_level?: string;
   thinking_level?: string;
   goals?: string;
+  learning_style_notes?: string;
 }): Promise<ProfileOut> => request("/profile", json(body, "PATCH"));
 
 export const getProfileLevels = (): Promise<ProfileLevels> => request("/profile/levels");
+
+export const getProfileOverview = (): Promise<ProfileOverview> => request("/profile/overview");
+
+export const listProfileReports = (limit = 20): Promise<{ reports: LearnerReport[] }> =>
+  request(`/profile/reports?limit=${limit}`);
 
 // ----------------------------------------------------------------- system
 export const getLlamaStatus = (): Promise<LlamaStatus> => request("/system/llama");

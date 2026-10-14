@@ -30,15 +30,42 @@ export function Dropdown({
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
   const box = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  const openMenu = () => {
+    const r = btn.current?.getBoundingClientRect();
+    if (r) {
+      // Open upward when there isn't room below (e.g. inside short modals).
+      const up = window.innerHeight - r.bottom < 240 && r.top > 280;
+      setPos({
+        top: up ? Math.max(8, r.top - 232) : r.bottom + 4,
+        left: Math.max(8, Math.min(r.left, window.innerWidth - Math.max(r.width, 160) - 8)),
+        width: Math.max(r.width, 160),
+      });
+    }
+    setOpen(true);
+    setActive(options.findIndex((o) => o.value === value));
+  };
 
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (box.current && !box.current.contains(t) && list.current && !list.current.contains(t)) setOpen(false);
     };
+    // Ancestor scroll would stale a fixed position — just close instead.
+    const onScroll = () => setOpen(false);
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open ]);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [open]);
 
   const current = options.find((o) => o.value === value);
 
@@ -72,14 +99,12 @@ export function Dropdown({
   return (
     <div ref={box} className={`relative ${className}`}>
       <button
+        ref={btn}
         type="button"
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
-        onClick={() => {
-          setOpen((v) => !v);
-          setActive(options.findIndex((o) => o.value === value));
-        }}
+        onClick={() => (open ? setOpen(false) : openMenu())}
         onKeyDown={onKey}
         title={current?.label ?? undefined}
         className="flex h-8 w-full cursor-pointer items-center justify-between gap-2 rounded-[7px] border border-[var(--border)] bg-[var(--input)] px-2.5 text-[13px] text-[var(--text-primary)] hover:border-[var(--border-strong)]"
@@ -87,11 +112,12 @@ export function Dropdown({
         <span className="truncate">{current?.label ?? <span className="text-[var(--text-muted)]">{placeholder}</span>}</span>
         <ChevronDown size={14} className={`shrink-0 text-[var(--text-muted)] transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
-      {open && (
+      {open && pos && createPortal(
         <div
+          ref={list}
           role="listbox"
-          className="anim-fade absolute z-40 mt-1 max-h-56 w-full min-w-[160px] overflow-y-auto rounded-[8px] border border-[var(--border)] bg-[var(--surface-raised)] p-1"
-          style={{ boxShadow: "var(--shadow-pop)", zIndex: 40 }}
+          className="anim-fade fixed overflow-y-auto rounded-[8px] border border-[var(--border)] bg-[var(--surface-raised)] p-1"
+          style={{ top: pos.top, left: pos.left, width: pos.width, maxHeight: 224, boxShadow: "var(--shadow-pop)", zIndex: 80 }}
         >
           {options.map((o, i) => (
             <button
@@ -116,7 +142,8 @@ export function Dropdown({
               {o.value === value && <Check size={14} className="shrink-0 text-[var(--accent)]" />}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

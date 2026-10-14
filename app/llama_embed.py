@@ -472,11 +472,37 @@ class LocalEmbeddingServer:
             "--port", str(s.embedding_local_port),
         ]
 
+    def _foreign_holder(self) -> bool:
+        """True when something that is not our child answers on our port.
+
+        Called with the lifecycle lock held, after `is_running()` ruled out
+        our own child: whatever answers is a stale server from a hard-killed
+        run (lifespan shutdown never ran) or a second NotesLyt on the same
+        ports. Sharing it would silently mix models, so refuse loudly —
+        stopping the holder is a manual step, not something to automate.
+        """
+        try:
+            req = urllib.request.Request(f"{self.base_url[:-3]}/health",
+                                         headers={"User-Agent": "noteslyt/1.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
     def ensure_running(self, timeout_s: int = 420) -> None:
         """Start the server unless already up (wake-on-API), then wait for health."""
         with self._lock:
             if self.is_running():
                 return
+            if self._foreign_holder():
+                raise RuntimeError(
+                    f"Port {self.settings.embedding_local_port} already answers an embedding "
+                    f"server that this process did not start (a stale llama-server from a "
+                    f"hard-killed run, or a second NotesLyt on the same ports). Sharing it "
+                    f"would mix models, so refusing to start. Stop the holder first — Task "
+                    f"Manager, or `taskkill /F /IM llama-server.exe` from an elevated "
+                    f"prompt — then retry."
+                )
             # Only one vendored engine stays resident: loading the embedding
             # model unloads the transcription server first so the two never
             # share memory (mirrors audio_cpp._unload_peer_embedder).
@@ -660,8 +686,27 @@ class ManagedEmbedder:
 
 # ================================================================ singleton
 def init_embedding_server(settings) -> LocalEmbeddingServer:
-    """Create the manager and ensure engine + model files exist (downloads!)."""
+    """Create the manager and ensure engine + model files exist (downloads!).
+
+    Reuses the live manager when it already points at the same local dir.
+    Settings PATCHes rebuild services in-process: replacing the manager
+    would orphan a running llama-server (its RAM/VRAM never comes back
+    until killed by hand). A changed dir stops the old server and starts
+    over; every other PATCHable key is read live, so reuse is safe.
+    """
     global _MANAGER
+    root = Path(settings.embedding_local_dir).expanduser().resolve()
+    if _MANAGER is not None and _MANAGER.root == root:
+        _MANAGER.settings = settings
+        _MANAGER.ensure_engine()
+        _MANAGER.ensure_model_files()
+        return _MANAGER
+    if _MANAGER is not None:
+        log.warning("Embedding local dir changed — stopping the previous server.")
+        try:
+            _MANAGER.stop()
+        except Exception:  # noqa: BLE001 — best-effort; the new manager still boots
+            log.exception("Could not stop the previous embedding server")
     manager = LocalEmbeddingServer(settings)
     manager.ensure_engine()
     manager.ensure_model_files()

@@ -32,6 +32,8 @@ import { Field, TextArea, TextInput } from "./components/ui/Controls";
 import Dashboard from "./pages/Dashboard";
 import Workspace from "./pages/Workspace";
 import AuthPage from "./pages/Auth";
+import LearningProfilePage from "./pages/LearningProfile";
+import ExamPage from "./features/studio/ExamPage";
 import NotFound from "./pages/NotFound";
 import { TestConsole } from "./harness/TestConsole";
 import { tooltipStyles } from "./components/ui/Tooltip";
@@ -265,10 +267,26 @@ function Shell() {
             }
           />
           <Route
+            path="/project/:projectId/exam/:quizId"
+            element={
+              <RequireAuth>
+                <ExamPage />
+              </RequireAuth>
+            }
+          />
+          <Route
             path="/project/:projectId/source/:sourceId"
             element={
               <RequireAuth>
                 <ProjectRoute view="source" />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/learning-profile"
+            element={
+              <RequireAuth>
+                <LearningProfilePage />
               </RequireAuth>
             }
           />

@@ -49,15 +49,12 @@ class OnboardingRequest(BaseModel):
 
 
 class ProfileUpdate(BaseModel):
-    """
-    Partial profile edit. Fields default to None = "leave unchanged", which is
-    what keeps `PATCH /profile {"goals": "..."}` from silently resetting the
-    capability level the learner already told us about.
-    """
+    """Partial profile edit. Fields default to None = "leave unchanged"."""
 
     capability_level: str | None = None
     thinking_level: str | None = None
     goals: str | None = Field(default=None, max_length=2000)
+    learning_style_notes: str | None = Field(default=None, max_length=2000)
 
 
 # ------------------------------------------------------------------ projects
@@ -435,6 +432,7 @@ class AnswerOut(BaseModel):
     p_after: float
     topic: TopicMasteryOut | None = None
     assessment_id: str | None = None
+    irt: dict = {}
 
 
 class RecentQuizOut(BaseModel):
@@ -563,3 +561,36 @@ class ModelsFetchRequest(BaseModel):
 
     base_url: str
     api_key: str | None = None
+
+
+class LearnerReportOut(BaseModel):
+    """One personalised BKT+IRT report (quiz/exam/chat)."""
+
+    id: str
+    project_id: str
+    kind: str = "quiz"
+    ref_id: str = ""
+    summary: str = ""
+    bkt: dict = {}
+    irt: dict = {}
+    strengths: list[str] = []
+    weaknesses: list[str] = []
+    created_at: str = ""
+
+
+class ProfileOverviewOut(BaseModel):
+    """Aggregated Learning Profile page: mastery across projects + reports."""
+
+    user_id: str
+    capability_level: str = "unknown"
+    thinking_level: str = "unknown"
+    goals: str = ""
+    learning_style_notes: str = ""
+    irt_ability: float = 0.0
+    irt_label: str = "developing"
+    quiz_progress: dict = {}
+    topics: list[TopicMemoryOut] = []
+    weak_topics: list[TopicMemoryOut] = []
+    strong_topics: list[TopicMemoryOut] = []
+    areas_of_improvement: list[str] = []
+    recent_reports: list[LearnerReportOut] = []

@@ -106,9 +106,22 @@ def _background_ingest(
     parse (retry path); fresh uploads always parse the file.
     """
     try:
+        # The row may be gone (deleted mid-ingest): abort quietly instead of
+        # crashing on FK writes later. The file check below covers disk.
+        if pipeline.sources.get(source.id) is None:
+            log.info("background ingest: source %s was deleted, aborting", source.id)
+            return
         path = storage.open_for_read(source.project_id, source.id, source.filename)
         if path is None:
             pipeline.sources.mark_failed(source.id, "Stored file disappeared before ingestion.")
+            return
+        # On-disk names are `<source_id>.<ext>` by construction: a resolved
+        # path for any other id means crossed wiring, and ingesting it would
+        # silently index the wrong file's content under this source.
+        if not path.name.startswith(source.id):
+            log.error("background ingest: path %s does not belong to source %s, refusing",
+                      path, source.id)
+            pipeline.sources.mark_failed(source.id, "Internal storage mismatch — please re-upload this file.")
             return
         pipeline.ingest_source(source, path, reuse_parsed=reuse_parsed)
     except Exception:  # noqa: BLE001 — background tasks have no caller to tell

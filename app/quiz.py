@@ -105,6 +105,13 @@ Correct when the learner states every key point in their own words (synonyms cou
 extra correct detail is fine). Feedback is one or two sentences: name what landed,
 then the single most important miss, if any."""
 
+QUIZ_REPORT_SYSTEM = """You write a personalised quiz report as JSON. Given the score,
+per-topic BKT mastery movement, the IRT ability movement, and the misconception
+points, output {"summary": "...", "strengths": [...], "weaknesses": [...]}.
+Summary is 3-4 sentences: overall confidence, which topics improved or slipped,
+and the single most useful next step. Strengths/weaknesses are at most 4 short
+phrases each, grounded in the evidence given."""
+
 
 class QuizError(RuntimeError):
     """Readable assessment failure (bad topic, empty material, LLM gave up)."""
@@ -241,7 +248,11 @@ class QuizService:
             )
 
         stems = [q["stem"] for q in kept]
-        vectors = self.embedder.embed(stems)
+        try:
+            vectors: list = self.embedder.embed(stems)
+        except Exception as exc:  # noqa: BLE001 — novelty vectors are nice-to-have
+            log.warning("Stem embedding skipped, storing questions without vectors: %s", exc)
+            vectors = [None] * len(kept)
         slugs = {q["topic_slug"] for q in kept}
         single_topic = None
         if len(slugs) == 1:
@@ -264,7 +275,7 @@ class QuizService:
                 explanation=q.get("explanation", ""),
                 locator_kind=q["locator"]["kind"], locator_value=q["locator"]["value"],
                 difficulty=float(q.get("difficulty", 0.5)),
-                stem_embedding=list(vec),
+                stem_embedding=list(vec) if vec is not None else None,
             )
             out_questions.append(_public_question(record, topic.slug))
 
@@ -436,9 +447,26 @@ class QuizService:
                 updated = self.memory.apply_result(user_id, quiz.project_id, question.topic_id,
                                                 correct, self.bkt, guess=guess, slip=slip)
                 p_after = float(updated["p_mastery"])
+            # IRT ability step (global, per graded answer) — alongside BKT.
+            from .learner.irt import update_ability
+
+            _prof = self.profiles.get(user_id)
+            _ability_before = float(getattr(_prof, "irt_ability", 0.0) or 0.0) if _prof else 0.0
+            try:
+                _difficulty = float(getattr(question, "difficulty", 0.5) or 0.5)
+            except (TypeError, ValueError):
+                _difficulty = 0.5
+            _ability_after = update_ability(_ability_before, correct, _difficulty)
+            try:
+                self.profiles.update_ability(user_id, _ability_after)
+            except Exception:  # noqa: BLE001 — ability must never block grading
+                log.warning("IRT ability store skipped for %s", user_id, exc_info=True)
             self.quizzes.record_answer(quiz.id, question.id, user_id, _given_text(answer), correct, p_before, p_after, feedback=feedback, missed=missed)
             topic = self._topic_memory(user_id, quiz.project_id, question.topic_id)
-            payload = self._answer_payload(quiz, question, topic, correct, _given_text(answer), p_before, p_after)
+            payload = self._answer_payload(
+                quiz, question, topic, correct, _given_text(answer), p_before, p_after,
+                ability_before=_ability_before, ability_after=_ability_after,
+            )
             payload["feedback"] = feedback
             payload["assessment_id"] = self._maybe_assess(user_id, quiz)
             return payload
@@ -604,13 +632,21 @@ class QuizService:
         return isinstance(q.get("value"), (int, float)) and isinstance(q.get("tolerance"), (int, float))
 
     def _novelty_filter(self, user_id: str, project_id: str, kept: list[dict]) -> list[dict]:
-        """Drop stems within cosine ≥ max of the learner's recent stems (F29)."""
+        """Drop stems within cosine ≥ max of the learner's recent stems (F29).
+
+        Degrades to unfiltered when the embedder is unreachable (e.g. the local
+        server crashed mid-generation): a slightly repetitive quiz beats no quiz.
+        """
         if not kept:
             return kept
         recent = self.quizzes.recent_stems(user_id, project_id)
         import numpy as np
 
-        new_vecs = np.asarray(self.embedder.embed([q["stem"] for q in kept]), dtype=np.float32)
+        try:
+            new_vecs = np.asarray(self.embedder.embed([q["stem"] for q in kept]), dtype=np.float32)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Novelty filter skipped (embedder unreachable): %s", exc)
+            return kept
         new_vecs /= np.linalg.norm(new_vecs, axis=1, keepdims=True) + 1e-9
         sims = None
         if recent:
@@ -713,13 +749,15 @@ class QuizService:
                 return c.source_id
         return chunks[0].source_id if chunks else None
 
-    def _answer_payload(self, quiz, question, topic, correct, given, p_before, p_after) -> dict:
+    def _answer_payload(self, quiz, question, topic, correct, given, p_before, p_after,
+                          ability_before: float | None = None,
+                          ability_after: float | None = None) -> dict:
         source_name = None
         if question.source_id:
             row = self.sources.get(question.source_id)
             source_name = row.filename if row else None
         assessment = self.quizzes.find_assessment_for_quiz(quiz.id, quiz.user_id)
-        return {
+        out = {
             "correct": correct,
             "given": given,
             "expected": _expected_answer(question),
@@ -734,6 +772,9 @@ class QuizService:
             "topic": topic,
             "assessment_id": assessment.id if assessment else None,
         }
+        if ability_before is not None or ability_after is not None:
+            out["irt"] = {"ability_before": ability_before, "ability_after": ability_after}
+        return out
 
     def _maybe_assess(self, user_id: str, quiz) -> str | None:
         """On the final answer, freeze a post-assessment report (F31)."""
@@ -789,6 +830,53 @@ class QuizService:
             for tid, pts in points.items() if pts
         ]
         misconceptions.sort(key=lambda m: after_of.get(m["slug"], 1.0))
+        # IRT snapshot: ability now vs an approximate pre-quiz level.
+        from .learner.irt import ability_label, prob_correct
+
+        _prof_now = self.profiles.get(user_id)
+        ability_after = float(getattr(_prof_now, "irt_ability", 0.0) or 0.0) if _prof_now else 0.0
+        avg_difficulty = (
+            round(sum(float(getattr(q, "difficulty", 0.5) or 0.5) for q in questions) / len(questions), 3)
+            if questions else 0.5
+        )
+        irt_block = {
+            "method": "rasch-1pl",
+            "ability_before": None,
+            "ability_after": round(ability_after, 4),
+            "ability_label": ability_label(ability_after),
+            "avg_difficulty": avg_difficulty,
+            "p_expected": round(prob_correct(ability_after, avg_difficulty), 4),
+        }
+        # LLM narrative: personalised report grounded in BKT+IRT evidence.
+        narrative: dict = {}
+        try:
+            delta_txt = "; ".join(
+                f"{d['name']}: {d['p_before']}→{d['p_after']}" for d in mastery_delta[:6]
+            ) or "no topic deltas"
+            misc_txt = "; ".join(
+                f"{m['name']}: {', '.join(m['points'][:2])}" for m in misconceptions[:4]
+            ) or "no misconceptions recorded"
+            narrative = self.llm.complete_json(
+                QUIZ_REPORT_SYSTEM,
+                f"Score: {correct}/{len(questions)}. BKT mastery: {delta_txt}. "
+                f"IRT ability now {ability_after:.2f} ({ability_label(ability_after)}), "
+                f"avg difficulty {avg_difficulty}. Misconceptions: {misc_txt}.",
+                max_tokens=700,
+            )
+        except Exception as exc:  # noqa: BLE001 — narrative is nice-to-have
+            log.warning("Quiz narrative report skipped: %s", exc)
+            narrative = {}
+        summary = str(narrative.get("summary") or "").strip()[:1500]
+        if not summary:
+            summary = (
+                f"Scored {correct}/{len(questions)}. "
+                + (f"Weakest now: {weakest.name}. " if weakest else "")
+                + f"Ability {ability_label(ability_after)} ({ability_after:+.2f})."
+            )
+        strengths = [str(s)[:120] for s in (narrative.get("strengths") or [])][:4]
+        weaknesses = [str(s)[:120] for s in (narrative.get("weaknesses") or [])][:4]
+        if not weaknesses:
+            weaknesses = [str(m.get("name", "")) for m in misconceptions[:3] if m.get("name")]
         report = {
             "score": {"correct": correct, "total": len(questions)},
             "questions": detail,
@@ -796,8 +884,28 @@ class QuizService:
             "misconceptions": misconceptions,
             "next_up": weakest.slug if weakest else None,
             "next_up_name": weakest.name if weakest else None,
+            "irt": irt_block,
+            "summary": summary,
+            "strengths": strengths,
+            "weaknesses": weaknesses,
         }
         row = self.quizzes.create_assessment(quiz.project_id, user_id, label, [quiz.id], report)
+        # Personalised report row for the Learning Profile page.
+        try:
+            from .repo.learner_reports import LearnerReportRepo
+
+            kind = "exam" if len(questions) > 10 else "quiz"
+            LearnerReportRepo(self.profiles.db).create(
+                user_id, quiz.project_id, kind, ref_id=row.id,
+                summary=summary,
+                bkt={"mastery_delta": mastery_delta, "method": "bkt-calibrated"},
+                irt=irt_block,
+                strengths=strengths
+                or [str(m.get("name", "")) for m in misconceptions[:0]],
+                weaknesses=weaknesses,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Learner report store skipped for quiz %s: %s", quiz.id, exc)
         try:
             self.profiles.observe_study_pattern(user_id, quizzes=1)
         except Exception:  # noqa: BLE001

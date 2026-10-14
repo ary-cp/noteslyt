@@ -130,6 +130,16 @@ async def lifespan(app: FastAPI):
     app.state.chats = ChatRepo(db)
     app.state.quizzes = QuizRepo(db)
     app.state.studio = StudioRepo(db)
+    # A restart mid-ingest orphans queued/parsing/embedding rows: no worker
+    # will ever settle them and retry refuses them as "still processing".
+    # Fail them loudly so the learner's retry button works again.
+    try:
+        n_stale = app.state.sources.fail_stale_inflight()
+    except Exception:
+        log.exception("Database   : could not sweep stale in-flight sources")
+    else:
+        if n_stale:
+            log.warning("Database   : failed %d stale in-flight source(s) from a previous run", n_stale)
     # AI clients + pipeline/memory/chat/quiz (one builder; PATCH reuses it for
     # hot-reload, so boot and PATCH can never diverge). The local vendored
     # servers are initialized in here — the width probe below needs them on a
