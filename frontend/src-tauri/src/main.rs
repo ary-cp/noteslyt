@@ -250,9 +250,31 @@ fn start_backend(app: &AppHandle) -> Result<Option<Child>, String> {
         .env("MIGRATIONS_DIR", &migrations_dir)
         .env("SQLITE_MIGRATIONS_DIR", migrations_dir.join("sqlite"))
         .env("NOTESLYT_RESOURCE_DIR", &resource_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdin(Stdio::null());
+    // Backend logs must survive on other machines: the frozen exe runs with
+    // --noconsole, so stdout/stderr would otherwise vanish and a crash looks
+    // like "never reaches login". Mirror both to data_dir/logs/backend.log
+    // (and tell the backend the path via NOTESLYT_LOG_FILE so Python file
+    // logging + fatal tracebacks land in the same file).
+    let log_path = data_dir.join("logs").join("backend.log");
+    let _ = fs::create_dir_all(log_path.parent().unwrap_or(&data_dir));
+    match OpenOptions::new().create(true).append(true).open(&log_path) {
+        Ok(file) => {
+            command.env("NOTESLYT_LOG_FILE", &log_path);
+            match file.try_clone() {
+                Ok(stdout_clone) => {
+                    command.stdout(Stdio::from(stdout_clone));
+                    command.stderr(Stdio::from(file));
+                }
+                Err(_) => {
+                    command.stdout(Stdio::from(file));
+                }
+            }
+        }
+        Err(_) => {
+            command.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+    }
     if let Some(exe) = bundled_ffmpeg_exe.as_ref() {
         command.env("FFMPEG_PATH", exe);
     }
@@ -275,18 +297,19 @@ fn start_backend(app: &AppHandle) -> Result<Option<Child>, String> {
     })?;
 
     let mut child = child;
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let log_hint = format!("See {}", data_dir.join("logs").join("backend.log").display());
+    let deadline = Instant::now() + Duration::from_secs(90);
     while Instant::now() < deadline {
         if backend_responds(port) {
             return Ok(Some(child));
         }
         if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            return Err(format!("The NotesLyt API stopped during startup ({status}). Check the app's data folder and model settings."));
+            return Err(format!("The NotesLyt API stopped during startup ({status}). {log_hint}"));
         }
         thread::sleep(Duration::from_millis(250));
     }
     kill_process_tree(&mut child);
-    Err("The NotesLyt API did not become ready within 60 seconds. Check the app's data folder and model settings.".to_string())
+    Err(format!("The NotesLyt API did not become ready within 90 seconds. {log_hint}"))
 }
 
 fn main() {
@@ -323,6 +346,19 @@ fn main() {
                     if !cfg!(debug_assertions) {
                         if let Some(window) = handle.get_webview_window("main") {
                             let _ = window.eval("document.body.classList.add('startup-error')");
+                            // Surface the real reason + log path in the loading
+                            // screen instead of a generic red bar. JS-escaped.
+                            let safe: String = error
+                                .replace('\\', "\\\\")
+                                .replace('\'', "\\'")
+                                .replace('\n', " ")
+                                .chars()
+                                .take(600)
+                                .collect();
+                            let _ = window.eval(format!(
+                                "var el=document.getElementById('startup-error');\
+                                 if(el)el.textContent='The local service could not start: {safe}';"
+                            ));
                         }
                     }
                 }
