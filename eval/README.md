@@ -45,6 +45,13 @@ Uploads the corpus to two fresh projects, waits for ingestion, asks each
 (cosine), context precision/recall (locator-level), and refusal rate.
 Gates: faithfulness ≥ 0.8, refusal == 100%.
 
+Free-tier rate limits (e.g. 15 RPM) are respected by default: `--rpm 3`
+paces ~3 questions/min (~12 LLM calls/min — each turn costs an answer +
+title + classifier call plus the judge), uploads go in settled batches
+of `--upload-batch 3`, and every chat call retries with backoff on
+429/5xx. Tier 30 takes ~10 min at default pacing; raise `--rpm` on paid
+tiers.
+
 ## Results
 
 `eval/results/real-<model>-t<tier>-<date>.json` + `latest.json` (+

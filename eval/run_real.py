@@ -55,6 +55,44 @@ MIME = {
 failures: list[str] = []
 
 
+class Pacer:
+    """Keep LLM usage under a per-minute budget (free tiers: 15 RPM).
+
+    Each chat turn costs ~3-4 LLM calls server-side (answer + title +
+    classifier) plus the judge call here, so the default 3 RPM paces
+    ~12 model calls/min. Raises via --rpm on paid tiers.
+    """
+
+    def __init__(self, rpm: float) -> None:
+        self.interval = 60.0 / max(rpm, 0.1)
+        self._last = 0.0
+
+    def tick(self) -> None:
+        now = time.monotonic()
+        wait = self._last + self.interval - now
+        if wait > 0:
+            time.sleep(wait)
+            now = time.monotonic()
+        self._last = now
+
+
+def post_with_retry(c: httpx.Client, method: str, url: str, **kw) -> httpx.Response:
+    """POST/GET with backoff on 429 + 5xx (free-tier quota safety net)."""
+    tries = int(kw.pop("tries", 6))
+    last: httpx.Response | None = None
+    for attempt in range(tries):
+        r = c.request(method, url, **kw)
+        last = r
+        if r.status_code < 500 and r.status_code != 429:
+            return r
+        retry_after = r.headers.get("retry-after")
+        wait = float(retry_after) if retry_after and retry_after.isdigit() else 5.0 * (2 ** attempt)
+        print(f"  [rate-limit] {r.status_code} on {url} — waiting {wait:.0f}s (try {attempt + 1}/{tries})")
+        time.sleep(wait)
+    assert last is not None
+    return last
+
+
 def check(label: str, ok: bool, detail: str = "") -> None:
     print(f"  [{'PASS' if ok else 'FAIL'}] {label}" + (f" — {detail}" if detail else ""))
     if not ok:
@@ -122,6 +160,10 @@ def main() -> int:
     ap.add_argument("--base", default=None)
     ap.add_argument("--out", default="eval/results")
     ap.add_argument("--corpus", default="eval/dataset/files")
+    ap.add_argument("--rpm", type=float, default=3.0,
+                    help="max eval iterations/min (free tier: keep <=3; paid: raise)")
+    ap.add_argument("--upload-batch", type=int, default=3,
+                    help="files per upload request (spreads ingestion LLM calls)")
     args = ap.parse_args()
 
     env_path = Path(args.env_file)
@@ -131,6 +173,9 @@ def main() -> int:
     env = load_env_file(env_path)
     base = args.base or env.get("EVAL_BASE_URL", "http://127.0.0.1:8000")
     tier = args.tier
+    pacer = Pacer(args.rpm)
+    print(f"pacing: {args.rpm:g} iterations/min (~{args.rpm * 4:.0f} LLM calls/min), "
+          f"upload batches of {args.upload_batch}")
     corpus = Path(args.corpus)
     if not corpus.exists():
         print(f"missing corpus {corpus}: run eval/dataset/gen_corpus.py first")
@@ -176,20 +221,26 @@ def main() -> int:
     }).json()["access_token"]
     h = auth(token)
 
-    print("upload")
+    print("upload (batched, settled between batches)")
     projects: dict[str, str] = {}
     for proj in testset["projects"]:
         pid = c.post("/projects", json={"title": f"real-{proj['key']}-{tag}"}, headers=h).json()["id"]
         projects[proj["key"]] = pid
-        files = []
+        pending = []
         for key in proj["fixtures"]:
             p = corpus / filemap[key]
             if not p.exists():
                 print(f"  [warn] missing {p.name}, skipped (video needs ffmpeg)")
                 continue
-            files.append(("files", (p.name, p.read_bytes(), MIME.get(p.suffix.lower(), "application/octet-stream"))))
-        r = c.post(f"/projects/{pid}/sources", files=files, headers=h)
-        check(f"{proj['key']} upload 202", r.status_code == 202, r.text[:120])
+            pending.append(("files", (p.name, p.read_bytes(), MIME.get(p.suffix.lower(), "application/octet-stream"))))
+        for b in range(0, len(pending), args.upload_batch):
+            batch = pending[b:b + args.upload_batch]
+            r = post_with_retry(c, "POST", f"/projects/{pid}/sources", files=batch, headers=h)
+            check(f"{proj['key']} upload batch {b // args.upload_batch + 1} (202)",
+                  r.status_code == 202, r.text[:120])
+            st = wait_until_settled(c, h, pid)
+            print(f"  [info] {proj['key']} settled batch: {st['counts']}")
+            pacer.tick()
     settled_ok = True
     for key, pid in projects.items():
         st = wait_until_settled(c, h, pid)
@@ -202,8 +253,12 @@ def main() -> int:
     print("\nitems")
     rows: list[dict] = []
     skipped = 0
-    for item in items:
+    t0 = time.monotonic()
+    for n, item in enumerate(items, start=1):
+        pacer.tick()
         pid = projects[item["project"]]
+        eta = (time.monotonic() - t0) / n * (len(items) - n) / 60
+        print(f"[{n}/{len(items)} ~{eta:.0f}min left] {item['id']}")
         if item.get("requires_media"):
             srcs = c.get(f"/projects/{pid}/sources", headers=h).json()
             media_ready = any(s.get("source_type") in {"audio", "video"} and s.get("status") == "ready" for s in srcs)
@@ -212,8 +267,9 @@ def main() -> int:
                 skipped += 1
                 rows.append({"id": item["id"], "skipped": True})
                 continue
-        chat = c.post(f"/projects/{pid}/chats", json={}, headers=h).json()
-        r = c.post(f"/chats/{chat['id']}/messages", json={"content": item["question"]}, headers=h)
+        chat = post_with_retry(c, "POST", f"/projects/{pid}/chats", json={}, headers=h).json()
+        r = post_with_retry(c, "POST", f"/chats/{chat['id']}/messages",
+                            json={"content": item["question"]}, headers=h)
         assert r.status_code == 200, r.text
         ans = r.json()
         if item.get("must_refuse"):
@@ -259,6 +315,7 @@ def main() -> int:
         "n_items": len(items),
         "skipped": skipped,
         "seed": int(env.get("EVAL_SEED", "42")),
+        "rpm": args.rpm,
         "models": {"llm": env.get("LLM_MODEL"), "llm_base": env.get("LLM_BASE_URL"),
                    "embedding": env.get("EMBEDDING_MODEL"), "embedding_mode": env.get("EMBEDDING_MODE"),
                    "embedding_dim": env.get("EMBEDDING_DIM") or "auto",
