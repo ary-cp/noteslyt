@@ -4,7 +4,6 @@ import { useNavigate } from "react-router-dom";
 import { ArrowRight, FileText, Folder, Hash, MessageSquare, Search, Sparkles } from "lucide-react";
 import { listChats, listProjects, listSources } from "../../lib/api";
 import type { ChatOut, ProjectListItem, SourceOut } from "../../lib/types";
-import { useDebounced } from "../../lib/utils";
 
 interface Props {
   open: boolean;
@@ -38,7 +37,6 @@ export function CommandPalette({ open, onClose, onAction, projectId, onOpenCreat
   const [chats, setChats] = useState<ChatOut[]>([]);
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const debounced = useDebounced(query, 150);
 
   useEffect(() => {
     if (!open) {
@@ -55,7 +53,8 @@ export function CommandPalette({ open, onClose, onAction, projectId, onOpenCreat
   }, [open, projectId]);
 
   const items: Item[] = useMemo(() => {
-    const q = debounced.trim().toLowerCase();
+    // Filtering is local: delaying it lets Enter run a stale command.
+    const q = query.trim().toLowerCase();
     const match = (s: string) => !q || s.toLowerCase().includes(q);
     const cmds: Item[] = COMMANDS.filter((c) => match(c.title)).map((c) => ({ kind: "command", id: c.id, title: c.title, sub: c.sub }));
     const projs: Item[] = projects.filter((p) => match(p.title)).slice(0, 5).map((p) => ({ kind: "project", id: p.id, title: p.title, sub: `${p.stats.sources} sources`, projectId: p.id }));
@@ -74,7 +73,7 @@ export function CommandPalette({ open, onClose, onAction, projectId, onOpenCreat
       /* ignore */
     }
     return [...cmds, ...projs, ...srcs, ...chs, ...arts].slice(0, 24);
-  }, [debounced, projects, sources, chats, projectId]);
+  }, [query, projects, sources, chats, projectId]);
 
   useEffect(() => setActive(0), [items.length]);
 
@@ -103,7 +102,7 @@ export function CommandPalette({ open, onClose, onAction, projectId, onOpenCreat
           <input
             ref={inputRef}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => { setQuery(e.target.value); setActive(0); }}
             onKeyDown={(e) => {
               if (e.key === "Escape") onClose();
               if (e.key === "ArrowDown") {

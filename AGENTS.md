@@ -150,7 +150,10 @@ profiles across separate projects and reports mastery gain, question repetition
   (single-resident local engines).
 - Native audio/video modes fall back to transcript (loudly, persisted) when the
   endpoint proves it cannot encode media bytes (`NativeUnsupportedError`:
-  text-signature or HTTP 4xx). Transport errors (5xx/timeouts) still fail boot.
+  text-signature or HTTP 4xx). Unavailable providers (connection errors, 5xx,
+  timeouts) leave configured modes intact and keep the API/settings available.
+  Startup width/native probes each have a five-second wait budget. Desktop API
+  import/startup logs are saved under NOTESLYT_LOG_FILE (or DATA_DIR/logs/backend.log).
 - Multimodal wire shapes are per-protocol classes in `app/llm.py`
   (`JinaEmbedder`, `GeminiNativeEmbedder`, both sharing the OpenAI-compatible
   text path); `EMBEDDING_PROTOCOL` (auto/llama_cpp/jina/gemini, admin-editable)

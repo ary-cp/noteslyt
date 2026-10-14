@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import httpx
+from openai import APIConnectionError, APIStatusError
 from contextlib import suppress
 from contextlib import asynccontextmanager
 
@@ -227,7 +229,10 @@ async def lifespan(app: FastAPI):
         from .drift import last_known_width
         from .migration_runner import probe_model_dim
 
-        probed = probe_model_dim(settings)
+        try:
+            probed = await asyncio.wait_for(asyncio.to_thread(probe_model_dim, settings), timeout=5)
+        except TimeoutError:
+            probed = None
         if probed is not None:
             settings.embedding_dim = probed
             log.info("Embedding  : auto-detected width %d from %s", probed, settings.embedding_model)
@@ -253,29 +258,22 @@ async def lifespan(app: FastAPI):
         log.warning("Embedding DRIFT (degraded vector routes): %s", drift_state.detail)
     app.state.embedding_drift = drift_state
 
-    # Native audio/video vectors are meaningless when the endpoint cannot
-    # encode media bytes (text-only or rejecting cloud endpoints). That used
-    # to refuse the whole boot; instead we fall back to transcript mode loudly
-    # (log + persisted admin override, drift recomputed) so the app stays up
-    # on retrievable text. A fresh desktop install has no endpoint configured
-    # yet (default localhost:8888 is down) — that must ALSO fall back instead
-    # of killing the backend before the setup wizard can run. So transport
-    # errors (DNS/refused/timeout) fall back too; they are logged as errors
-    # so a misconfigured endpoint stays loud without becoming fatal.
+    # Fall back only for proven incompatibility. An offline provider must not
+    # block desktop setup or overwrite the user's configured native modes.
     if settings.audio_embed_mode == "native" or settings.video_embed_mode == "native":
         try:
-            verify_native_support(app.state.embedder)
+            await asyncio.wait_for(asyncio.to_thread(verify_native_support, app.state.embedder), timeout=5)
         except NativeUnsupportedError as exc:
             _fall_back_to_transcript(
                 settings, db, app,
                 f"Embedding endpoint cannot encode media bytes ({exc}). Falling back "
                 "to transcript mode for: ",
             )
-        except Exception as exc:
-            _fall_back_to_transcript(
-                settings, db, app,
-                f"Embedding endpoint unreachable during native-mode check ({exc}). "
-                "Falling back to transcript mode for: ",
+        except (httpx.HTTPError, APIConnectionError, APIStatusError, TimeoutError) as exc:
+            log.warning(
+                "Native embedding startup check deferred (%s): provider unavailable. "
+                "Keeping configured modes; start or configure the provider in Settings.",
+                type(exc).__name__,
             )
 
     for capability in ("llm", "embedding", "transcription"):

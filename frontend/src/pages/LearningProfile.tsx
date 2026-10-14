@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { getProfileOverview } from "../lib/api";
 import type { ProfileOverview } from "../lib/types";
 import { useToast } from "../lib/toast";
+import { MarkdownBody } from "../features/chat/ChatPanel";
 
 function pct(p: number): string {
   return `${Math.round(p * 100)}%`;
@@ -128,7 +129,7 @@ export default function LearningProfilePage() {
         ) : (
           <ul className="mt-2 grid gap-1">
             {data.areas_of_improvement.map((a, i) => (
-              <li key={i} className="text-[13px] text-[var(--text-secondary)]">• {a}</li>
+              <li key={i} className="ml-4 list-disc text-[13px] text-[var(--text-secondary)]"><MarkdownBody text={a} /></li>
             ))}
           </ul>
         )}
@@ -165,11 +166,11 @@ export default function LearningProfilePage() {
                 <p className="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
                   {r.kind} · {new Date(r.created_at).toLocaleString()}
                 </p>
-                <p className="mt-1 text-[13px]">{r.summary}</p>
+                <div className="mt-1 text-[13px]"><MarkdownBody text={r.summary} /></div>
                 {(r.strengths.length > 0 || r.weaknesses.length > 0) && (
                   <div className="mt-1 grid gap-1 text-xs text-[var(--text-secondary)] sm:grid-cols-2">
-                    {r.strengths.length > 0 && <p>✓ {r.strengths.join("; ")}</p>}
-                    {r.weaknesses.length > 0 && <p>△ {r.weaknesses.join("; ")}</p>}
+                    {r.strengths.length > 0 && <div><MarkdownBody text={`✓ ${r.strengths.join("; ")}`} /></div>}
+                    {r.weaknesses.length > 0 && <div><MarkdownBody text={`△ ${r.weaknesses.join("; ")}`} /></div>}
                   </div>
                 )}
                 {r.bkt?.mastery_delta && r.bkt.mastery_delta.length > 0 && (

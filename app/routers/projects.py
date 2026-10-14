@@ -102,6 +102,7 @@ def list_projects(
         return []
     ids = [p.id for p in owned]
     store_counts = sources.chunk_counts(ids)
+    chat_counts = projects.chat_counts_for_user(user.id)
     return [
         ProjectListItem(
             **_to_out(p).model_dump(),
@@ -109,8 +110,7 @@ def list_projects(
                 sources=sources.count_for_project(p.id),
                 topics=topics.count_for_project(p.id),
                 chunks=store_counts.get(p.id, 0),
-                # chats count lands in Phase E; 0 until the table is wired up
-                chats=0,
+                chats=chat_counts.get(str(p.id), 0),
             ),
         )
         for p in owned
