@@ -1,0 +1,4 @@
+Lab safety (MARKER-SAFETY-TXT)
+Keep connections tight; loose wires spark and spoil readings.
+Red is positive, black is negative - never reverse the battery.
+Start the rheostat at maximum resistance, then lower it slowly.

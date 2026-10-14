@@ -1,0 +1,900 @@
+{
+ "_note": "Ohm's-law set over eval/dataset/gen_corpus.py + 2 YouTube videos (see SOURCES.md). tier=N included when --tier >= N (30/50/100=full 60). requires_media items need real transcription; runner skips gracefully when the source is not ready. Segment expectations are loose (any segment passes) because STT grouping varies.",
+ "default_tier": 50,
+ "fixtures": {
+  "circuits_pdf": "circuits.pdf",
+  "lab_docx": "lab_notes.docx",
+  "lesson_pptx": "lesson.pptx",
+  "measure_xlsx": "measurements.xlsx",
+  "readings_csv": "readings.csv",
+  "glossary_txt": "glossary.txt",
+  "summary_md": "summary.md",
+  "diagram_png": "circuit_diagram.png",
+  "law_video": "ohms_law_video.mp4",
+  "demo_audio": "circuit_demo_audio.m4a",
+  "practical_pdf": "practical.pdf",
+  "formulae_pdf": "formulae.pdf",
+  "worksheet_docx": "worksheet.docx",
+  "revision_docx": "revision.docx",
+  "practical_pptx": "practical.pptx",
+  "revision_pptx": "revision.pptx",
+  "problems_xlsx": "problems.xlsx",
+  "components_xlsx": "components.xlsx",
+  "rheostat_csv": "rheostat_run.csv",
+  "series_csv": "series_parallel.csv",
+  "safety_txt": "safety.txt",
+  "symbols_txt": "symbols.txt",
+  "revision_md": "revision.md",
+  "log_md": "experiment_log.md",
+  "triangle_png": "triangle.png",
+  "hose_png": "hose.png"
+ },
+ "projects": [
+  {
+   "key": "circuits",
+   "fixtures": [
+    "law_video",
+    "demo_audio",
+    "circuits_pdf",
+    "practical_pdf",
+    "formulae_pdf",
+    "lab_docx",
+    "worksheet_docx",
+    "revision_docx",
+    "diagram_png",
+    "triangle_png",
+    "hose_png",
+    "glossary_txt",
+    "safety_txt",
+    "symbols_txt",
+    "summary_md",
+    "revision_md",
+    "log_md"
+   ]
+  },
+  {
+   "key": "lab",
+   "fixtures": [
+    "measure_xlsx",
+    "problems_xlsx",
+    "components_xlsx",
+    "readings_csv",
+    "rheostat_csv",
+    "series_csv",
+    "lesson_pptx",
+    "practical_pptx",
+    "revision_pptx",
+    "circuits_pdf"
+   ]
+  }
+ ],
+ "items": [
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "3"
+    }
+   ],
+   "id": "vir",
+   "must_contain": [
+    "V = I"
+   ],
+   "project": "circuits",
+   "question": "State Ohm's law as a formula.",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "2"
+    }
+   ],
+   "id": "hose",
+   "must_contain": [
+    "hose"
+   ],
+   "project": "circuits",
+   "question": "What garden analogy explains voltage, resistance and current?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "3"
+    }
+   ],
+   "id": "triangle",
+   "must_contain": [
+    "triangle"
+   ],
+   "project": "circuits",
+   "question": "How does the Ohm's law triangle give each formula?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "5"
+    }
+   ],
+   "id": "example-12v",
+   "must_contain": [
+    "48"
+   ],
+   "project": "circuits",
+   "question": "A 12V battery drives a 250 ohm resistor. What current flows?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "4"
+    }
+   ],
+   "id": "units",
+   "must_contain": [
+    "volts"
+   ],
+   "project": "circuits",
+   "question": "What are the units of voltage, resistance and current?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "4"
+    }
+   ],
+   "id": "symbols",
+   "must_contain": [
+    "amps"
+   ],
+   "project": "circuits",
+   "question": "Which letters denote voltage, resistance and current?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "1"
+    }
+   ],
+   "id": "loop",
+   "must_contain": [
+    "battery"
+   ],
+   "project": "circuits",
+   "question": "Describe the simplest electric circuit loop.",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "6"
+    }
+   ],
+   "id": "ammeter",
+   "must_contain": [
+    "series"
+   ],
+   "project": "circuits",
+   "question": "How is an ammeter connected in a circuit?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "6"
+    }
+   ],
+   "id": "voltmeter",
+   "must_contain": [
+    "parallel"
+   ],
+   "project": "circuits",
+   "question": "How is a voltmeter connected across a resistor?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Ohm's law"
+    }
+   ],
+   "id": "docx-ohm",
+   "must_contain": [
+    "third"
+   ],
+   "project": "circuits",
+   "question": "If you know two of V, I, R, what can you find?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Board practical wiring"
+    }
+   ],
+   "id": "docx-wiring",
+   "must_contain": [
+    "rheostat"
+   ],
+   "project": "circuits",
+   "question": "How is the rheostat wired in the board practical?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "slide",
+     "value": "4"
+    }
+   ],
+   "id": "ppt-triangle",
+   "must_contain": [
+    "triangle"
+   ],
+   "project": "lab",
+   "question": "What three formulas come from covering values in the triangle?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "slide",
+     "value": "6"
+    }
+   ],
+   "id": "ppt-example",
+   "must_contain": [
+    "48mA"
+   ],
+   "project": "lab",
+   "question": "What current does the slide example compute for 12V and 250 ohm?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "slide",
+     "value": "7"
+    }
+   ],
+   "id": "ppt-series",
+   "must_contain": [
+    "series"
+   ],
+   "project": "lab",
+   "question": "Which meter goes in series and which in parallel?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "sheet",
+     "value": "V-I Readings"
+    }
+   ],
+   "id": "vi-table",
+   "must_contain": [
+    "48"
+   ],
+   "project": "lab",
+   "question": "What current is recorded at 12V in the V-I readings table?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "sheet",
+     "value": "Resistors"
+    }
+   ],
+   "id": "resistors",
+   "must_contain": [
+    "250"
+   ],
+   "project": "lab",
+   "question": "What value is listed for the unknown resistor R1?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "row",
+     "value": "1:1"
+    }
+   ],
+   "id": "csv-head",
+   "must_contain": [
+    "voltage"
+   ],
+   "project": "lab",
+   "question": "What columns does the readings CSV contain?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Glossary"
+    }
+   ],
+   "id": "gloss-volt",
+   "must_contain": [
+    "volts"
+   ],
+   "project": "circuits",
+   "question": "How does the glossary define voltage?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Ohm's law summary"
+    }
+   ],
+   "id": "summ-formula",
+   "must_contain": [
+    "V = I"
+   ],
+   "project": "circuits",
+   "question": "What formula does the study summary lead with?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "image",
+     "value": "circuit_diagram"
+    }
+   ],
+   "id": "diagram",
+   "must_contain": [
+    "parallel"
+   ],
+   "project": "circuits",
+   "question": "How is the voltmeter placed in the circuit diagram?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "segment",
+     "value": "any"
+    }
+   ],
+   "id": "video-hose",
+   "must_contain": [
+    "hose"
+   ],
+   "project": "circuits",
+   "question": "What analogy does the theory video use for voltage and resistance?",
+   "tier": 30,
+   "requires_media": true
+  },
+  {
+   "expected": [
+    {
+     "kind": "segment",
+     "value": "any"
+    }
+   ],
+   "id": "video-example",
+   "must_contain": [
+    "48"
+   ],
+   "project": "circuits",
+   "question": "What current does the video compute for the 12V 250 ohm circuit?",
+   "tier": 30,
+   "requires_media": true
+  },
+  {
+   "expected": [
+    {
+     "kind": "segment",
+     "value": "any"
+    }
+   ],
+   "id": "audio-wiring",
+   "must_contain": [
+    "ammeter"
+   ],
+   "project": "circuits",
+   "question": "According to the practical recording, where does the ammeter connect?",
+   "tier": 30,
+   "requires_media": true
+  },
+  {
+   "expected": [
+    {
+     "kind": "segment",
+     "value": "any"
+    }
+   ],
+   "id": "audio-voltmeter",
+   "must_contain": [
+    "parallel"
+   ],
+   "project": "circuits",
+   "question": "Where does the demo connect the voltmeter terminals?",
+   "tier": 30,
+   "requires_media": true
+  },
+  {
+   "id": "refuse-cup",
+   "must_refuse": true,
+   "project": "circuits",
+   "question": "Who won the 2022 football world cup?",
+   "tier": 30
+  },
+  {
+   "id": "refuse-photo",
+   "must_refuse": true,
+   "project": "circuits",
+   "question": "Explain how photosynthesis works.",
+   "tier": 30
+  },
+  {
+   "id": "refuse-shakespeare",
+   "must_refuse": true,
+   "project": "lab",
+   "question": "Summarise Hamlet's soliloquy.",
+   "tier": 30
+  },
+  {
+   "id": "refuse-nifty",
+   "must_refuse": true,
+   "project": "lab",
+   "question": "What is today's NIFTY index value?",
+   "tier": 30
+  },
+  {
+   "id": "refuse-riemann",
+   "must_refuse": true,
+   "project": "circuits",
+   "question": "Prove the Riemann hypothesis.",
+   "tier": 30
+  },
+  {
+   "id": "refuse-hindi-out",
+   "must_refuse": true,
+   "project": "circuits",
+   "question": "IPL 2026 me kaun jeetega?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "2"
+    }
+   ],
+   "id": "hose-valve",
+   "must_contain": [
+    "valve"
+   ],
+   "project": "circuits",
+   "question": "In the hose analogy, what plays the role of the resistor?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "2"
+    }
+   ],
+   "id": "hose-flow",
+   "must_contain": [
+    "flow"
+   ],
+   "project": "circuits",
+   "question": "What happens to the flow when resistance increases?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "5"
+    }
+   ],
+   "id": "wire-r",
+   "must_contain": [
+    "wire"
+   ],
+   "project": "circuits",
+   "question": "Why is the connecting wire ignored in the 12V example?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "6"
+    }
+   ],
+   "id": "terminals",
+   "must_contain": [
+    "red"
+   ],
+   "project": "circuits",
+   "question": "Which terminal colours mean positive and negative?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Water analogy"
+    }
+   ],
+   "id": "docx-hose",
+   "must_contain": [
+    "pressure"
+   ],
+   "project": "circuits",
+   "question": "What does water pressure correspond to in the notes?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Triangle method"
+    }
+   ],
+   "id": "docx-tri-r",
+   "must_contain": [
+    "V / I"
+   ],
+   "project": "circuits",
+   "question": "How do the notes compute resistance from the triangle?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "slide",
+     "value": "3"
+    }
+   ],
+   "id": "ppt-hose",
+   "must_contain": [
+    "flow"
+   ],
+   "project": "lab",
+   "question": "What does the water flow represent on the analogy slide?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "slide",
+     "value": "5"
+    }
+   ],
+   "id": "ppt-units",
+   "must_contain": [
+    "ohms"
+   ],
+   "project": "lab",
+   "question": "What unit and symbol denote resistance on the units slide?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "slide",
+     "value": "8"
+    }
+   ],
+   "id": "ppt-check",
+   "must_contain": [
+    "tight"
+   ],
+   "project": "lab",
+   "question": "What does the practical checklist say about connections?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "slide",
+     "value": "1"
+    }
+   ],
+   "id": "ppt-title",
+   "must_contain": [
+    "practical"
+   ],
+   "project": "lab",
+   "question": "What two parts make up the lesson per the title slide?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "sheet",
+     "value": "V-I Readings"
+    }
+   ],
+   "id": "vi-6v",
+   "must_contain": [
+    "24"
+   ],
+   "project": "lab",
+   "question": "What current is recorded at 6V in the V-I table?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "row",
+     "value": "any"
+    }
+   ],
+   "id": "csv-12v",
+   "must_contain": [
+    "48"
+   ],
+   "project": "lab",
+   "question": "What current_mA is logged for 12.0V in the CSV?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Glossary"
+    }
+   ],
+   "id": "gloss-ammeter",
+   "must_contain": [
+    "series"
+   ],
+   "project": "circuits",
+   "question": "What is an ammeter per the glossary?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Ohm's law summary"
+    }
+   ],
+   "id": "summ-wire",
+   "must_contain": [
+    "rheostat"
+   ],
+   "project": "circuits",
+   "question": "How does the summary wire the rheostat?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "image",
+     "value": "circuit_diagram"
+    }
+   ],
+   "id": "diagram-r",
+   "must_contain": [
+    "250"
+   ],
+   "project": "circuits",
+   "question": "What resistor value is drawn in the circuit diagram?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Ohm's law summary"
+    }
+   ],
+   "id": "hindi-explain",
+   "must_contain": [
+    "V = I"
+   ],
+   "project": "circuits",
+   "question": "Ohm ke niyam ko Hindi me saral bhasha me samjhao (sources se).",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "segment",
+     "value": "any"
+    }
+   ],
+   "id": "video-triangle",
+   "must_contain": [
+    "triangle"
+   ],
+   "project": "circuits",
+   "question": "What trick does the video teach for remembering the three formulas?",
+   "tier": 50,
+   "requires_media": true
+  },
+  {
+   "expected": [
+    {
+     "kind": "segment",
+     "value": "any"
+    }
+   ],
+   "id": "audio-rheostat",
+   "must_contain": [
+    "rheostat"
+   ],
+   "project": "circuits",
+   "question": "Where does the current go after the resistor in the demo?",
+   "tier": 50,
+   "requires_media": true
+  },
+  {
+   "id": "refuse-medicine",
+   "must_refuse": true,
+   "project": "lab",
+   "question": "What dosage of aspirin treats headaches?",
+   "tier": 50
+  },
+  {
+   "id": "refuse-k8s",
+   "must_refuse": true,
+   "project": "circuits",
+   "question": "Write a Kubernetes operator in Go.",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "3"
+    }
+   ],
+   "id": "num-i",
+   "must_contain": [
+    "0.024"
+   ],
+   "project": "circuits",
+   "question": "A 6V battery drives 250 ohm. What current, following the worked method?",
+   "tier": 100
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "3"
+    }
+   ],
+   "id": "num-v",
+   "must_contain": [
+    "12"
+   ],
+   "project": "circuits",
+   "question": "A 48mA current flows through 250 ohm. What voltage is dropped?",
+   "tier": 100
+  },
+  {
+   "expected": [
+    {
+     "kind": "sheet",
+     "value": "V-I Readings"
+    }
+   ],
+   "id": "num-total",
+   "must_contain": [
+    "250"
+   ],
+   "project": "lab",
+   "question": "The table holds V and I pairs. What resistance do they all agree on?",
+   "tier": 100
+  },
+  {
+   "expected": [
+    {
+     "kind": "slide",
+     "value": "6"
+    }
+   ],
+   "id": "num-slide",
+   "must_contain": [
+    "milliamps"
+   ],
+   "project": "lab",
+   "question": "Convert the slide's 0.048A answer into milliamps.",
+   "tier": 100
+  },
+  {
+   "expected": [
+    {
+     "kind": "image",
+     "value": "circuit_diagram"
+    }
+   ],
+   "id": "diagram-force",
+   "must_contain": [
+    "12V"
+   ],
+   "project": "circuits",
+   "question": "What battery value is drawn in the circuit diagram?",
+   "tier": 100
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Glossary"
+    }
+   ],
+   "id": "gloss-parallel",
+   "must_contain": [
+    "voltage"
+   ],
+   "project": "circuits",
+   "question": "What is shared across branches in parallel, per the glossary?",
+   "tier": 100
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Ohm's law summary"
+    }
+   ],
+   "id": "summ-check",
+   "must_contain": [
+    "parallel"
+   ],
+   "project": "circuits",
+   "question": "Where does the summary place the voltmeter?",
+   "tier": 100
+  },
+  {
+   "expected": [
+    {
+     "kind": "segment",
+     "value": "any"
+    }
+   ],
+   "id": "video-notation",
+   "must_contain": [
+    "amps"
+   ],
+   "project": "circuits",
+   "question": "What letters and units does the video assign to the three quantities?",
+   "tier": 100,
+   "requires_media": true
+  },
+  {
+   "id": "refuse-election",
+   "must_refuse": true,
+   "project": "lab",
+   "question": "Who will win the next general election?",
+   "tier": 100
+  },
+  {
+   "id": "refuse-proof",
+   "must_refuse": true,
+   "project": "circuits",
+   "question": "Derive Einstein's field equations.",
+   "tier": 100
+  }
+ ]
+}

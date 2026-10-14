@@ -45,6 +45,76 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger("noteslyt")
 
 
+def _setup_file_logging(settings=None) -> str:
+    """Mirror logs to DATA_DIR/logs/backend.log (frozen app has no console).
+
+    The Tauri shell sets NOTESLYT_LOG_FILE; `uvicorn` dev runs just get a
+    DATA_DIR/logs file too. Never raises — logging must not break boot.
+    Returns the log path ("" when file logging is unavailable).
+    """
+    import os
+    from pathlib import Path
+
+    try:
+        candidate = os.environ.get("NOTESLYT_LOG_FILE")
+        if candidate:
+            path = Path(candidate)
+        else:
+            base = settings.data_dir if settings is not None else Path("./data")
+            try:
+                base = Path(base)
+            except Exception:
+                base = Path("./data")
+            if not base.is_absolute():
+                base = Path.cwd() / base
+            path = base / "logs" / "backend.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Avoid duplicate handlers across reloads / hot-reload calls.
+        for handler in logging.getLogger().handlers:
+            target = getattr(handler, "baseFilename", "")
+            try:
+                if target and Path(target).resolve() == path.resolve():
+                    return str(path)
+            except OSError:
+                continue
+        handler = logging.FileHandler(str(path), encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        logging.getLogger().addHandler(handler)
+        return str(path)
+    except Exception:
+        return ""
+
+
+def _fall_back_to_transcript(settings, db, app, prefix: str) -> None:
+    """Flip native audio/video modes to transcript, loudly but non-fatally."""
+    from .drift import compute_drift
+
+    from .settings_overlay import locked_keys
+
+    flipped = [k for k in ("audio_embed_mode", "video_embed_mode")
+               if getattr(settings, k) == "native"]
+    for key in flipped:
+        setattr(settings, key, "transcript")
+    log.error(
+        "%s%s. Serve a joint model "
+        "(e.g. embeddinggemma-2-GGUF + mmproj) from llama.cpp and re-set "
+        "native modes to use it.", prefix, ", ".join(flipped))
+    try:
+        from .repo.app_settings import AppSettingsRepo
+
+        repo = AppSettingsRepo(db)
+        for key in flipped:
+            if key not in locked_keys(settings):
+                repo.set(key, "transcript")
+    except Exception:
+        log.exception("Could not persist transcript fallback; "
+                      "it applies to this session only")
+    drift_state = compute_drift(settings, db)
+    if drift_state.drift:
+        log.warning("Embedding DRIFT (degraded vector routes): %s", drift_state.detail)
+    app.state.embedding_drift = drift_state
+
+
 async def _studio_failure_cleanup(studio: StudioRepo, db) -> None:
     """Prune failed assessment-generation rows hourly; ready artifacts are retained."""
     while True:
@@ -65,6 +135,7 @@ async def _studio_failure_cleanup(studio: StudioRepo, db) -> None:
 async def lifespan(app: FastAPI):
     """Build every service exactly once; FastAPI tears them down on shutdown."""
     settings = get_settings()
+    _setup_file_logging(settings)
     settings.ensure_dirs()
 
     # Missing secret? Generate + persist it (sessions and encrypted API keys
@@ -186,34 +257,26 @@ async def lifespan(app: FastAPI):
     # encode media bytes (text-only or rejecting cloud endpoints). That used
     # to refuse the whole boot; instead we fall back to transcript mode loudly
     # (log + persisted admin override, drift recomputed) so the app stays up
-    # on retrievable text. Genuine transport errors still fail fast.
+    # on retrievable text. A fresh desktop install has no endpoint configured
+    # yet (default localhost:8888 is down) — that must ALSO fall back instead
+    # of killing the backend before the setup wizard can run. So transport
+    # errors (DNS/refused/timeout) fall back too; they are logged as errors
+    # so a misconfigured endpoint stays loud without becoming fatal.
     if settings.audio_embed_mode == "native" or settings.video_embed_mode == "native":
         try:
             verify_native_support(app.state.embedder)
         except NativeUnsupportedError as exc:
-            flipped = [k for k in ("audio_embed_mode", "video_embed_mode")
-                       if getattr(settings, k) == "native"]
-            for key in flipped:
-                setattr(settings, key, "transcript")
-            log.error(
-                "Embedding endpoint cannot encode media bytes (%s). Falling back "
-                "to transcript mode for: %s. Serve a joint model "
-                "(e.g. embeddinggemma-2-GGUF + mmproj) from llama.cpp and re-set "
-                "native modes to use it.", exc, ", ".join(flipped))
-            try:
-                from .repo.app_settings import AppSettingsRepo
-
-                repo = AppSettingsRepo(db)
-                for key in flipped:
-                    if key not in locked_keys(settings):
-                        repo.set(key, "transcript")
-            except Exception:
-                log.exception("Could not persist transcript fallback; "
-                              "it applies to this session only")
-            drift_state = compute_drift(settings, db)
-            if drift_state.drift:
-                log.warning("Embedding DRIFT (degraded vector routes): %s", drift_state.detail)
-            app.state.embedding_drift = drift_state
+            _fall_back_to_transcript(
+                settings, db, app,
+                f"Embedding endpoint cannot encode media bytes ({exc}). Falling back "
+                "to transcript mode for: ",
+            )
+        except Exception as exc:
+            _fall_back_to_transcript(
+                settings, db, app,
+                f"Embedding endpoint unreachable during native-mode check ({exc}). "
+                "Falling back to transcript mode for: ",
+            )
 
     for capability in ("llm", "embedding", "transcription"):
         ep = settings.endpoint(capability)  # type: ignore[arg-type]
