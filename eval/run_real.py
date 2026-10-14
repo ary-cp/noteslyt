@@ -336,53 +336,53 @@ def main() -> int:
             pid = projects[item["project"]]
             eta = (time.monotonic() - t0) / n * (len(items) - n) / 60
             print(f"[{n}/{len(items)} ~{eta:.0f}min left] {item['id']}")
-        if item.get("requires_media"):
-            srcs = c.get(f"/projects/{pid}/sources", headers=h).json()
-            media_ready = any(s.get("source_type") in {"audio", "video"} and s.get("status") == "ready" for s in srcs)
-            if not media_ready:
-                print(f"  [skip] {item['id']} (no ready audio/video source)")
-                skipped += 1
-                rows.append({"id": item["id"], "skipped": True})
+            if item.get("requires_media"):
+                srcs = c.get(f"/projects/{pid}/sources", headers=h).json()
+                media_ready = any(s.get("source_type") in {"audio", "video"} and s.get("status") == "ready" for s in srcs)
+                if not media_ready:
+                    print(f"  [skip] {item['id']} (no ready audio/video source)")
+                    skipped += 1
+                    rows.append({"id": item["id"], "skipped": True})
+                    checkpoint()
+                    continue
+            chat = post_with_retry(c, "POST", f"/projects/{pid}/chats", json={}, headers=h).json()
+            r = post_with_retry(c, "POST", f"/chats/{chat['id']}/messages",
+                                json={"content": item["question"]}, headers=h)
+            if r.status_code != 200:
+                print(f"  [quota-dead] {r.status_code}: {r.text[:200]}")
+                checkpoint()
+                quota_dead = True
+                break
+            ans = r.json()
+            if item.get("must_refuse"):
+                kind = refusal_kind(ans)
+                ok = kind is not None
+                check(f"{item['id']} refused/labeled", ok,
+                      (kind or "UNSAFE") + ": " + ans["answer"][:100])
+                rows.append({"id": item["id"], "refused": ok, "refusal_kind": kind,
+                             "grounded": ans["grounded"],
+                             "answer_snippet": ans["answer"][:300]})
                 checkpoint()
                 continue
-        chat = post_with_retry(c, "POST", f"/projects/{pid}/chats", json={}, headers=h).json()
-        r = post_with_retry(c, "POST", f"/chats/{chat['id']}/messages",
-                            json={"content": item["question"]}, headers=h)
-        if r.status_code != 200:
-            print(f"  [quota-dead] {r.status_code}: {r.text[:200]}")
-            checkpoint()
-            quota_dead = True
-            break
-        ans = r.json()
-        if item.get("must_refuse"):
-            kind = refusal_kind(ans)
-            ok = kind is not None
-            check(f"{item['id']} refused/labeled", ok,
-                  (kind or "UNSAFE") + ": " + ans["answer"][:100])
-            rows.append({"id": item["id"], "refused": ok, "refusal_kind": kind,
-                         "grounded": ans["grounded"],
+            exp = [citation_label(e["kind"], e["value"]) for e in item.get("expected", [])]
+            # segment expectations are loose: any segment retrieval passes recall.
+            if any(e.get("kind") == "segment" for e in item.get("expected", [])):
+                got = ans["retrieved"]
+                inter = [g for g in got if g.startswith("[")]
+                precision = len(inter) / len(got) if got else 0.0
+                recall = 1.0 if any("0:" in g or "[" in g for g in got) else 0.0
+            else:
+                got = ans["retrieved"]
+                inter = [g for g in got if g in exp]
+                precision = len(inter) / len(got) if got else 0.0
+                recall = len(inter) / len(exp) if exp else 1.0
+            faith, method = judge(llm, ans["answer"], got, item.get("must_contain", []))
+            rel = round(cosine(*embedder.embed([item["question"], ans["answer"]])), 3)
+            print(f"  [info] {item['id']}: faith={faith} ({method}) rel={rel} P={precision:.2f} R={recall:.2f}")
+            rows.append({"id": item["id"], "faith": faith, "rel": rel,
+                         "precision": precision, "recall": recall, "method": method,
                          "answer_snippet": ans["answer"][:300]})
             checkpoint()
-            continue
-        exp = [citation_label(e["kind"], e["value"]) for e in item.get("expected", [])]
-        # segment expectations are loose: any segment retrieval passes recall.
-        if any(e.get("kind") == "segment" for e in item.get("expected", [])):
-            got = ans["retrieved"]
-            inter = [g for g in got if g.startswith("[")]
-            precision = len(inter) / len(got) if got else 0.0
-            recall = 1.0 if any("0:" in g or "[" in g for g in got) else 0.0
-        else:
-            got = ans["retrieved"]
-            inter = [g for g in got if g in exp]
-            precision = len(inter) / len(got) if got else 0.0
-            recall = len(inter) / len(exp) if exp else 1.0
-        faith, method = judge(llm, ans["answer"], got, item.get("must_contain", []))
-        rel = round(cosine(*embedder.embed([item["question"], ans["answer"]])), 3)
-        print(f"  [info] {item['id']}: faith={faith} ({method}) rel={rel} P={precision:.2f} R={recall:.2f}")
-        rows.append({"id": item["id"], "faith": faith, "rel": rel,
-                     "precision": precision, "recall": recall, "method": method,
-                     "answer_snippet": ans["answer"][:300]})
-        checkpoint()
     except KeyboardInterrupt:
         print("\ninterrupted — progress saved")
         checkpoint()
