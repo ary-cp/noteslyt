@@ -33,6 +33,7 @@ import Dashboard from "./pages/Dashboard";
 import Workspace from "./pages/Workspace";
 import AuthPage from "./pages/Auth";
 import LearningProfilePage from "./pages/LearningProfile";
+import ExamPage from "./features/studio/ExamPage";
 import NotFound from "./pages/NotFound";
 import { TestConsole } from "./harness/TestConsole";
 import { tooltipStyles } from "./components/ui/Tooltip";
@@ -262,6 +263,14 @@ function Shell() {
             element={
               <RequireAuth>
                 <ProjectRoute view="chat" />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/project/:projectId/exam/:quizId"
+            element={
+              <RequireAuth>
+                <ExamPage />
               </RequireAuth>
             }
           />

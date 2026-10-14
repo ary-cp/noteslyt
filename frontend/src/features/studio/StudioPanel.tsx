@@ -1,6 +1,7 @@
 import { buildSchedule } from "./studySchedule";
 import type * as React from "react";
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   ClipboardList,
   FileText,
@@ -70,6 +71,7 @@ export function StudioPanel({
   openRequest?: { tool: StudioTool; nonce: number } | null;
 }) {
   const { push } = useToast();
+  const navigate = useNavigate();
   const [topics, setTopics] = useState<TopicSummary[]>([]);
   const [learner, setLearner] = useState<LearnerOut | null>(null);
   const [graph, setGraph] = useState<TopicGraph | null>(null);
@@ -88,6 +90,22 @@ export function StudioPanel({
   });
   const [minsPerDay, setMinsPerDay] = useState(30);
   const [viewing, setViewing] = useState<Artifact | null>(null);
+
+  // Mock exams run as a full page with deferred grading (nothing graded until
+  // submit, so the learning profile cannot leak correctness mid-exam).
+  // Everything else opens in the modal viewer.
+  const openArtifact = (job: StudioJob) => {
+    if (job.kind === "exam") {
+      const payload = (job.payload ?? {}) as { quiz_id?: string };
+      if (payload.quiz_id) {
+        navigate(`/project/${projectId}/exam/${payload.quiz_id}`, {
+          state: { quiz: job.payload },
+        });
+        return;
+      }
+    }
+    setViewing(jobArtifact(job));
+  };
 
   // Collapsed-rail shortcut: clicking a tool icon in the slim right rail
   // expands Studio and opens that tool's dialog.
@@ -375,7 +393,7 @@ export function StudioPanel({
                   <button
                     type="button"
                     disabled={job.status !== "ready"}
-                    onClick={() => setViewing(jobArtifact(job))}
+                    onClick={() => openArtifact(job)}
                     className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-[13px] enabled:cursor-pointer enabled:hover:bg-[var(--surface-secondary)] disabled:cursor-default"
                   >
                     <span className="text-[var(--text-secondary)]">{job.status === "queued" || job.status === "generating" ? <Loader2 size={16} className="animate-spin" /> : TOOLS.find((t) => t.id === job.kind)?.icon}</span>
@@ -787,8 +805,9 @@ function Flashcards({ cards, requested, reviewKey }: { cards: { front: string; b
  * The one place weak topics are named (3c): score deltas per topic, likely
  * misconceptions from persisted rubric misses, and what to study next.
  * Old reports without the new keys render their score + review list only.
+ * Shared with the full-page ExamPage.
  */
-function QuizReport({ assessmentId }: { assessmentId: string }) {
+export function QuizReport({ assessmentId }: { assessmentId: string }) {
   const [report, setReport] = useState<AssessmentReportOut | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -1080,11 +1099,6 @@ function QuizRunner({ quiz, exam, onAnswered, onDoneChange }: { quiz: QuizOut; e
           placeholder="Type your answer…"
           className="mt-3 w-full rounded-[8px] border border-[var(--border)] bg-[var(--input)] p-2.5 text-sm outline-none focus:border-[var(--accent)]"
         />
-      )}
-      {exam && answers[q.id] && (
-        <p className="mt-3 rounded-[8px] border border-[var(--accent-border)] bg-[var(--accent-soft)]/40 p-2.5 text-[13px] font-medium">
-          Saved — answers and feedback unlock when you submit the exam.
-        </p>
       )}
       {!exam && answers[q.id] && (
         <div className={`mt-3 rounded-[8px] border p-2.5 text-[13px] ${answers[q.id].correct ? "border-[var(--accent-border)] bg-[var(--accent-soft)]/40" : "border-[var(--danger)]/30 bg-[var(--danger-soft)]"}`}>
