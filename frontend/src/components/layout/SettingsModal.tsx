@@ -5,8 +5,6 @@ import {
   BookOpen,
   FileText,
   FileVideo,
-  FolderOpen,
-  Hash,
   MessageSquare,
   Search,
   Settings as SettingsIcon,
@@ -59,15 +57,9 @@ const STATIC_NAV: { header: string; items: StaticNav[] }[] = [
   {
     header: "Preferences",
     items: [
-      { id: "set-appearance", label: "Appearance", icon: Sun, section: "appearance" },
+      { id: "set-personalisation", label: "Personalisation", icon: Sun, section: "personalisation" },
       { id: "set-chat", label: "Chat", icon: MessageSquare, section: "chat" },
-      { id: "set-sources", label: "Sources", icon: FolderOpen, section: "sources" },
-      { id: "set-shortcuts", label: "Shortcuts", icon: Hash, section: "shortcuts" },
     ],
-  },
-  {
-    header: "Profile",
-    items: [{ id: "set-profile", label: "Learning profile", icon: Sparkles, section: "profile" }],
   },
 ];
 
@@ -79,14 +71,13 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [profile, setProfile] = useState<ProfileOut | null>(null);
-  const [levels, setLevels] = useState<ProfileLevels | null>(null);
-  const [capability, setCapability] = useState("unknown");
-  const [thinking, setThinking] = useState("unknown");
+  const [, setLevels] = useState<ProfileLevels | null>(null);
   const [goals, setGoals] = useState("");
+  const [memo, setMemo] = useState("");
   const [autoIndex, setAutoIndex] = useState(true);
   const [defaultModel, setDefaultModel] = useState("default");
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState("set-appearance");
+  const [tab, setTab] = useState("set-personalisation");
   const [matchCounts, setMatchCounts] = useState<Record<string, number>>({});
 
   const isAdmin = user?.is_admin === true;
@@ -94,15 +85,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   useEffect(() => {
     if (!open) return;
     setQuery("");
-    setTab("set-appearance");
+    setTab("set-personalisation");
     let activeFlag = true;
     setLoading(true); setLoadError("");
     getProfile().then((p) => {
       if (!activeFlag) return;
       setProfile(p);
-      setCapability(p.capability_level);
-      setThinking(p.thinking_level);
       setGoals(p.goals);
+      setMemo(p.learning_style_notes ?? "");
     }).catch((e) => { if (activeFlag) setLoadError(e instanceof Error ? e.message : "Could not load profile"); }).finally(() => { if (activeFlag) setLoading(false); });
     getProfileLevels().then(setLevels).catch(() => undefined);
     try {
@@ -118,8 +108,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const saveProfile = async () => {
     setSaving(true);
     try {
-      const next = await updateProfile({ capability_level: capability, thinking_level: thinking, goals });
+      const next = await updateProfile({ goals, learning_style_notes: memo });
       setProfile(next);
+      setMemo(next.learning_style_notes ?? "");
       push("Profile saved", { tone: "success" });
     } catch (e) {
       push("Save failed", { detail: e instanceof Error ? e.message : String(e), tone: "error" });
@@ -200,27 +191,13 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               {profile.quiz_progress && <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3">
                 <p className="text-sm font-medium">Your quiz progress</p>
                 <p className="mt-1 text-sm">{profile.quiz_progress.answered ? `${Math.round((profile.quiz_progress.correct / profile.quiz_progress.answered) * 100)}% correct overall` : "No quizzes taken yet"}</p>
-                <p className="mt-1 text-xs text-[var(--text-muted)]">{profile.quiz_progress.answered ? "Based on saved first attempts. Open a project's Studio to see your overall mastery." : "Take your first quiz to build a learning profile from your answers."}</p>
+                <p className="mt-1 text-xs text-[var(--text-muted)]">{profile.quiz_progress.answered ? "Based on saved first attempts. Open your Learning Profile page for mastery by topic." : "Take your first quiz to build a learning profile from your answers."}</p>
+                <a href="/learning-profile" className="mt-1 inline-block text-xs text-[var(--accent)] hover:underline">Open Learning Profile →</a>
               </div>}
-              <p className="text-xs text-[var(--text-muted)]">Set your learning preferences below. Quiz performance quietly adapts what you practice next.</p>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Capability">
-                  <Dropdown
-                    value={capability}
-                    ariaLabel="Capability"
-                    onChange={setCapability}
-                    options={(levels?.capability_levels ?? ["unknown", "beginner", "intermediate", "advanced"]).map((v) => ({ value: v, label: v }))}
-                  />
-                </Field>
-                <Field label="Thinking">
-                  <Dropdown
-                    value={thinking}
-                    ariaLabel="Thinking"
-                    onChange={setThinking}
-                    options={(levels?.thinking_levels ?? ["unknown", "concrete", "analytical", "abstract"]).map((v) => ({ value: v, label: v }))}
-                  />
-                </Field>
-              </div>
+              <p className="text-xs text-[var(--text-muted)]">How you learn — auto-written by the tutor from your questions and updated after chats. Edit it any time; the tutor reads it before every reply.</p>
+              <Field label="How you learn (auto-updated memo)" hint="e.g. prefers charts, slow deliberate pace, out-of-the-box questions">
+                <TextArea value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="e.g. learns fast from examples, prefers charts over tables, asks out-of-the-box questions" />
+              </Field>
               <Field label="Goals">
                 <TextArea value={goals} onChange={(e) => setGoals(e.target.value)} placeholder="e.g. pass thermodynamics" />
               </Field>
@@ -362,10 +339,16 @@ function ChatDefaultBlock({ defaultModel, onChange }: { defaultModel: string; on
 }
 
 function StaticTabContent({ id, personalSections }: { id: string; personalSections: React.ReactNode }) {
-  // personalSections holds every personal tab in order; show only the active one.
+  // Personalisation merges appearance + sources + learning profile + shortcuts
+  // into one tab; Chat stays separate (personal default + admin server).
   const fragment = personalSections as React.ReactElement<{ children?: React.ReactNode }>;
   const children = Children.toArray(fragment.props.children);
-  const order = ["set-appearance", "set-chat", "set-sources", "set-profile", "set-shortcuts"];
-  const index = order.indexOf(id);
-  return <>{children[index] ?? null}</>;
+  // personalSections order: [appearance, chat, sources, profile, shortcuts]
+  if (id === "set-personalisation") {
+    return <div className="grid gap-6">{[children[0], children[2], children[3], children[4]]}</div>;
+  }
+  const order = ["set-personalisation", "set-chat"];
+  if (id === "set-chat") return <>{children[1] ?? null}</>;
+  void order;
+  return null;
 }

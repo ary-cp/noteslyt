@@ -99,6 +99,8 @@ export interface ProfileOut {
   study_pattern: Record<string, number>;
   quiz_progress: { answered: number; correct: number; topics_practiced: number; quizzes_practiced: number };
   strengths: string[];
+  learning_style_notes: string;
+  irt_ability: number;
 }
 
 /** `GET /profile/levels` */
@@ -421,6 +423,7 @@ export interface AnswerOut {
   p_after: number;
   topic: TopicMemory | null;
   assessment_id: string | null;
+  irt?: { ability_before?: number | null; ability_after?: number | null };
 }
 
 /** `app/schemas.py: RecentQuizOut` */
@@ -465,8 +468,43 @@ export interface AssessmentReportOut {
     misconceptions?: { slug: string; name?: string; points: string[] }[];
     next_up?: string | null;
     next_up_name?: string | null;
+    irt?: { ability_before?: number | null; ability_after?: number | null; ability_label?: string; avg_difficulty?: number; p_expected?: number; method?: string };
+    summary?: string;
+    strengths?: string[];
+    weaknesses?: string[];
   };
   created_at: string;
+}
+
+/** `app/schemas.py: LearnerReportOut` — personalised BKT+IRT report. */
+export interface LearnerReport {
+  id: string;
+  project_id: string;
+  kind: string;
+  ref_id: string;
+  summary: string;
+  bkt: { mastery_delta?: { slug: string; name?: string; p_before?: number | null; p_after?: number | null }[]; method?: string };
+  irt: { ability_before?: number | null; ability_after?: number | null; ability_label?: string; method?: string };
+  strengths: string[];
+  weaknesses: string[];
+  created_at: string;
+}
+
+/** `GET /profile/overview` — Learning Profile page. */
+export interface ProfileOverview {
+  user_id: string;
+  capability_level: string;
+  thinking_level: string;
+  goals: string;
+  learning_style_notes: string;
+  irt_ability: number;
+  irt_label: string;
+  quiz_progress: { answered: number; correct: number; topics_practiced: number; quizzes_practiced: number };
+  topics: (TopicMemory & { project_id?: string; project_title?: string })[];
+  weak_topics: (TopicMemory & { project_id?: string; project_title?: string })[];
+  strong_topics: (TopicMemory & { project_id?: string; project_title?: string })[];
+  areas_of_improvement: string[];
+  recent_reports: LearnerReport[];
 }
 
 // ------------------------------------ legacy API (pre-tenancy, kept to compile)

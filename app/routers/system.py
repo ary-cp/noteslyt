@@ -159,13 +159,22 @@ def list_endpoint_models(payload: ModelsFetchRequest, admin: AdminUser) -> dict:
         return [{"id": mid} for mid in ids[:200]]
 
     def _probe_failed(url: str, reason: str) -> HTTPException:
-        return HTTPException(status_code=502, detail=f"Could not list models at {url}: {reason}.")
+        # Gemini's OpenAI-compat endpoint requires a bearer key: without one it
+        # answers 401/404, which looks like a bad URL. Say so explicitly.
+        hint = ""
+        if not payload.api_key and "generativelanguage.googleapis.com" in base:
+            hint = " (this endpoint needs its API key — re-enter the saved key, then Retry)"
+        return HTTPException(status_code=502, detail=f"Could not list models at {url}: {reason}.{hint}")
 
     try:
         return {"models": _fetch(f"{base}/models")}
     except HTTPException as exc:
         # Bare-host bases (http://localhost:1234) deserve one retry with /v1.
-        if exc.status_code == 502 and not base.endswith("/v1") and "/v1/" not in base:
+        # Versioned bases already carry one (…/v1, …/v1beta/…, …/openai/…),
+        # so retrying with another /v1 would only produce a second 404.
+        lowered = base.lower()
+        already_versioned = ("/v1" in lowered or "v1beta" in lowered or "/openai" in lowered)
+        if exc.status_code == 502 and not already_versioned:
             try:
                 return {"models": _fetch(f"{base}/v1/models")}
             except HTTPException:

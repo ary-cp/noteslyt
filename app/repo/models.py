@@ -158,3 +158,20 @@ class AssessmentRecord:
     quiz_ids: list = field(default_factory=list)
     report: dict = field(default_factory=dict)
     created_at: datetime | None = None
+
+
+@dataclass
+class LearnerReportRecord:
+    """One personalised BKT+IRT report (quiz/exam/chat)."""
+
+    id: str
+    user_id: str = ""
+    project_id: str = ""
+    kind: str = "quiz"
+    ref_id: str = ""
+    summary: str = ""
+    bkt: dict = field(default_factory=dict)
+    irt: dict = field(default_factory=dict)
+    strengths: list = field(default_factory=list)
+    weaknesses: list = field(default_factory=list)
+    created_at: datetime | None = None

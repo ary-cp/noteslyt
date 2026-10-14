@@ -64,7 +64,7 @@ function ModelField({
   const fetch = async (base: string, key: string) => {
     const trimmed = base.trim();
     if (!trimmed || disabled) return;
-    lastFetched.current = trimmed;
+    lastFetched.current = `${trimmed}\n${key.trim() ? "key" : "nokey"}`;
     setFetching(true);
     setFetchError("");
     try {
@@ -82,7 +82,8 @@ function ModelField({
 
   useEffect(() => {
     const trimmed = baseUrl.trim();
-    if (!trimmed || disabled || (trimmed === lastFetched.current && options !== null)) return;
+    const fingerprint = `${trimmed}\n${apiKey.trim() ? "key" : "nokey"}`;
+    if (!trimmed || disabled || (fingerprint === lastFetched.current && options !== null)) return;
     const timer = window.setTimeout(() => void fetch(trimmed, apiKey), 800);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps

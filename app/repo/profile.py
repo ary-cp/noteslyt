@@ -25,7 +25,8 @@ from .base import Repo, _coerce
 
 _FIELDS = (
     "user_id", "capability_level", "thinking_level", "goals",
-    "study_pattern", "strengths", "updated_at",
+    "study_pattern", "strengths", "learning_style_notes", "irt_ability",
+    "updated_at",
 )
 
 # Only these values are accepted, so the prompt builder can trust the field.
@@ -41,6 +42,8 @@ class ProfileRecord:
     goals: str = ""
     study_pattern: dict[str, Any] = field(default_factory=dict)
     strengths: list = field(default_factory=list)
+    learning_style_notes: str = ""
+    irt_ability: float = 0.0
     updated_at: Any = None
 
 
@@ -57,6 +60,8 @@ class ProfileRepo(Repo):
         capability_level: str | None = None,
         thinking_level: str | None = None,
         goals: str | None = None,
+        learning_style_notes: str | None = None,
+        irt_ability: float | None = None,
     ) -> ProfileRecord:
         """
         Write the user's explicit choices. `None` means "leave unchanged", so a
@@ -78,14 +83,26 @@ class ProfileRepo(Repo):
                 goals if goals is not None
                 else (existing.goals if existing else "")
             ),
+            "learning_style_notes": (
+                learning_style_notes if learning_style_notes is not None
+                else (existing.learning_style_notes if existing else "")
+            ),
+            "irt_ability": (
+                float(irt_ability) if irt_ability is not None
+                else (float(existing.irt_ability) if existing else 0.0)
+            ),
         }
         row = self._fetch_one(
-            f"insert into user_profiles (user_id, capability_level, thinking_level, goals) "
-            f"values (%(user_id)s, %(capability_level)s, %(thinking_level)s, %(goals)s) "
+            f"insert into user_profiles (user_id, capability_level, thinking_level, goals, "
+            f"learning_style_notes, irt_ability) "
+            f"values (%(user_id)s, %(capability_level)s, %(thinking_level)s, %(goals)s, "
+            f"%(learning_style_notes)s, %(irt_ability)s) "
             f"on conflict (user_id) do update set "
             f"capability_level = excluded.capability_level, "
             f"thinking_level = excluded.thinking_level, "
             f"goals = excluded.goals, "
+            f"learning_style_notes = excluded.learning_style_notes, "
+            f"irt_ability = excluded.irt_ability, "
             f"updated_at = now() "
             f"returning {', '.join(_FIELDS)}",
             {"user_id": user_id, **merged},
@@ -170,12 +187,7 @@ class ProfileRepo(Repo):
         return merged
 
     def maybe_upgrade_capability(self, user_id: str, level: str | None) -> tuple[bool, str]:
-        """Raise `capability_level` on confident evidence — never lower it.
-
-        There is no separate "explicit choice" flag, so any stored non-unknown
-        value is treated as explicit: refinement may set it from `unknown` or
-        raise it, but never downgrade. Returns (changed, current value).
-        """
+        """Raise `capability_level` on confident evidence — never lower it."""
         if not level:
             current = self.get(user_id)
             return False, (current.capability_level if current else "unknown")
@@ -189,6 +201,25 @@ class ProfileRepo(Repo):
             return False, profile.capability_level
         self.upsert_basics(user_id, capability_level=proposed)
         return True, proposed
+
+    def update_learning_notes(self, user_id: str, notes: str) -> str:
+        """Replace the LLM-maintained learning-style memo (learner-editable too)."""
+        cleaned = str(notes or "").strip()[:2000]
+        profile = self.get(user_id) or self.upsert_basics(user_id)
+        if cleaned == (profile.learning_style_notes or ""):
+            return cleaned
+        self.upsert_basics(user_id, learning_style_notes=cleaned)
+        return cleaned
+
+    def update_ability(self, user_id: str, ability: float) -> float:
+        """Persist the IRT ability estimate (clamped by the caller)."""
+        try:
+            theta = float(ability)
+        except (TypeError, ValueError):
+            theta = 0.0
+        theta = min(max(theta, -3.0), 3.0)
+        self.upsert_basics(user_id, irt_ability=theta)
+        return round(theta, 4)
 
 
 def _to_profile(row: dict[str, Any] | None) -> ProfileRecord | None:
@@ -207,10 +238,19 @@ def _to_profile(row: dict[str, Any] | None) -> ProfileRecord | None:
 
     return ProfileRecord(
         user_id=_coerce(row["user_id"]),
-        capability_level=row["capability_level"],
-        thinking_level=row["thinking_level"],
-        goals=row["goals"] or "",
-        study_pattern=_parsed(row["study_pattern"], {}),
-        strengths=_parsed(row["strengths"], []),
-        updated_at=row["updated_at"],
+        capability_level=row.get("capability_level") or "unknown",
+        thinking_level=row.get("thinking_level") or "unknown",
+        goals=row.get("goals") or "",
+        study_pattern=_parsed(row.get("study_pattern"), {}),
+        strengths=_parsed(row.get("strengths"), []),
+        learning_style_notes=str(row.get("learning_style_notes") or ""),
+        irt_ability=_to_float(row.get("irt_ability"), 0.0),
+        updated_at=row.get("updated_at"),
     )
+
+
+def _to_float(value: Any, fallback: float) -> float:
+    try:
+        return float(value) if value is not None else fallback
+    except (TypeError, ValueError):
+        return fallback
