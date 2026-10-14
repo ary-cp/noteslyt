@@ -1,0 +1,466 @@
+{
+  "date": "2026-10-14T12:05:18.795134+00:00",
+  "git": "7ed9cea",
+  "tier": 50,
+  "n_items": 50,
+  "skipped": 0,
+  "seed": 42,
+  "rpm": 3.0,
+  "models": {
+    "llm": "gemini-3.5-flash-lite",
+    "llm_base": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "embedding": "embeddinggemma-2-GGUF",
+    "embedding_mode": "local",
+    "embedding_dim": "auto",
+    "transcription": "whisper-large-v3-turbo"
+  },
+  "server": {
+    "llm_model": "models/gemini-3.5-flash-lite",
+    "embeddings": "llama-local:embeddinggemma-2-GGUF",
+    "db": "sqlite:data\\noteslyt.db"
+  },
+  "aggregate": {
+    "faithfulness": 0.952,
+    "refusal": 0.25,
+    "precision": 0.363,
+    "recall": 0.619,
+    "relevancy": 0.861
+  },
+  "rows": [
+    {
+      "id": "vir",
+      "faith": 1.0,
+      "rel": 0.872,
+      "precision": 0.0,
+      "recall": 0.0,
+      "method": "llm (2 claims)",
+      "answer_snippet": "Ohm's law states that voltage equals current times resistance, expressed by the formula $V = I \\times R$ [1]."
+    },
+    {
+      "id": "hose",
+      "faith": 1.0,
+      "rel": 0.821,
+      "precision": 1.0,
+      "recall": 1.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on the water-hose analogy:\n\n* **Voltage** is represented by the battery voltage acting as water-supply pressure, which pushes harder [1].\n* **Resistance** is represented by the outlet valve or a kinked hose, where closing the valve reduces the flow [1].\n* **Current** is represented by the actu"
+    },
+    {
+      "id": "triangle",
+      "faith": 1.0,
+      "rel": 0.872,
+      "precision": 0.3333333333333333,
+      "recall": 1.0,
+      "method": "llm (6 claims)",
+      "answer_snippet": "The Ohm's law triangle is a memory aid used to quickly work out the formula for any of the three values (voltage, current, or resistance) [1] [2]. \n\nIn the triangle:\n- **$V$** (voltage) is at the top [1] [2].\n- **$I$** (current) and **$R$** (resistance) are in the bottom section [1] [2].\n\nTo find a "
+    },
+    {
+      "id": "example-12v",
+      "faith": 1.0,
+      "rel": 0.871,
+      "precision": 0.2,
+      "recall": 1.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on Ohm's Law, you can calculate the current by dividing the voltage by the resistance ($I = \\frac{V}{R}$) [1] [2] [3]. \n\nUsing the 12-volt battery and the 250-ohm resistor:\n$$\\frac{12\\text{ V}}{250\\ \\Omega} = 0.048\\text{ A}$$\n\nThis can also be written as 48 milliamps (mA) [4] [5] [2] [3]."
+    },
+    {
+      "id": "units",
+      "faith": 1.0,
+      "rel": 0.906,
+      "precision": 0.3333333333333333,
+      "recall": 1.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on the provided texts, the units are:\n\n* **Voltage:** Volts [1] [2]\n* **Resistance:** Ohms [1] [2] [3]\n* **Current:** Amps [1] [2] [3]"
+    },
+    {
+      "id": "symbols",
+      "faith": 1.0,
+      "rel": 0.893,
+      "precision": 0.0,
+      "recall": 0.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on the provided context:\n\n- **Voltage** is denoted by the letter **V** [1].\n- **Resistance** is denoted by the letter **R** (or sometimes the Greek letter Omega) [1] [2].\n- **Current** is denoted by the letter **I** [1] [2]."
+    },
+    {
+      "id": "loop",
+      "faith": 1.0,
+      "rel": 0.904,
+      "precision": 0.5,
+      "recall": 1.0,
+      "method": "llm (8 claims)",
+      "answer_snippet": "Based on the provided context, the simplest electric circuit loop consists of three main components connected in a loop [1]:\n\n1. **A battery** \u2013 The battery creates a potential difference or voltage [2] [1].\n2. **Connecting wire** \u2013 Some connecting wire allows electrons to flow as current [2] [1].\n3"
+    },
+    {
+      "id": "ammeter",
+      "faith": 1.0,
+      "rel": 0.87,
+      "precision": 0.0,
+      "recall": 0.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on the provided context, an ammeter is always connected in **series** within the circuit [1]. Specifically, it is connected such that the positive terminal of the battery goes to the positive (red) terminal of the ammeter, and the negative terminal of the ammeter connects to the unknown resist"
+    },
+    {
+      "id": "voltmeter",
+      "faith": 1.0,
+      "rel": 0.875,
+      "precision": 0.0,
+      "recall": 0.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "A voltmeter is always connected in parallel across the resistor [1] [2] [3]. \n\nSpecifically:\n- The red (positive) terminal of the voltmeter is connected to the end of the resistor where the current enters [4] [2] [5].\n- The black (negative) terminal of the voltmeter is connected to the other end of "
+    },
+    {
+      "id": "docx-ohm",
+      "faith": 1.0,
+      "rel": 0.772,
+      "precision": 0.2,
+      "recall": 1.0,
+      "method": "llm (4 claims)",
+      "answer_snippet": "Based on Ohm's law and the triangle method, knowing any two values (voltage $V$, current $I$, or resistance $R$) allows you to calculate the third missing value [1] [2]. Specifically:\n\n- If you know **$I$ and $R$**, you can find **$V$** by multiplying them ($V = I \\times R$) [1] [3] [2].\n- If you kn"
+    },
+    {
+      "id": "docx-wiring",
+      "faith": 1.0,
+      "rel": 0.886,
+      "precision": 0.3333333333333333,
+      "recall": 1.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "In the board practical, the rheostat is connected in series in the circuit [1] [2]. Specifically, the other end of the unknown resistor goes through the rheostat back to the negative terminal of the battery [3] [2]. Its purpose in the setup is to vary the current for the experiment [1]."
+    },
+    {
+      "id": "ppt-triangle",
+      "faith": 1.0,
+      "rel": 0.875,
+      "precision": 0.3333333333333333,
+      "recall": 1.0,
+      "method": "llm (1 claims)",
+      "answer_snippet": "Based on the provided sources, the three formulas derived by covering values in the Ohm's law triangle are [1] [2] [3]:\n\n1. **Covering $V$:** $V = I \\times R$ [1] [2] [3]\n2. **Covering $I$:** $I = \\frac{V}{R}$ [1] [2] [3]\n3. **Covering $R$:** $R = \\frac{V}{I}$ [1] [2] [3]"
+    },
+    {
+      "id": "ppt-example",
+      "faith": 1.0,
+      "rel": 0.878,
+      "precision": 0.5,
+      "recall": 1.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on the provided slides and course materials, the example calculates a current of **0.048 A**, which is **48 mA** (12V divided by 250 ohms) [1] [2]."
+    },
+    {
+      "id": "ppt-series",
+      "faith": 1.0,
+      "rel": 0.829,
+      "precision": 0.5,
+      "recall": 1.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on your course materials, here is how the two meters are connected:\n\n* **Ammeter:** Goes in **series** so that the full current passes directly through it [1].\n* **Voltmeter:** Goes in **parallel** (specifically across the resistor or component you are measuring) [2] [1]. \n\n*(Note: You must ne"
+    },
+    {
+      "id": "vi-table",
+      "faith": 1.0,
+      "rel": 0.909,
+      "precision": 0.3333333333333333,
+      "recall": 1.0,
+      "method": "llm (1 claims)",
+      "answer_snippet": "Based on the provided V-I readings table, the current recorded at a voltage of 12V is **48 mA** (or 0.048 A) for a 250 ohm resistance [1] [2] [3]."
+    },
+    {
+      "id": "resistors",
+      "faith": 1.0,
+      "rel": 0.897,
+      "precision": 1.0,
+      "recall": 1.0,
+      "method": "llm (1 claims)",
+      "answer_snippet": "Based on the provided sheet [1], the value listed for the unknown resistor R1 is **250 ohms** (250 $\\Omega$)."
+    },
+    {
+      "id": "csv-head",
+      "faith": 0.0,
+      "rel": 0.774,
+      "precision": 0.0,
+      "recall": 0.0,
+      "method": "llm (1 claims)",
+      "answer_snippet": "Based on the provided context (such as the tables in [1] and [2]), the readings contain the following three columns:\n\n1. **voltage_V** (measured in volts)\n2. **current_mA** (measured in milliamperes)\n3. **resistance_ohm** (measured in ohms)"
+    },
+    {
+      "id": "gloss-volt",
+      "faith": 1.0,
+      "rel": 0.921,
+      "precision": 0.0,
+      "recall": 0.0,
+      "method": "llm (1 claims)",
+      "answer_snippet": "Based on the provided text, the glossary defines voltage as:\n\n**potential difference in volts (V)** [1]."
+    },
+    {
+      "id": "summ-formula",
+      "faith": 1.0,
+      "rel": 0.795,
+      "precision": 0.0,
+      "recall": 0.0,
+      "method": "llm (4 claims)",
+      "answer_snippet": "The study summary and materials lead with the Ohm's law formula stating that voltage equals current times resistance, which is written as $V = I \\times R$ [1] [2]. \n\nThis relationship is also illustrated using the Ohm's law triangle, where $V$ is at the top section and $I$ and $R$ are in the bottom "
+    },
+    {
+      "id": "diagram",
+      "faith": 1.0,
+      "rel": 0.848,
+      "precision": 0.0,
+      "recall": 0.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on the provided context, the voltmeter is always connected in **parallel** across the unknown resistor [1] [2] [3]. \n\nSpecifically, it is placed so that:\n* The red (positive) terminal of the voltmeter connects to the end of the resistor where current enters [4] [3] [5].\n* The black (negative) "
+    },
+    {
+      "id": "video-hose",
+      "faith": 1.0,
+      "rel": 0.866,
+      "precision": 1.0,
+      "recall": 1.0,
+      "method": "llm (4 claims)",
+      "answer_snippet": "Based on the provided context, the theory video introduces a useful analogy involving a garden water hose to explain the concepts of voltage, current, and resistance [1] [2]:\n\n* **Voltage** is compared to the water-supply pressure of a garden hose, where higher pressure pushes harder [2].\n* **Resist"
+    },
+    {
+      "id": "video-example",
+      "faith": 1.0,
+      "rel": 0.906,
+      "precision": 1.0,
+      "recall": 1.0,
+      "method": "llm (2 claims)",
+      "answer_snippet": "For a 12V battery connected across a 250-ohm resistor, the video computes a current of 0.048 amps, which is also written as 48 milliamps [1] [2] [3]."
+    },
+    {
+      "id": "audio-wiring",
+      "faith": 1.0,
+      "rel": 0.874,
+      "precision": 1.0,
+      "recall": 1.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on the provided practical recording and documentation, the ammeter connects in series within the circuit loop [1]. \n\nSpecifically, the connections are made as follows:\n* The **positive terminal of the battery** connects to the **positive (red) terminal of the ammeter** [2] [3].\n* The **negativ"
+    },
+    {
+      "id": "audio-voltmeter",
+      "faith": 1.0,
+      "rel": 0.871,
+      "precision": 1.0,
+      "recall": 1.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on the provided context, the demo connects the voltmeter terminals in parallel across the unknown resistor:\n\n* **Voltmeter red (positive) terminal:** Connected to the terminal of the resistor where the current enters [1] [2] [3].\n* **Voltmeter black (negative) terminal:** Connected to the term"
+    },
+    {
+      "id": "refuse-cup",
+      "refused": false,
+      "refusal_kind": null,
+      "grounded": true,
+      "answer_snippet": "I am unable to answer that question as it is outside the scope of the provided context, which focuses on electrical circuits, Ohm's law, and the Ohm's law triangle [1] [2] [3] [4] [5].\n\nOutside your sources: Argentina won the 2022 FIFA World Cup, defeating France in the final."
+    },
+    {
+      "id": "refuse-photo",
+      "refused": false,
+      "refusal_kind": null,
+      "grounded": true,
+      "answer_snippet": "Photosynthesis is a biological process by which plants, algae, and some bacteria convert light energy into chemical energy to fuel their activities, typically using sunlight, water, and carbon dioxide to produce oxygen and energy-rich compounds like glucose.\n\n**Outside your sources:** \nIn contrast, "
+    },
+    {
+      "id": "refuse-shakespeare",
+      "refused": false,
+      "refusal_kind": null,
+      "grounded": true,
+      "answer_snippet": "Hamlet's soliloquy is not mentioned in the provided physics course materials, which instead focus on topics such as Ohm's law, the $V = I \\times R$ formula, and circuit measurements [1] [2] [3] [4] [5]. \n\n**Outside your sources:** In Shakespeare's *Hamlet*, the famous \"To be, or not to be\" soliloquy"
+    },
+    {
+      "id": "refuse-nifty",
+      "refused": false,
+      "refusal_kind": null,
+      "grounded": true,
+      "answer_snippet": "Based on the provided context, there is no information about the NIFTY index value [1] [2] [3] [4] [5] [6]. The context only contains electrical revision formulas, units, a resistor values table, experimental run data, and an answer sheet [1] [2] [3] [4] [5] [6].\n\nOutside your sources: The NIFTY 50 "
+    },
+    {
+      "id": "refuse-riemann",
+      "refused": false,
+      "refusal_kind": null,
+      "grounded": true,
+      "answer_snippet": "While I'd love to help with advanced mathematics like the Riemann hypothesis, my current focus is helping you master the fundamentals of electrical circuits\u2014specifically Ohm's Law and how to use the Ohm's Law triangle ($V = I \\times R$) to find voltage, current, or resistance when you know the other"
+    },
+    {
+      "id": "refuse-hindi-out",
+      "refused": true,
+      "refusal_kind": "paraphrased",
+      "grounded": false,
+      "answer_snippet": "I cannot answer reliably about who will win IPL 2026 based on the provided sources.\n\nOutside your sources: IPL (Indian Premier League) is a professional Twenty20 cricket league in India, and the outcome of the 2026 tournament cannot be predicted as the matches have not yet been played."
+    },
+    {
+      "id": "hose-valve",
+      "faith": 1.0,
+      "rel": 0.889,
+      "precision": 0.3333333333333333,
+      "recall": 1.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on the provided water-hose analogy, **the outlet valve** (or a kinked hose) plays the role of the resistor [1] [2]. Just as closing the valve restricts the flow of water, increasing the resistance in an electrical circuit restricts the flow of current [1] [3]."
+    },
+    {
+      "id": "hose-flow",
+      "faith": 1.0,
+      "rel": 0.856,
+      "precision": 0.0,
+      "recall": 0.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on the water analogy, the flow (current) decreases when you increase the resistance (closing the valve) [1] [2]. Think of the resistor as a valve and the flow as the water leaving the hose; making it harder for the water to get through reduces the flow [1] [2] [3]."
+    },
+    {
+      "id": "wire-r",
+      "faith": 1.0,
+      "rel": 0.832,
+      "precision": 0.0,
+      "recall": 0.0,
+      "method": "llm (2 claims)",
+      "answer_snippet": "The connecting wire is ignored in this example because its resistance value is very small compared to the 250-ohm resistor, making its effect on the total resistance negligible for the calculation [1]."
+    },
+    {
+      "id": "terminals",
+      "faith": 1.0,
+      "rel": 0.848,
+      "precision": 0.3333333333333333,
+      "recall": 1.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on your lab materials, **red** is positive and **black** is negative [1] [2] [3]. \n\n*(Note: Keeping your terminal connections correct and tight is a crucial safety and setup step when working with circuit wiring [2] [3]!)*"
+    },
+    {
+      "id": "docx-hose",
+      "faith": 1.0,
+      "rel": 0.867,
+      "precision": 0.3333333333333333,
+      "recall": 1.0,
+      "method": "llm (5 claims)",
+      "answer_snippet": "Based on the provided notes, water pressure corresponds to voltage, which can also be thought of as a battery or water-supply pressure [1] [2] [3]. \n\n* **Water pressure** = Voltage or battery [1] [2] [3]\n* **Outlet valve** = Resistor [1] [3]\n* **Water flow** = Electric current [1] [3]"
+    },
+    {
+      "id": "docx-tri-r",
+      "faith": 1.0,
+      "rel": 0.836,
+      "precision": 0.0,
+      "recall": 0.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on the notes and the Ohm's Law triangle, to compute resistance, you cover the $R$ on the triangle [1] [2]. Looking at the remaining values, you are left with voltage divided by current [1] [2]. \n\n**Outside your sources:** \nIn equation form, this is expressed as $R = \\frac{V}{I}$, where $R$ rep"
+    },
+    {
+      "id": "ppt-hose",
+      "faith": 1.0,
+      "rel": 0.818,
+      "precision": 0.5,
+      "recall": 1.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on the water-hose analogy, the water flow represents the electric current [1] [2]. \n\nTo break down the rest of the analogy:\n* **Water-supply pressure** represents the battery voltage [2].\n* **The outlet valve** represents the resistor [2]."
+    },
+    {
+      "id": "ppt-units",
+      "faith": 1.0,
+      "rel": 0.84,
+      "precision": 0.5,
+      "recall": 1.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on the course materials, resistance is denoted by the symbol **R** (or the **omega sign**, $\\Omega$) and is measured in **ohms** [1] [2]."
+    },
+    {
+      "id": "ppt-check",
+      "faith": 1.0,
+      "rel": 0.849,
+      "precision": 0.3333333333333333,
+      "recall": 1.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on the provided context, the practical checklist states:\n\n* **Red positive, black negative** [1] [2]\n* **Tight connections** [1] [2] [3]\n* **Rheostat in series** [1]"
+    },
+    {
+      "id": "ppt-title",
+      "faith": 1.0,
+      "rel": 0.821,
+      "precision": 1.0,
+      "recall": 1.0,
+      "method": "llm (1 claims)",
+      "answer_snippet": "Based on the context provided, the title slide ([1]) states that the lesson consists of two parts:\n\n1. **Theory**\n2. **Board practical wiring**"
+    },
+    {
+      "id": "vi-6v",
+      "faith": 1.0,
+      "rel": 0.921,
+      "precision": 0.3333333333333333,
+      "recall": 1.0,
+      "method": "llm (1 claims)",
+      "answer_snippet": "Based on the V-I table in the provided context, the current recorded at $6\\text{ V}$ is **$24.0\\text{ mA}$** (or $24\\text{ mA}$) [1] [2] [3]."
+    },
+    {
+      "id": "csv-12v",
+      "faith": 1.0,
+      "rel": 0.89,
+      "precision": 0.0,
+      "recall": 0.0,
+      "method": "llm (1 claims)",
+      "answer_snippet": "Based on the provided context (such as in [1] and [2]), the current logged for 12.0V is **48.0 mA** (or $48.0\\text{ mA}$)."
+    },
+    {
+      "id": "gloss-ammeter",
+      "faith": 1.0,
+      "rel": 0.912,
+      "precision": 0.0,
+      "recall": 0.0,
+      "method": "llm (1 claims)",
+      "answer_snippet": "Based on the provided glossary, an ammeter is a \"meter joined in series to read current\" [1]."
+    },
+    {
+      "id": "summ-wire",
+      "faith": 1.0,
+      "rel": 0.858,
+      "precision": 0.0,
+      "recall": 0.0,
+      "method": "llm (3 claims)",
+      "answer_snippet": "Based on the provided texts, the summary and steps wire the rheostat in the following way:\n\n1. **Connection point:** The other end of the unknown resistor is connected to the rheostat [1] [2].\n2. **Completion of the circuit:** The remaining terminal of the rheostat is connected back to the negative "
+    },
+    {
+      "id": "diagram-r",
+      "faith": 0.0,
+      "rel": 0.855,
+      "precision": 0.0,
+      "recall": 0.0,
+      "method": "llm (1 claims)",
+      "answer_snippet": "The resistor value drawn in the circuit diagram is 250 ohms [1]."
+    },
+    {
+      "id": "hindi-explain",
+      "faith": 1.0,
+      "rel": 0.819,
+      "precision": 0.0,
+      "recall": 0.0,
+      "method": "llm (11 claims)",
+      "answer_snippet": "Ohm ka niyam (Ohm's law) kisi electronic circuit me **voltage ($V$)**, **current ($I$)**, aur **resistance ($R$)** ke beech ke sambhand (link) ko batata hai [1]. \n\nSaral bhasha me iska formula yeh hai:\n$$\\mathbf{V = I \\times R}$$\n*(Yani ki Voltage barabar Current guna Resistance)* [2] [3]\n\n### Iski "
+    },
+    {
+      "id": "video-triangle",
+      "faith": 1.0,
+      "rel": 0.832,
+      "precision": 1.0,
+      "recall": 1.0,
+      "method": "llm (6 claims)",
+      "answer_snippet": "Based on the provided sources, the trick for remembering the three formulas involves using an Ohm's law triangle, which places $V$ at the top and $I$ and $R$ in the bottom sections [1]. \n\nTo quickly work out any of the three formulas, you simply cover the value you are looking for and use the formul"
+    },
+    {
+      "id": "audio-rheostat",
+      "faith": 1.0,
+      "rel": 0.83,
+      "precision": 1.0,
+      "recall": 1.0,
+      "method": "llm (2 claims)",
+      "answer_snippet": "After leaving the resistor, the current flows into the rheostat [1]. From the rheostat, it flows back into the battery again to complete the circuit [1]."
+    },
+    {
+      "id": "refuse-medicine",
+      "refused": true,
+      "refusal_kind": "paraphrased",
+      "grounded": false,
+      "answer_snippet": "I cannot answer this question because the provided sources do not contain any information about medical treatments, dosages, or aspirin."
+    },
+    {
+      "id": "refuse-k8s",
+      "refused": false,
+      "refusal_kind": null,
+      "grounded": true,
+      "answer_snippet": "The provided course materials focus exclusively on foundational electrical theory, such as Ohm's law, voltage, current, resistance, the formula triangle, and basic circuit components [1] [2] [3] [4] [5]. Writing a Kubernetes operator in Go is an advanced cloud-native software engineering topic that "
+    }
+  ],
+  "corpus_sha": "424aba5b4585d18b"
+}
