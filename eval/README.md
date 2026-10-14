@@ -2,22 +2,24 @@
 
 Same data + same model + same settings => same numbers.
 
-## Corpus
+## Corpus — real videos + generated study files (one topic)
 
-Deterministic fake course generated from a seed — every parser in
-`app/ingestion/registry.py`:
+Topic: **Ohm's law & electric circuits** (see `dataset/SOURCES.md`).
 
 ```powershell
 uv run python eval/dataset/gen_corpus.py --out eval/dataset/files
+uv run python eval/dataset/fetch_media.py --out eval/dataset/files
 ```
 
-Writes `physics.pdf` (6pp) · `notes.docx` · `slides.pptx` (8 slides) ·
-`costs.xlsx` · `readings.csv` · `glossary.txt` · `summary.md` ·
-`diagram.png` · `lecture.wav` (+ `lecture.mp4` when `ffmpeg` exists).
-Unique `MARKER-*` strings per locator make assertions unambiguous.
-`lecture.wav` is a valid tone placeholder: ingestion accepts it, but STT
-yields no speech, so `requires_media` items skip gracefully instead of
-failing the run. Drop a real recorded lecture over it to enable them.
+`gen_corpus.py` writes `circuits.pdf` (6pp) · `lab_notes.docx` ·
+`lesson.pptx` (8 slides) · `measurements.xlsx` · `readings.csv` ·
+`glossary.txt` · `summary.md` · `circuit_diagram.png` — all aligned
+with what the videos actually say (V=IR triangle, hose analogy,
+12V/250Ω → 48mA example, board-practical wiring). `fetch_media.py`
+restores the two pinned YouTube sources (theory `ohms_law_video.mp4`
+4:42 + practical `circuit_demo_audio.m4a` 3:53, audio-only use).
+Reference transcripts (`dataset/raw/*.en.vtt`) are committed; media is
+gitignored (YouTube license + ~15MB) and fetched reproducibly.
 
 ## Config
 

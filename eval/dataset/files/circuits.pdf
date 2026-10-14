@@ -1,0 +1,116 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R] /Count 6 >>
+endobj
+3 0 obj
+<< /Length 494 >>
+stream
+BT /F1 28 Tf 60 505 Td (1. The basic circuit) Tj ET
+BT /F1 16 Tf 60 455 Td (The simplest circuit is a battery, some connecting wire and a resistor) Tj ET
+BT /F1 16 Tf 60 431 Td (in a loop. The battery creates a potential difference \(voltage\) that) Tj ET
+BT /F1 16 Tf 60 407 Td (pushes electrons through the wire. Current flows out of the positive) Tj ET
+BT /F1 16 Tf 60 383 Td (terminal, through the resistor, and back to the battery. MARKER-) Tj ET
+BT /F1 16 Tf 60 359 Td (CIRCUIT-P1.) Tj ET
+endstream
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 1 0 R >> >> /Contents 3 0 R >>
+endobj
+5 0 obj
+<< /Length 531 >>
+stream
+BT /F1 28 Tf 60 505 Td (2. The water-hose analogy) Tj ET
+BT /F1 16 Tf 60 455 Td (Think of a garden water hose. Battery voltage is the water-supply) Tj ET
+BT /F1 16 Tf 60 431 Td (pressure: higher pressure pushes harder. The outlet valve is the) Tj ET
+BT /F1 16 Tf 60 407 Td (resistor: closing it reduces the flow. The water flow itself is the) Tj ET
+BT /F1 16 Tf 60 383 Td (electric current. Increase resistance and flow drops; open the valve) Tj ET
+BT /F1 16 Tf 60 359 Td (\(less resistance\) and flow rises. MARKER-HOSE-P2.) Tj ET
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 1 0 R >> >> /Contents 5 0 R >>
+endobj
+7 0 obj
+<< /Length 445 >>
+stream
+BT /F1 28 Tf 60 505 Td (3. Ohm's law and the triangle) Tj ET
+BT /F1 16 Tf 60 455 Td (Ohm's law links the three quantities: V = I x R. Draw it as a triangle) Tj ET
+BT /F1 16 Tf 60 431 Td (with V on top and I, R below. Cover the value you want: cover V and) Tj ET
+BT /F1 16 Tf 60 407 Td (you read I multiplied by R; cover I and you read V divided by R; cover) Tj ET
+BT /F1 16 Tf 60 383 Td (R and you read V divided by I. MARKER-TRIANGLE-P3.) Tj ET
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 1 0 R >> >> /Contents 7 0 R >>
+endobj
+9 0 obj
+<< /Length 397 >>
+stream
+BT /F1 28 Tf 60 505 Td (4. Units and symbols) Tj ET
+BT /F1 16 Tf 60 455 Td (In engineering voltage is denoted V and measured in volts. Resistance) Tj ET
+BT /F1 16 Tf 60 431 Td (is denoted R \(or the omega sign\) and measured in ohms. Current is) Tj ET
+BT /F1 16 Tf 60 407 Td (denoted I and measured in amps. So V=IR reads volts = amps x ohms.) Tj ET
+BT /F1 16 Tf 60 383 Td (MARKER-UNITS-P4.) Tj ET
+endstream
+endobj
+10 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 1 0 R >> >> /Contents 9 0 R >>
+endobj
+11 0 obj
+<< /Length 522 >>
+stream
+BT /F1 28 Tf 60 505 Td (5. Worked example: 12V across 250 ohms) Tj ET
+BT /F1 16 Tf 60 455 Td (Take a 12 volt battery with a 250 ohm resistor across it. Cover I in) Tj ET
+BT /F1 16 Tf 60 431 Td (the triangle: I = V / R. 12 volts divided by 250 ohms gives 0.048) Tj ET
+BT /F1 16 Tf 60 407 Td (amps, which is 48 milliamps - all without using a meter. Connecting) Tj ET
+BT /F1 16 Tf 60 383 Td (wire has a small resistance too, but here the total is treated as 250) Tj ET
+BT /F1 16 Tf 60 359 Td (ohms. MARKER-EXAMPLE-P5.) Tj ET
+endstream
+endobj
+12 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 1 0 R >> >> /Contents 11 0 R >>
+endobj
+13 0 obj
+<< /Length 634 >>
+stream
+BT /F1 28 Tf 60 505 Td (6. Series, parallel and the board practical) Tj ET
+BT /F1 16 Tf 60 455 Td (An ammeter joins the loop in series so the full current passes through) Tj ET
+BT /F1 16 Tf 60 431 Td (it. A voltmeter connects in parallel across the resistor only: red) Tj ET
+BT /F1 16 Tf 60 407 Td (\(positive\) where current enters, black \(negative\) where it leaves. A) Tj ET
+BT /F1 16 Tf 60 383 Td (rheostat in series varies the current for the experiment. Red) Tj ET
+BT /F1 16 Tf 60 359 Td (terminals are positive, black are negative, and every connection must) Tj ET
+BT /F1 16 Tf 60 335 Td (be tight. MARKER-PRACTICAL-P6.) Tj ET
+endstream
+endobj
+14 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 1 0 R >> >> /Contents 13 0 R >>
+endobj
+15 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+xref
+0 16
+0000000000 65535 f 
+0000000009 00000 n 
+0000000079 00000 n 
+0000000169 00000 n 
+0000000714 00000 n 
+0000000840 00000 n 
+0000001422 00000 n 
+0000001548 00000 n 
+0000002044 00000 n 
+0000002170 00000 n 
+0000002618 00000 n 
+0000002745 00000 n 
+0000003319 00000 n 
+0000003447 00000 n 
+0000004133 00000 n 
+0000004261 00000 n 
+trailer
+<< /Size 16 /Root 15 0 R >>
+startxref
+4311
+%%EOF

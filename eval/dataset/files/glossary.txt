@@ -1,5 +1,9 @@
 Glossary (MARKER-GLOSSARY-TXT)
-vector: ordered list of numbers.
-basis: independent spanning set.
-eigenvector: Av = lambda v direction preserved.
-entropy: disorder measure.
+voltage: potential difference in volts (V).
+current: electron flow in amps (I).
+resistance: opposition in ohms (R, omega sign).
+ammeter: meter joined in series to read current.
+voltmeter: meter joined in parallel to read voltage.
+rheostat: variable resistor that sets the current.
+series: one loop, same current everywhere.
+parallel: shared endpoints, same voltage across branches.

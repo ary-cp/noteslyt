@@ -1,2 +1,868 @@
-{"_note": "Deterministic tiered set over eval/dataset/gen_corpus.py output. tier=N means included when --tier >= N. requires_media items skip gracefully when transcription yields no speech (tone placeholder). Segment expectations are loose: any segment locator from the media project passes.", "default_tier": 50, "fixtures": {"physics_pdf": "physics.pdf", "notes_docx": "notes.docx", "slides_pptx": "slides.pptx", "costs_xlsx": "costs.xlsx", "readings_csv": "readings.csv", "glossary_txt": "glossary.txt", "summary_md": "summary.md", "diagram_png": "diagram.png", "lecture_wav": "lecture.wav", "lecture_mp4": "lecture.mp4"}, "projects": [{"fixtures": ["physics_pdf", "notes_docx", "glossary_txt", "summary_md", "diagram_png", "lecture_wav"], "key": "physics"}, {"fixtures": ["costs_xlsx", "readings_csv", "slides_pptx", "physics_pdf"], "key": "materials"}], "items": [{"expected": [{"kind": "page", "value": "5"}], "id": "eigen", "must_contain": ["eigenvector"], "project": "physics", "question": "What is an eigenvector?", "tier": 30}, {"expected": [{"kind": "page", "value": "4"}], "id": "det2x2", "must_contain": ["determinant"], "project": "physics", "question": "What is the determinant of a 2x2 matrix?", "tier": 30}, {"expected": [{"kind": "page", "value": "2"}], "id": "basis", "must_contain": ["basis"], "project": "physics", "question": "What is a basis of a vector space?", "tier": 30}, {"expected": [{"kind": "section", "value": "First law"}], "id": "first-law", "must_contain": ["conserved"], "project": "physics", "question": "How is energy conserved in a thermodynamic process?", "tier": 30}, {"expected": [{"kind": "section", "value": "Thermodynamics"}], "id": "entropy", "must_contain": ["disorder"], "project": "physics", "question": "What is entropy a measure of?", "tier": 30}, {"expected": [{"kind": "sheet", "value": "Operating Costs"}], "id": "costs", "must_contain": ["steel"], "project": "materials", "question": "Which operating costs are listed and what does steel cost?", "tier": 30}, {"expected": [{"kind": "page", "value": "3"}], "id": "matrices", "must_contain": ["commutative"], "project": "materials", "question": "Is matrix multiplication commutative?", "tier": 30}, {"id": "refuse-cup", "must_refuse": true, "project": "physics", "question": "Who won the 2022 world cup?", "tier": 30}, {"id": "refuse-photo", "must_refuse": true, "project": "physics", "question": "Explain how photosynthesis works.", "tier": 30}, {"id": "refuse-principia", "must_refuse": true, "project": "materials", "question": "Who wrote the Principia and when?", "tier": 30}, {"expected": [{"kind": "page", "value": "1"}], "id": "span", "must_contain": ["span"], "project": "physics", "question": "What is the span of a set of vectors?", "tier": 30}, {"expected": [{"kind": "page", "value": "6"}], "id": "diag", "must_contain": ["diagonal"], "project": "physics", "question": "When can a matrix be diagonalised as P D P^-1?", "tier": 30}, {"expected": [{"kind": "section", "value": "Heat engines"}], "id": "engine", "must_contain": ["Carnot", "work"], "project": "physics", "question": "What does a heat engine do and what limits its efficiency?", "tier": 30}, {"expected": [{"kind": "slide", "value": "4"}], "id": "ohm", "must_contain": ["Ohm"], "project": "materials", "question": "State Ohm's law and how series resistances combine.", "tier": 30}, {"expected": [{"kind": "slide", "value": "5"}], "id": "snell", "must_contain": ["Snell"], "project": "materials", "question": "What is Snell's law in optics?", "tier": 30}, {"expected": [{"kind": "slide", "value": "6"}], "id": "wave", "must_contain": ["frequency"], "project": "materials", "question": "How are wave speed, frequency and wavelength related?", "tier": 30}, {"expected": [{"kind": "sheet", "value": "Readings"}], "id": "sensor", "must_contain": ["temp"], "project": "materials", "question": "What temperature reading is stored in the Readings sheet?", "tier": 30}, {"expected": [{"kind": "row", "value": "1:1"}], "id": "csv-head", "must_contain": ["voltage"], "project": "materials", "question": "What columns does the readings CSV contain?", "tier": 30}, {"expected": [{"kind": "section", "value": "Glossary"}], "id": "glossary", "must_contain": ["eigenvector"], "project": "physics", "question": "According to the glossary, what is an eigenvector?", "tier": 30}, {"expected": [{"kind": "section", "value": "Study summary"}], "id": "summary", "must_contain": ["ad - bc"], "project": "physics", "question": "What summary formula is given for a 2x2 determinant?", "tier": 30}, {"id": "refuse-cricket", "must_refuse": true, "project": "physics", "question": "Who won the 2023 cricket world cup final?", "tier": 30}, {"id": "refuse-mito", "must_refuse": true, "project": "materials", "question": "Explain mitochondrial DNA inheritance.", "tier": 30}, {"expected": [{"kind": "slide", "value": "3"}], "id": "energy", "must_contain": ["Kinetic"], "project": "materials", "question": "What is the kinetic energy formula on the energy slide?", "tier": 30}, {"expected": [{"kind": "slide", "value": "2"}], "id": "vec-slide", "must_contain": ["component"], "project": "materials", "question": "How is vector addition described on the vectors slide?", "tier": 30}, {"expected": [{"kind": "page", "value": "3"}], "id": "transpose", "must_contain": ["transpose"], "project": "physics", "question": "What does the transpose of a matrix do?", "tier": 30}, {"expected": [{"kind": "page", "value": "4"}], "id": "det-zero", "must_contain": ["collapses"], "project": "physics", "question": "What does a zero determinant mean geometrically?", "tier": 30}, {"expected": [{"kind": "page", "value": "6"}], "id": "spectral", "must_contain": ["Symmetric", "orthogonal"], "project": "physics", "question": "What does the spectral theorem say about symmetric matrices?", "tier": 30}, {"id": "refuse-stock", "must_refuse": true, "project": "materials", "question": "What is today's NIFTY index value?", "tier": 30}, {"id": "refuse-shakespeare", "must_refuse": true, "project": "physics", "question": "Summarise Hamlet's soliloquy.", "tier": 30}, {"id": "refuse-relativity", "must_refuse": true, "project": "physics", "question": "Derive Einstein's field equations.", "tier": 30}, {"expected": [{"kind": "slide", "value": "1"}], "id": "overview", "must_contain": ["Physics 101"], "project": "materials", "question": "Which course and topics does the overview slide list?", "tier": 50}, {"expected": [{"kind": "slide", "value": "7"}], "id": "midterm", "must_contain": ["Midterm"], "project": "materials", "question": "What does the review slide say the midterm covers?", "tier": 50}, {"expected": [{"kind": "slide", "value": "8"}], "id": "homework", "must_contain": ["Friday"], "project": "materials", "question": "When is the homework due according to the last slide?", "tier": 50}, {"expected": [{"kind": "sheet", "value": "Operating Costs"}], "id": "coke", "must_contain": ["coke", "80"], "project": "materials", "question": "What does coke cost in the operating costs table?", "tier": 50}, {"expected": [{"kind": "sheet", "value": "Operating Costs"}], "id": "labor", "must_contain": ["labor", "200"], "project": "materials", "question": "What does labor cost in the operating costs table?", "tier": 50}, {"expected": [{"kind": "image", "value": "diagram"}], "id": "diagram", "must_contain": ["F=ma", "4kg"], "project": "physics", "question": "What force relation and mass does the force diagram show?", "tier": 50}, {"expected": [{"kind": "page", "value": "2"}], "id": "poly-space", "must_contain": ["polynomials"], "project": "physics", "question": "Which polynomial set is given as a vector-space example?", "tier": 50}, {"expected": [{"kind": "page", "value": "5"}], "id": "charpoly", "must_contain": ["characteristic"], "project": "physics", "question": "How are eigenvalues computed from the characteristic polynomial?", "tier": 50}, {"id": "refuse-hindi-outside", "must_refuse": true, "project": "physics", "question": "IPL 2026 me kaun jeetega?", "tier": 50}, {"expected": [{"kind": "section", "value": "Study summary"}], "id": "hindi-explain", "must_contain": ["eigenvector"], "project": "physics", "question": "Eigenvector ko Hindi me saral bhasha me samjhao (sources se).", "tier": 50}, {"expected": [{"kind": "segment", "value": "any"}], "id": "audio-seg", "must_contain": [], "project": "physics", "question": "What does the lecture recording say at the start?", "requires_media": true, "tier": 50}, {"expected": [{"kind": "segment", "value": "any"}], "id": "video-seg", "must_contain": [], "project": "physics", "question": "What topic opens the lecture video?", "requires_media": true, "tier": 50}, {"expected": [{"kind": "row", "value": "any"}], "id": "csv-voltage", "must_contain": ["voltage", "1.5"], "project": "materials", "question": "What voltage readings appear in the CSV over time?", "tier": 50}, {"expected": [{"kind": "section", "value": "Glossary"}], "id": "glossary-entropy", "must_contain": ["disorder"], "project": "physics", "question": "How does the glossary define entropy?", "tier": 50}, {"id": "refuse-medicine", "must_refuse": true, "project": "materials", "question": "What dosage of aspirin treats headaches?", "tier": 50}, {"id": "refuse-code", "must_refuse": true, "project": "physics", "question": "Write a Kubernetes operator in Go.", "tier": 50}, {"expected": [{"kind": "page", "value": "1"}], "id": "vec-add", "must_contain": ["component-wise"], "project": "physics", "question": "How are vectors added and scaled?", "tier": 50}, {"expected": [{"kind": "page", "value": "3"}], "id": "invertible", "must_contain": ["Invertible"], "project": "physics", "question": "When is a square matrix invertible in terms of its determinant?", "tier": 50}, {"expected": [{"kind": "section", "value": "First law"}], "id": "first-law-w", "must_contain": ["conserved"], "project": "physics", "question": "Restate the first law of thermodynamics in your own words from the notes.", "tier": 50}, {"expected": [{"kind": "page", "value": "5"}], "id": "eig-app", "must_contain": ["Av"], "project": "physics", "question": "A 2x2 matrix maps [1,0] to [3,0]. What eigenvalue does this suggest and why?", "tier": 100}, {"expected": [{"kind": "page", "value": "4"}], "id": "det-area", "must_contain": ["area"], "project": "physics", "question": "A map scales area by 6. What determinant does it have and what does zero mean?", "tier": 100}, {"expected": [{"kind": "slide", "value": "4"}], "id": "ohm-num", "must_contain": ["V"], "project": "materials", "question": "A 2A current flows through 6 ohm. What voltage, per Ohm's law?", "tier": 100}, {"expected": [{"kind": "sheet", "value": "Operating Costs"}], "id": "total-cost", "must_contain": ["400"], "project": "materials", "question": "What is the total of steel + coke + labor operating costs?", "tier": 100}, {"expected": [{"kind": "slide", "value": "6"}], "id": "wave-num", "must_contain": ["lambda"], "project": "materials", "question": "A wave has f=50Hz and lambda=2m. What is its speed?", "tier": 100}, {"expected": [{"kind": "image", "value": "diagram"}], "id": "diagram-num", "must_contain": ["4kg"], "project": "physics", "question": "The diagram shows a 4kg box. What net force accelerates it at 2 m/s^2?", "tier": 100}, {"id": "refuse-proof", "must_refuse": true, "project": "physics", "question": "Prove the Riemann hypothesis.", "tier": 100}, {"id": "refuse-election", "must_refuse": true, "project": "materials", "question": "Who will win the next general election?", "tier": 100}, {"expected": [{"kind": "section", "value": "Study summary"}], "id": "summary-firstlaw", "must_contain": ["first law"], "project": "physics", "question": "Which conservation statement does the study summary repeat?", "tier": 100}, {"expected": [{"kind": "section", "value": "Glossary"}], "id": "glossary-basis", "must_contain": ["spanning"], "project": "physics", "question": "What two properties make a basis, per the glossary?", "tier": 100},
-  {"expected": [{"kind": "slide", "value": "2"}], "id": "ppt-span", "must_contain": ["Span"], "project": "materials", "question": "What does the vectors slide preview about span and basis?", "tier": 50}]}
+{
+ "_note": "Ohm's-law set over eval/dataset/gen_corpus.py + 2 YouTube videos (see SOURCES.md). tier=N included when --tier >= N (30/50/100=full 60). requires_media items need real transcription; runner skips gracefully when the source is not ready. Segment expectations are loose (any segment passes) because STT grouping varies.",
+ "default_tier": 50,
+ "fixtures": {
+  "circuits_pdf": "circuits.pdf",
+  "lab_docx": "lab_notes.docx",
+  "lesson_pptx": "lesson.pptx",
+  "measure_xlsx": "measurements.xlsx",
+  "readings_csv": "readings.csv",
+  "glossary_txt": "glossary.txt",
+  "summary_md": "summary.md",
+  "diagram_png": "circuit_diagram.png",
+  "law_video": "ohms_law_video.mp4",
+  "demo_audio": "circuit_demo_audio.m4a"
+ },
+ "projects": [
+  {
+   "fixtures": [
+    "law_video",
+    "demo_audio",
+    "circuits_pdf",
+    "lab_docx",
+    "diagram_png",
+    "glossary_txt",
+    "summary_md"
+   ],
+   "key": "circuits"
+  },
+  {
+   "fixtures": [
+    "measure_xlsx",
+    "readings_csv",
+    "lesson_pptx",
+    "circuits_pdf"
+   ],
+   "key": "lab"
+  }
+ ],
+ "items": [
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "3"
+    }
+   ],
+   "id": "vir",
+   "must_contain": [
+    "V = I"
+   ],
+   "project": "circuits",
+   "question": "State Ohm's law as a formula.",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "2"
+    }
+   ],
+   "id": "hose",
+   "must_contain": [
+    "hose"
+   ],
+   "project": "circuits",
+   "question": "What garden analogy explains voltage, resistance and current?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "3"
+    }
+   ],
+   "id": "triangle",
+   "must_contain": [
+    "triangle"
+   ],
+   "project": "circuits",
+   "question": "How does the Ohm's law triangle give each formula?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "5"
+    }
+   ],
+   "id": "example-12v",
+   "must_contain": [
+    "48"
+   ],
+   "project": "circuits",
+   "question": "A 12V battery drives a 250 ohm resistor. What current flows?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "4"
+    }
+   ],
+   "id": "units",
+   "must_contain": [
+    "volts"
+   ],
+   "project": "circuits",
+   "question": "What are the units of voltage, resistance and current?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "4"
+    }
+   ],
+   "id": "symbols",
+   "must_contain": [
+    "amps"
+   ],
+   "project": "circuits",
+   "question": "Which letters denote voltage, resistance and current?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "1"
+    }
+   ],
+   "id": "loop",
+   "must_contain": [
+    "battery"
+   ],
+   "project": "circuits",
+   "question": "Describe the simplest electric circuit loop.",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "6"
+    }
+   ],
+   "id": "ammeter",
+   "must_contain": [
+    "series"
+   ],
+   "project": "circuits",
+   "question": "How is an ammeter connected in a circuit?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "6"
+    }
+   ],
+   "id": "voltmeter",
+   "must_contain": [
+    "parallel"
+   ],
+   "project": "circuits",
+   "question": "How is a voltmeter connected across a resistor?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Ohm's law"
+    }
+   ],
+   "id": "docx-ohm",
+   "must_contain": [
+    "third"
+   ],
+   "project": "circuits",
+   "question": "If you know two of V, I, R, what can you find?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Board practical wiring"
+    }
+   ],
+   "id": "docx-wiring",
+   "must_contain": [
+    "rheostat"
+   ],
+   "project": "circuits",
+   "question": "How is the rheostat wired in the board practical?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "slide",
+     "value": "4"
+    }
+   ],
+   "id": "ppt-triangle",
+   "must_contain": [
+    "triangle"
+   ],
+   "project": "lab",
+   "question": "What three formulas come from covering values in the triangle?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "slide",
+     "value": "6"
+    }
+   ],
+   "id": "ppt-example",
+   "must_contain": [
+    "48mA"
+   ],
+   "project": "lab",
+   "question": "What current does the slide example compute for 12V and 250 ohm?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "slide",
+     "value": "7"
+    }
+   ],
+   "id": "ppt-series",
+   "must_contain": [
+    "series"
+   ],
+   "project": "lab",
+   "question": "Which meter goes in series and which in parallel?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "sheet",
+     "value": "V-I Readings"
+    }
+   ],
+   "id": "vi-table",
+   "must_contain": [
+    "48"
+   ],
+   "project": "lab",
+   "question": "What current is recorded at 12V in the V-I readings table?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "sheet",
+     "value": "Resistors"
+    }
+   ],
+   "id": "resistors",
+   "must_contain": [
+    "250"
+   ],
+   "project": "lab",
+   "question": "What value is listed for the unknown resistor R1?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "row",
+     "value": "1:1"
+    }
+   ],
+   "id": "csv-head",
+   "must_contain": [
+    "voltage"
+   ],
+   "project": "lab",
+   "question": "What columns does the readings CSV contain?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Glossary"
+    }
+   ],
+   "id": "gloss-volt",
+   "must_contain": [
+    "volts"
+   ],
+   "project": "circuits",
+   "question": "How does the glossary define voltage?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Ohm's law summary"
+    }
+   ],
+   "id": "summ-formula",
+   "must_contain": [
+    "V = I"
+   ],
+   "project": "circuits",
+   "question": "What formula does the study summary lead with?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "image",
+     "value": "circuit_diagram"
+    }
+   ],
+   "id": "diagram",
+   "must_contain": [
+    "parallel"
+   ],
+   "project": "circuits",
+   "question": "How is the voltmeter placed in the circuit diagram?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "segment",
+     "value": "any"
+    }
+   ],
+   "id": "video-hose",
+   "must_contain": [
+    "hose"
+   ],
+   "project": "circuits",
+   "question": "What analogy does the theory video use for voltage and resistance?",
+   "tier": 30,
+   "requires_media": true
+  },
+  {
+   "expected": [
+    {
+     "kind": "segment",
+     "value": "any"
+    }
+   ],
+   "id": "video-example",
+   "must_contain": [
+    "48"
+   ],
+   "project": "circuits",
+   "question": "What current does the video compute for the 12V 250 ohm circuit?",
+   "tier": 30,
+   "requires_media": true
+  },
+  {
+   "expected": [
+    {
+     "kind": "segment",
+     "value": "any"
+    }
+   ],
+   "id": "audio-wiring",
+   "must_contain": [
+    "ammeter"
+   ],
+   "project": "circuits",
+   "question": "According to the practical recording, where does the ammeter connect?",
+   "tier": 30,
+   "requires_media": true
+  },
+  {
+   "expected": [
+    {
+     "kind": "segment",
+     "value": "any"
+    }
+   ],
+   "id": "audio-voltmeter",
+   "must_contain": [
+    "parallel"
+   ],
+   "project": "circuits",
+   "question": "Where does the demo connect the voltmeter terminals?",
+   "tier": 30,
+   "requires_media": true
+  },
+  {
+   "id": "refuse-cup",
+   "must_refuse": true,
+   "project": "circuits",
+   "question": "Who won the 2022 football world cup?",
+   "tier": 30
+  },
+  {
+   "id": "refuse-photo",
+   "must_refuse": true,
+   "project": "circuits",
+   "question": "Explain how photosynthesis works.",
+   "tier": 30
+  },
+  {
+   "id": "refuse-shakespeare",
+   "must_refuse": true,
+   "project": "lab",
+   "question": "Summarise Hamlet's soliloquy.",
+   "tier": 30
+  },
+  {
+   "id": "refuse-nifty",
+   "must_refuse": true,
+   "project": "lab",
+   "question": "What is today's NIFTY index value?",
+   "tier": 30
+  },
+  {
+   "id": "refuse-riemann",
+   "must_refuse": true,
+   "project": "circuits",
+   "question": "Prove the Riemann hypothesis.",
+   "tier": 30
+  },
+  {
+   "id": "refuse-hindi-out",
+   "must_refuse": true,
+   "project": "circuits",
+   "question": "IPL 2026 me kaun jeetega?",
+   "tier": 30
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "2"
+    }
+   ],
+   "id": "hose-valve",
+   "must_contain": [
+    "valve"
+   ],
+   "project": "circuits",
+   "question": "In the hose analogy, what plays the role of the resistor?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "2"
+    }
+   ],
+   "id": "hose-flow",
+   "must_contain": [
+    "flow"
+   ],
+   "project": "circuits",
+   "question": "What happens to the flow when resistance increases?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "5"
+    }
+   ],
+   "id": "wire-r",
+   "must_contain": [
+    "wire"
+   ],
+   "project": "circuits",
+   "question": "Why is the connecting wire ignored in the 12V example?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "6"
+    }
+   ],
+   "id": "terminals",
+   "must_contain": [
+    "red"
+   ],
+   "project": "circuits",
+   "question": "Which terminal colours mean positive and negative?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Water analogy"
+    }
+   ],
+   "id": "docx-hose",
+   "must_contain": [
+    "pressure"
+   ],
+   "project": "circuits",
+   "question": "What does water pressure correspond to in the notes?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Triangle method"
+    }
+   ],
+   "id": "docx-tri-r",
+   "must_contain": [
+    "V / I"
+   ],
+   "project": "circuits",
+   "question": "How do the notes compute resistance from the triangle?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "slide",
+     "value": "3"
+    }
+   ],
+   "id": "ppt-hose",
+   "must_contain": [
+    "flow"
+   ],
+   "project": "lab",
+   "question": "What does the water flow represent on the analogy slide?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "slide",
+     "value": "5"
+    }
+   ],
+   "id": "ppt-units",
+   "must_contain": [
+    "ohms"
+   ],
+   "project": "lab",
+   "question": "What unit and symbol denote resistance on the units slide?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "slide",
+     "value": "8"
+    }
+   ],
+   "id": "ppt-check",
+   "must_contain": [
+    "tight"
+   ],
+   "project": "lab",
+   "question": "What does the practical checklist say about connections?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "slide",
+     "value": "1"
+    }
+   ],
+   "id": "ppt-title",
+   "must_contain": [
+    "practical"
+   ],
+   "project": "lab",
+   "question": "What two parts make up the lesson per the title slide?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "sheet",
+     "value": "V-I Readings"
+    }
+   ],
+   "id": "vi-6v",
+   "must_contain": [
+    "24"
+   ],
+   "project": "lab",
+   "question": "What current is recorded at 6V in the V-I table?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "row",
+     "value": "any"
+    }
+   ],
+   "id": "csv-12v",
+   "must_contain": [
+    "48"
+   ],
+   "project": "lab",
+   "question": "What current_mA is logged for 12.0V in the CSV?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Glossary"
+    }
+   ],
+   "id": "gloss-ammeter",
+   "must_contain": [
+    "series"
+   ],
+   "project": "circuits",
+   "question": "What is an ammeter per the glossary?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Ohm's law summary"
+    }
+   ],
+   "id": "summ-wire",
+   "must_contain": [
+    "rheostat"
+   ],
+   "project": "circuits",
+   "question": "How does the summary wire the rheostat?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "image",
+     "value": "circuit_diagram"
+    }
+   ],
+   "id": "diagram-r",
+   "must_contain": [
+    "250"
+   ],
+   "project": "circuits",
+   "question": "What resistor value is drawn in the circuit diagram?",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Ohm's law summary"
+    }
+   ],
+   "id": "hindi-explain",
+   "must_contain": [
+    "V = I"
+   ],
+   "project": "circuits",
+   "question": "Ohm ke niyam ko Hindi me saral bhasha me samjhao (sources se).",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "segment",
+     "value": "any"
+    }
+   ],
+   "id": "video-triangle",
+   "must_contain": [
+    "triangle"
+   ],
+   "project": "circuits",
+   "question": "What trick does the video teach for remembering the three formulas?",
+   "tier": 50,
+   "requires_media": true
+  },
+  {
+   "expected": [
+    {
+     "kind": "segment",
+     "value": "any"
+    }
+   ],
+   "id": "audio-rheostat",
+   "must_contain": [
+    "rheostat"
+   ],
+   "project": "circuits",
+   "question": "Where does the current go after the resistor in the demo?",
+   "tier": 50,
+   "requires_media": true
+  },
+  {
+   "id": "refuse-medicine",
+   "must_refuse": true,
+   "project": "lab",
+   "question": "What dosage of aspirin treats headaches?",
+   "tier": 50
+  },
+  {
+   "id": "refuse-k8s",
+   "must_refuse": true,
+   "project": "circuits",
+   "question": "Write a Kubernetes operator in Go.",
+   "tier": 50
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "3"
+    }
+   ],
+   "id": "num-i",
+   "must_contain": [
+    "0.024"
+   ],
+   "project": "circuits",
+   "question": "A 6V battery drives 250 ohm. What current, following the worked method?",
+   "tier": 100
+  },
+  {
+   "expected": [
+    {
+     "kind": "page",
+     "value": "3"
+    }
+   ],
+   "id": "num-v",
+   "must_contain": [
+    "12"
+   ],
+   "project": "circuits",
+   "question": "A 48mA current flows through 250 ohm. What voltage is dropped?",
+   "tier": 100
+  },
+  {
+   "expected": [
+    {
+     "kind": "sheet",
+     "value": "V-I Readings"
+    }
+   ],
+   "id": "num-total",
+   "must_contain": [
+    "250"
+   ],
+   "project": "lab",
+   "question": "The table holds V and I pairs. What resistance do they all agree on?",
+   "tier": 100
+  },
+  {
+   "expected": [
+    {
+     "kind": "slide",
+     "value": "6"
+    }
+   ],
+   "id": "num-slide",
+   "must_contain": [
+    "milliamps"
+   ],
+   "project": "lab",
+   "question": "Convert the slide's 0.048A answer into milliamps.",
+   "tier": 100
+  },
+  {
+   "expected": [
+    {
+     "kind": "image",
+     "value": "circuit_diagram"
+    }
+   ],
+   "id": "diagram-force",
+   "must_contain": [
+    "12V"
+   ],
+   "project": "circuits",
+   "question": "What battery value is drawn in the circuit diagram?",
+   "tier": 100
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Glossary"
+    }
+   ],
+   "id": "gloss-parallel",
+   "must_contain": [
+    "voltage"
+   ],
+   "project": "circuits",
+   "question": "What is shared across branches in parallel, per the glossary?",
+   "tier": 100
+  },
+  {
+   "expected": [
+    {
+     "kind": "section",
+     "value": "Ohm's law summary"
+    }
+   ],
+   "id": "summ-check",
+   "must_contain": [
+    "parallel"
+   ],
+   "project": "circuits",
+   "question": "Where does the summary place the voltmeter?",
+   "tier": 100
+  },
+  {
+   "expected": [
+    {
+     "kind": "segment",
+     "value": "any"
+    }
+   ],
+   "id": "video-notation",
+   "must_contain": [
+    "amps"
+   ],
+   "project": "circuits",
+   "question": "What letters and units does the video assign to the three quantities?",
+   "tier": 100,
+   "requires_media": true
+  },
+  {
+   "id": "refuse-election",
+   "must_refuse": true,
+   "project": "lab",
+   "question": "Who will win the next general election?",
+   "tier": 100
+  },
+  {
+   "id": "refuse-proof",
+   "must_refuse": true,
+   "project": "circuits",
+   "question": "Derive Einstein's field equations.",
+   "tier": 100
+  }
+ ]
+}

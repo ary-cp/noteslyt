@@ -48,6 +48,7 @@ MIME = {
     ".md": "text/markdown",
     ".png": "image/png",
     ".wav": "audio/wav",
+    ".m4a": "audio/mp4",
     ".mp4": "video/mp4",
 }
 
