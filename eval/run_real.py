@@ -68,14 +68,23 @@ DECLINE_RE = re.compile(
 
 
 def refusal_kind(ans: dict) -> str | None:
-    """'exact' | 'labeled' | 'paraphrased' | None (unsafe answer)."""
-    if ans["grounded"] is not False or ans["citations"]:
-        return None
+    """'exact' | 'labeled' | 'paraphrased' | None (unsafe answer).
+
+    Mirrors the original eval contract (eval/run_ragas.py): off-material
+    items must either refuse or clearly label a general-knowledge answer as
+    outside the sources, with no citations. A labeled Outside answer passes
+    even when the server marks the turn grounded — the label IS the grounding
+    signal. Paraphrased declines must additionally be audit-clean
+    (grounded=False, zero citations).
+    """
     if ans["answer"] == REFUSAL:
         return "exact"
-    if re.match(r"\s*\*\*Outside your sources:\*\*", ans["answer"], re.I):
+    # The header starts a *paragraph*, not necessarily the answer — search it.
+    if (re.search(r"\*\*Outside your sources:\*\*", ans["answer"], re.I)
+            and ans["citations"] == []):
         return "labeled"
-    if bool(DECLINE_RE.search(ans["answer"])):
+    if (ans["grounded"] is False and ans["citations"] == []
+            and bool(DECLINE_RE.search(ans["answer"]))):
         return "paraphrased"
     return None
 
@@ -99,6 +108,15 @@ class Pacer:
             time.sleep(wait)
             now = time.monotonic()
         self._last = now
+
+
+def ckpt_path(outdir: Path, tier: int, tag: str) -> Path:
+    return outdir / f".checkpoint-t{tier}-{tag}.json"
+
+
+def save_ckpt(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def post_with_retry(c: httpx.Client, method: str, url: str, **kw) -> httpx.Response:
@@ -189,6 +207,8 @@ def main() -> int:
                     help="max eval iterations/min (free tier: keep <=3; paid: raise)")
     ap.add_argument("--upload-batch", type=int, default=3,
                     help="files per upload request (spreads ingestion LLM calls)")
+    ap.add_argument("--resume", default=None,
+                    help="resume from a checkpoint file (quota-safe reruns)")
     args = ap.parse_args()
 
     env_path = Path(args.env_file)
@@ -241,31 +261,51 @@ def main() -> int:
         sha = "unknown"
 
     tag = uuid.uuid4().hex[:8]
-    token = c.post("/auth/signup", json={
+    outdir = Path(args.out)
+    outdir.mkdir(parents=True, exist_ok=True)
+    ckpt: dict | None = None
+    if args.resume:
+        ckpt = json.loads(Path(args.resume).read_text(encoding="utf-8"))
+        tag = ckpt["tag"]
+        print(f"resuming {args.resume}: {len(ckpt['rows'])}/{ckpt['n_items']} done")
+    token = ckpt["token"] if ckpt else c.post("/auth/signup", json={
         "email": f"real-{tag}@test.co", "password": "real-password", "display_name": "RealEval",
     }).json()["access_token"]
     h = auth(token)
 
-    print("upload (batched, settled between batches)")
-    projects: dict[str, str] = {}
-    for proj in testset["projects"]:
-        pid = c.post("/projects", json={"title": f"real-{proj['key']}-{tag}"}, headers=h).json()["id"]
-        projects[proj["key"]] = pid
-        pending = []
-        for key in proj["fixtures"]:
-            p = corpus / filemap[key]
-            if not p.exists():
-                print(f"  [warn] missing {p.name}, skipped (video needs ffmpeg)")
-                continue
-            pending.append(("files", (p.name, p.read_bytes(), MIME.get(p.suffix.lower(), "application/octet-stream"))))
-        for b in range(0, len(pending), args.upload_batch):
-            batch = pending[b:b + args.upload_batch]
-            r = post_with_retry(c, "POST", f"/projects/{pid}/sources", files=batch, headers=h)
-            check(f"{proj['key']} upload batch {b // args.upload_batch + 1} (202)",
-                  r.status_code == 202, r.text[:120])
-            st = wait_until_settled(c, h, pid)
-            print(f"  [info] {proj['key']} settled batch: {st['counts']}")
-            pacer.tick()
+    if ckpt:
+        projects = dict(ckpt["projects"])
+        rows: list[dict] = list(ckpt["rows"])
+        skipped = int(ckpt.get("skipped", 0))
+        alive = {p["id"] for p in c.get("/projects", headers=h).json()}
+        missing = [pid for pid in projects.values() if pid not in alive]
+        if missing:
+            print(f"resume projects gone (server restarted?): {missing} — rerun fresh")
+            return 2
+        print(f"reusing projects: {projects}")
+    else:
+        print("upload (batched, settled between batches)")
+        projects = {}
+        rows = []
+        skipped = 0
+        for proj in testset["projects"]:
+            pid = c.post("/projects", json={"title": f"real-{proj['key']}-{tag}"}, headers=h).json()["id"]
+            projects[proj["key"]] = pid
+            pending = []
+            for key in proj["fixtures"]:
+                p = corpus / filemap[key]
+                if not p.exists():
+                    print(f"  [warn] missing {p.name}, skipped (video needs ffmpeg)")
+                    continue
+                pending.append(("files", (p.name, p.read_bytes(), MIME.get(p.suffix.lower(), "application/octet-stream"))))
+            for b in range(0, len(pending), args.upload_batch):
+                batch = pending[b:b + args.upload_batch]
+                r = post_with_retry(c, "POST", f"/projects/{pid}/sources", files=batch, headers=h)
+                check(f"{proj['key']} upload batch {b // args.upload_batch + 1} (202)",
+                      r.status_code == 202, r.text[:120])
+                st = wait_until_settled(c, h, pid)
+                print(f"  [info] {proj['key']} settled batch: {st['counts']}")
+                pacer.tick()
     settled_ok = True
     for key, pid in projects.items():
         st = wait_until_settled(c, h, pid)
@@ -276,14 +316,26 @@ def main() -> int:
         check(f"{key} settled", st["settled"], str(st["counts"]))
 
     print("\nitems")
-    rows: list[dict] = []
-    skipped = 0
+    done_ids = {r["id"] for r in rows}
+    todo = [i for i in items if i["id"] not in done_ids]
+    if done_ids:
+        print(f"skipping {len(done_ids)} already-scored items")
+    ckpt_file = ckpt_path(outdir, tier, tag)
+
+    def checkpoint() -> None:
+        save_ckpt(ckpt_file, {"tag": tag, "token": token, "base": base,
+                              "tier": tier, "n_items": len(items),
+                              "projects": projects, "rows": rows,
+                              "skipped": skipped})
+
     t0 = time.monotonic()
-    for n, item in enumerate(items, start=1):
-        pacer.tick()
-        pid = projects[item["project"]]
-        eta = (time.monotonic() - t0) / n * (len(items) - n) / 60
-        print(f"[{n}/{len(items)} ~{eta:.0f}min left] {item['id']}")
+    quota_dead = False
+    try:
+        for n, item in enumerate(todo, start=len(rows) + 1):
+            pacer.tick()
+            pid = projects[item["project"]]
+            eta = (time.monotonic() - t0) / n * (len(items) - n) / 60
+            print(f"[{n}/{len(items)} ~{eta:.0f}min left] {item['id']}")
         if item.get("requires_media"):
             srcs = c.get(f"/projects/{pid}/sources", headers=h).json()
             media_ready = any(s.get("source_type") in {"audio", "video"} and s.get("status") == "ready" for s in srcs)
@@ -291,11 +343,16 @@ def main() -> int:
                 print(f"  [skip] {item['id']} (no ready audio/video source)")
                 skipped += 1
                 rows.append({"id": item["id"], "skipped": True})
+                checkpoint()
                 continue
         chat = post_with_retry(c, "POST", f"/projects/{pid}/chats", json={}, headers=h).json()
         r = post_with_retry(c, "POST", f"/chats/{chat['id']}/messages",
                             json={"content": item["question"]}, headers=h)
-        assert r.status_code == 200, r.text
+        if r.status_code != 200:
+            print(f"  [quota-dead] {r.status_code}: {r.text[:200]}")
+            checkpoint()
+            quota_dead = True
+            break
         ans = r.json()
         if item.get("must_refuse"):
             kind = refusal_kind(ans)
@@ -305,6 +362,7 @@ def main() -> int:
             rows.append({"id": item["id"], "refused": ok, "refusal_kind": kind,
                          "grounded": ans["grounded"],
                          "answer_snippet": ans["answer"][:300]})
+            checkpoint()
             continue
         exp = [citation_label(e["kind"], e["value"]) for e in item.get("expected", [])]
         # segment expectations are loose: any segment retrieval passes recall.
@@ -324,6 +382,19 @@ def main() -> int:
         rows.append({"id": item["id"], "faith": faith, "rel": rel,
                      "precision": precision, "recall": recall, "method": method,
                      "answer_snippet": ans["answer"][:300]})
+        checkpoint()
+    except KeyboardInterrupt:
+        print("\ninterrupted — progress saved")
+        checkpoint()
+        quota_dead = True
+
+    if quota_dead:
+        print(f"\nSTOPPED EARLY ({len(rows)}/{len(items)} scored). Resume with:\n"
+              f"  uv run python eval/run_real.py --env-file {args.env_file} "
+              f"--tier {tier} --resume {ckpt_file}\n"
+              f"Projects are kept (no cleanup) so resume reuses them.")
+        c.close()
+        return 3
 
     grounded = [r for r in rows if "faith" in r]
     refused = [r for r in rows if "refused" in r]
@@ -373,6 +444,7 @@ def main() -> int:
     for pid in projects.values():
         c.delete(f"/projects/{pid}", headers=h)
     c.close()
+    ckpt_file.unlink(missing_ok=True)
 
     # markdown table for README
     try:
