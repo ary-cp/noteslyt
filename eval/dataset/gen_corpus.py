@@ -45,31 +45,45 @@ CIRCUIT_PAGES = [
     ("1. The basic circuit",
      "The simplest circuit is a battery, some connecting wire and a resistor in a loop. "
      "The battery creates a potential difference (voltage) that pushes electrons through the wire. "
-     "Current flows out of the positive terminal, through the resistor, and back to the battery. MARKER-CIRCUIT-P1."),
+     "Current flows out of the positive terminal, through the resistor, and back to the battery. "
+     "Conventional current is drawn from positive to negative, though electrons drift the other way. "
+     "Every practical circuit in this course - meters, rheostats, loads - builds on this single loop, "
+     "so master the loop before adding instruments. MARKER-CIRCUIT-P1."),
     ("2. The water-hose analogy",
      "Think of a garden water hose. Battery voltage is the water-supply pressure: higher pressure pushes harder. "
      "The outlet valve is the resistor: closing it reduces the flow. The water flow itself is the electric current. "
-     "Increase resistance and flow drops; open the valve (less resistance) and flow rises. MARKER-HOSE-P2."),
+     "Increase resistance and flow drops; open the valve (less resistance) and flow rises. "
+     "A kinked hose is a large resistor, a wide clean pipe is a small one, and the tap you open "
+     "is exactly what the rheostat does in the electric loop. MARKER-HOSE-P2."),
     ("3. Ohm's law and the triangle",
      "Ohm's law links the three quantities: V = I x R. Draw it as a triangle with V on top and I, R below. "
      "Cover the value you want: cover V and you read I multiplied by R; cover I and you read V divided by R; "
-     "cover R and you read V divided by I. MARKER-TRIANGLE-P3."),
+     "cover R and you read V divided by I. The triangle is a memory aid, not physics: the physics is that "
+     "current through a fixed resistor is directly proportional to the voltage across it, doubling V doubles I. "
+     "It holds for ohmic conductors at constant temperature. MARKER-TRIANGLE-P3."),
     ("4. Units and symbols",
      "In engineering voltage is denoted V and measured in volts. Resistance is denoted R (or the omega sign) "
-     "and measured in ohms. Current is denoted I and measured in amps. So V=IR reads volts = amps x ohms. MARKER-UNITS-P4."),
+     "and measured in ohms. Current is denoted I and measured in amps. So V=IR reads volts = amps x ohms. "
+     "Milliamps are thousandths of an amp: 0.048 A is 48 mA, 0.024 A is 24 mA. Always convert milliamps "
+     "to amps before multiplying by ohms, otherwise the answer is off by a factor of a thousand. MARKER-UNITS-P4."),
     ("5. Worked example: 12V across 250 ohms",
      "Take a 12 volt battery with a 250 ohm resistor across it. Cover I in the triangle: I = V / R. "
      "12 volts divided by 250 ohms gives 0.048 amps, which is 48 milliamps - all without using a meter. "
-     "Connecting wire has a small resistance too, but here the total is treated as 250 ohms. MARKER-EXAMPLE-P5."),
+     "Connecting wire has a small resistance too, but here the total is treated as 250 ohms. "
+     "Check by back-substitution: 0.048 A x 250 ohm = 12 V, which matches the battery, so the loop is consistent. MARKER-EXAMPLE-P5."),
     ("6. Series, parallel and the board practical",
      "An ammeter joins the loop in series so the full current passes through it. A voltmeter connects in parallel "
      "across the resistor only: red (positive) where current enters, black (negative) where it leaves. "
      "A rheostat in series varies the current for the experiment. Red terminals are positive, black are negative, "
-     "and every connection must be tight. MARKER-PRACTICAL-P6."),
+     "and every connection must be tight. In series the same current flows everywhere; in parallel the same voltage "
+     "appears across each branch, which is why the voltmeter must never be placed in series. MARKER-PRACTICAL-P6."),
 ]
 
-VI_ROWS = [("3.0", "12.0", "250"), ("6.0", "24.0", "250"),
-           ("9.0", "36.0", "250"), ("12.0", "48.0", "250")]
+# Full measurement series: 1.0V to 12.0V in 0.5V steps across 250 ohm (23 readings).
+VI_FULL: list[tuple[str, str, str]] = [
+    (f"{v:.1f}", f"{v / 250 * 1000:.1f}", "250") for v in
+    [1.0 + 0.5 * i for i in range(23)]
+]
 
 # ---------------------------------------------------------------- pdf helpers
 def _pdf_text_page(doc: pymupdf.Document, title: str, body: str) -> None:
@@ -121,10 +135,21 @@ def build_pdfs(out: Path, imgs: dict[str, Path]) -> None:
                                 "Fig 1.1: battery-ammeter-resistor-rheostat loop, voltmeter in parallel.",
                                 fontsize=10, fontname="helv")
         if i == 4:
-            page.insert_textbox(pymupdf.Rect(60, 470, PAGE_W - 60, 500),
-                                "Measured V-I pairs for R = 250 ohm:",
+            page.insert_textbox(pymupdf.Rect(60, 500, PAGE_W - 60, 530),
+                                "Measured V-I pairs for R = 250 ohm (excerpt):",
                                 fontsize=12, fontname="hebo")
-            _pdf_table(page, 505, ["voltage_V", "current_mA", "resistance_ohm"], VI_ROWS)
+            _pdf_table(page, 535, ["voltage_V", "current_mA", "resistance_ohm"],
+                       [("3.0", "12.0", "250"), ("6.0", "24.0", "250"),
+                        ("9.0", "36.0", "250"), ("12.0", "48.0", "250")])
+    page = doc.new_page(width=PAGE_W, height=PAGE_H)
+    page.insert_textbox(pymupdf.Rect(60, 60, PAGE_W - 60, 110),
+                        "Appendix A: full measurement series (R = 250 ohm)",
+                        fontsize=18, fontname="helv")
+    page.insert_textbox(pymupdf.Rect(60, 112, PAGE_W - 60, 140),
+                        "Rheostat fixed, supply varied 1.0V to 12.0V in 0.5V steps. "
+                        "Current in milliamps; divide by 1000 for amps.",
+                        fontsize=11, fontname="helv")
+    _pdf_table(page, 150, ["voltage_V", "current_mA", "resistance_ohm"], VI_FULL)
     doc.save(out / "circuits.pdf")
 
     doc = pymupdf.open()
@@ -155,6 +180,19 @@ def build_pdfs(out: Path, imgs: dict[str, Path]) -> None:
                 ("voltmeter red", "resistor end A", "parallel"),
                 ("voltmeter black", "resistor end B", "parallel")],
                col_w=150.0)
+    page = doc.new_page(width=PAGE_W, height=PAGE_H)
+    page.insert_textbox(pymupdf.Rect(60, 60, PAGE_W - 60, 110),
+                        "Appendix: observation log (20 runs, 12V rail)",
+                        fontsize=18, fontname="helv")
+    page.insert_textbox(pymupdf.Rect(60, 112, PAGE_W - 60, 140),
+                        "Rheostat stepped down run by run; V/I stays near 250 ohm throughout.",
+                        fontsize=11, fontname="helv")
+    runs = [(f"{i + 1}", "high" if i % 3 == 0 else ("mid" if i % 3 == 1 else "low"),
+             f"{12.0 - 0.5 * (i % 5):.1f}",
+             f"{(12.0 - 0.5 * (i % 5)) / 250 * 1000:.1f}")
+            for i in range(20)]
+    _pdf_table(page, 150, ["run", "rheostat", "voltage_V", "current_mA"], runs,
+               col_w=110.0)
     doc.save(out / "practical.pdf")
 
     doc = pymupdf.open()
@@ -175,48 +213,86 @@ def build_pdfs(out: Path, imgs: dict[str, Path]) -> None:
                [("12V, 250 ohm", "I", "0.048 A = 48 mA"),
                 ("6V, 250 ohm", "I", "0.024 A = 24 mA"),
                 ("48mA, 250 ohm", "V", "12 V")])
+    page = doc.new_page(width=PAGE_W, height=PAGE_H)
+    page.insert_textbox(pymupdf.Rect(60, 60, PAGE_W - 60, 110),
+                        "Problem bank (20 drills)", fontsize=22, fontname="helv")
+    bank = []
+    specs = [(12, 250), (6, 250), (9, 250), (3, 250), (24, 470), (9, 100),
+             (5, 100), (12, 100), (6, 150), (9, 150), (15, 250), (7.5, 250),
+             (4.5, 100), (10, 470), (2.5, 100), (20, 470), (1.5, 100),
+             (11, 250), (8, 150), (13.5, 470)]
+    for n, (v, r) in enumerate(specs, start=1):
+        bank.append((str(n), f"{v}V, {r} ohm", "I", f"{v / r * 1000:.1f} mA"))
+    _pdf_table(page, 130, ["n", "given", "find", "answer"], bank, col_w=110.0)
     doc.save(out / "formulae.pdf")
 
 
 # ---------------------------------------------------------------- images
+def _dtext(d, x, y, s) -> None:
+    for k, line in enumerate(s.split("\n")):
+        d.text((x, y + 22 * k), line, fill="black")
+
+
 def build_images(out: Path) -> dict[str, Path]:
     from PIL import Image, ImageDraw
 
     paths: dict[str, Path] = {}
-    img = Image.new("RGB", (700, 420), "white")
+    img = Image.new("RGB", (900, 620), "white")
     d = ImageDraw.Draw(img)
-    d.rectangle([120, 120, 580, 300], outline="black", width=3)
-    d.text((60, 190), "BAT 12V", fill="black")
-    d.text((300, 95), "A ammeter (series)", fill="black")
-    d.text((590, 190), "R 250", fill="black")
-    d.text((280, 310), "rheostat", fill="black")
-    d.rectangle([250, 160, 450, 260], outline="black", width=2)
-    d.text((255, 140), "V voltmeter (parallel)", fill="black")
-    d.text((80, 40), "Circuit: battery-ammeter-resistor-rheostat loop, voltmeter in parallel MARKER-CIRCUIT-PNG", fill="black")
+    _dtext(d, 60, 20, "Fig 1.1 Board circuit for Ohm's law (12V rail) MARKER-CIRCUIT-PNG")
+    d.rectangle([140, 140, 760, 420], outline="black", width=4)
+    _dtext(d, 60, 250, "BAT 12V DC\n+ top")
+    _dtext(d, 380, 105, "A ammeter in SERIES reads 0.048A")
+    _dtext(d, 770, 230, "R 250 ohm\nunknown")
+    _dtext(d, 380, 430, "rheostat 0-500 ohm (series, sets current)")
+    d.rectangle([330, 200, 570, 360], outline="black", width=2)
+    _dtext(d, 335, 178, "V voltmeter 12.0V in PARALLEL across R only")
+    _dtext(d, 140, 470, "wire: red = positive (+), black = negative (-), every joint tight")
+    _dtext(d, 140, 500, "loop order: battery+ -> ammeter+ -> resistor A -> rheostat -> battery-")
+    _dtext(d, 140, 530, "voltmeter red where current ENTERS R, black where it LEAVES R")
+    _dtext(d, 140, 560, "check: 0.048A x 250 ohm = 12V, V/I constant every run")
     paths["circuit"] = out / "circuit_diagram.png"
     img.save(paths["circuit"])
 
-    img = Image.new("RGB", (500, 420), "white")
+    img = Image.new("RGB", (620, 760), "white")
     d = ImageDraw.Draw(img)
-    d.polygon([(250, 60), (90, 320), (410, 320)], outline="black", width=3)
-    d.line([(170, 190), (330, 190)], fill="black", width=3)
-    d.text((240, 110), "V", fill="black")
-    d.text((180, 240), "I", fill="black")
-    d.text((305, 240), "R", fill="black")
-    d.text((60, 350), "Cover one letter to read its formula MARKER-TRIANGLE-PNG", fill="black")
+    _dtext(d, 60, 20, "V = I x R triangle MARKER-TRIANGLE-PNG")
+    d.polygon([(310, 100), (130, 420), (490, 420)], outline="black", width=4)
+    d.line([(220, 260), (400, 260)], fill="black", width=3)
+    _dtext(d, 300, 150, "V")
+    _dtext(d, 230, 320, "I")
+    _dtext(d, 370, 320, "R")
+    _dtext(d, 60, 460, "cover V -> I x R  (volts = amps x ohms)")
+    _dtext(d, 60, 490, "cover I -> V / R  (amps = volts / ohms)")
+    _dtext(d, 60, 520, "cover R -> V / I  (ohms = volts / amps)")
+    _dtext(d, 60, 560, "example: 12V / 250 ohm = 0.048A = 48mA")
+    _dtext(d, 60, 590, "units: V volts, I amps, R ohms (omega)")
+    _dtext(d, 60, 620, "two known values always give the third")
+    _dtext(d, 60, 650, "current doubles when voltage doubles (fixed R)")
+    _dtext(d, 60, 680, "holds for ohmic conductors at constant temperature")
     paths["triangle"] = out / "triangle.png"
     img.save(paths["triangle"])
 
-    img = Image.new("RGB", (700, 360), "white")
+    img = Image.new("RGB", (900, 560), "white")
     d = ImageDraw.Draw(img)
-    for i, (label, sub) in enumerate([("PRESSURE", "voltage V"), ("VALVE", "resistor R"), ("FLOW", "current I")]):
-        x = 40 + i * 220
-        d.rectangle([x, 120, x + 180, 220], outline="black", width=3)
-        d.text((x + 30, 140), label, fill="black")
-        d.text((x + 30, 170), sub, fill="black")
+    _dtext(d, 60, 20, "Garden hose analogy for circuits MARKER-HOSE-PNG")
+    boxes = [("PRESSURE (tap)", "voltage V, volts", "higher tap = more push", "battery 12V here"),
+             ("VALVE (kink)", "resistor R, ohms", "closed valve = less flow", "250 ohm here"),
+             ("FLOW (water)", "current I, amps", "0.048A in the loop", "read by ammeter")]
+    for i, (a, b, c, e) in enumerate(boxes):
+        x = 40 + i * 285
+        d.rectangle([x, 120, x + 255, 330], outline="black", width=3)
+        _dtext(d, x + 20, 140, a)
+        _dtext(d, x + 20, 180, b)
+        _dtext(d, x + 20, 220, c)
+        _dtext(d, x + 20, 260, e)
         if i < 2:
-            d.line([(x + 180, 170), (x + 220, 170)], fill="black", width=3)
-    d.text((60, 40), "Garden hose analogy MARKER-HOSE-PNG", fill="black")
+            d.line([(x + 255, 225), (x + 285, 225)], fill="black", width=4)
+    _dtext(d, 60, 380, "open the valve (less R) -> flow rises; close it (more R) -> flow drops")
+    _dtext(d, 60, 410, "raise the pressure (more V) -> flow rises at fixed resistance")
+    _dtext(d, 60, 440, "kinked hose = large R; wide clean pipe = small R")
+    _dtext(d, 60, 470, "the tap you open is exactly what the rheostat does")
+    _dtext(d, 60, 500, "V=IR reads: pressure = flow x valve-tightness")
     paths["hose"] = out / "hose.png"
     img.save(paths["hose"])
     return paths
@@ -381,16 +457,16 @@ def build_xlsx(out: Path) -> None:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "V-I Readings"
-    for row in [("voltage_V", "current_mA", "resistance_ohm"),
-                (3.0, 12.0, 250), (6.0, 24.0, 250),
-                (9.0, 36.0, 250), (12.0, 48.0, 250)]:
-        ws.append(list(row))
+    ws.append(["voltage_V", "current_mA", "resistance_ohm"])
+    for v_txt, i_txt, r_txt in VI_FULL:
+        ws.append([float(v_txt), float(i_txt), int(r_txt)])
+    n = len(VI_FULL) + 1
     chart = LineChart()
     chart.title = "V-I characteristic (R=250 ohm)"
     chart.y_axis.title = "current_mA"
     chart.x_axis.title = "voltage_V"
-    chart.add_data(Reference(ws, min_col=2, min_row=1, max_row=5), titles_from_data=True)
-    chart.set_categories(Reference(ws, min_col=1, min_row=2, max_row=5))
+    chart.add_data(Reference(ws, min_col=2, min_row=1, max_row=n), titles_from_data=True)
+    chart.set_categories(Reference(ws, min_col=1, min_row=2, max_row=n))
     ws.add_chart(chart, "E2")
     ws2 = wb.create_sheet("Resistors")
     for row in [("resistor", "value_ohm"), ("R1 unknown", 250), ("R2", 100), ("R3", 470)]:
@@ -400,40 +476,59 @@ def build_xlsx(out: Path) -> None:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Problems"
-    for row in [("n", "given", "find"),
-                (1, "12V, 250 ohm", "I"), (2, "6V, 250 ohm", "I"),
-                (3, "48mA, 250 ohm", "V"), (4, "9V, 100 ohm", "I"), (5, "24mA, 250 ohm", "V")]:
-        ws.append(list(row))
+    ws.append(["n", "given", "find"])
+    specs = [(12, 250), (6, 250), (9, 250), (3, 250), (24, 470), (9, 100),
+             (5, 100), (12, 100), (6, 150), (9, 150), (15, 250), (7.5, 250),
+             (4.5, 100), (10, 470), (2.5, 100), (20, 470), (1.5, 100),
+             (11, 250), (8, 150), (13.5, 470)]
+    for k, (v, r) in enumerate(specs, start=1):
+        ws.append([k, f"{v}V, {r} ohm", "I"])
     ws2 = wb.create_sheet("Answers")
-    for row in [("n", "answer"),
-                (1, "0.048A = 48mA"), (2, "0.024A = 24mA"), (3, "12V"),
-                (4, "0.09A = 90mA"), (5, "6V")]:
-        ws2.append(list(row))
+    ws2.append(["n", "answer"])
+    for k, (v, r) in enumerate(specs, start=1):
+        ws2.append([k, f"{v / r * 1000:.1f}mA"])
     wb.save(out / "problems.xlsx")
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Inventory"
-    for row in [("part", "qty", "unit_cost"),
-                ("resistor 250 ohm", 12, 4), ("ammeter", 3, 350),
-                ("voltmeter", 3, 320), ("rheostat", 4, 180), ("battery 12V", 5, 220)]:
+    ws.append(["part", "qty", "unit_cost"])
+    parts = [("resistor 250 ohm", 12, 4), ("resistor 100 ohm", 20, 4),
+             ("resistor 150 ohm", 20, 4), ("resistor 470 ohm", 10, 5),
+             ("ammeter", 3, 350), ("voltmeter", 3, 320), ("rheostat 500 ohm", 4, 180),
+             ("battery 12V", 5, 220), ("battery 6V", 4, 140), ("wire red 1m", 15, 25),
+             ("wire black 1m", 15, 25), ("crocodile clips", 30, 8),
+             ("breadboard", 6, 150), ("switch", 8, 45), ("bulb 6V", 10, 30),
+             ("fuse 1A", 12, 12), ("multimeter", 2, 900), ("screwdriver set", 3, 250),
+             ("lab manual", 10, 120), ("storage tray", 5, 80)]
+    for row in parts:
         ws.append(list(row))
-    ws.append(["TOTAL", "=SUM(B2:B6)", "=SUM(C2:C6)"])
+    ws.append(["TOTAL", f"=SUM(B2:B{len(parts) + 1})", f"=SUM(C2:C{len(parts) + 1})"])
     wb.save(out / "components.xlsx")
 
 
 def build_rest(out: Path) -> None:
     with (out / "readings.csv").open("w", newline="", encoding="utf-8") as fh:
-        csv.writer(fh).writerows([("voltage_V", "current_mA"), ("3.0", "12.0"),
-                                  ("6.0", "24.0"), ("9.0", "36.0"), ("12.0", "48.0")])
+        w = csv.writer(fh)
+        w.writerow(("voltage_V", "current_mA"))
+        w.writerows([(v, i) for v, i, _ in VI_FULL])
     with (out / "rheostat_run.csv").open("w", newline="", encoding="utf-8") as fh:
-        csv.writer(fh).writerows([("setting", "current_mA"), ("low", "12.0"),
-                                  ("mid", "30.0"), ("high", "48.0")])
+        w = csv.writer(fh)
+        w.writerow(("run", "setting", "voltage_V", "current_mA"))
+        for k in range(12):
+            v = 12.0 - 0.5 * (k % 6)
+            w.writerow((k + 1, ("low", "mid", "high")[k % 3], f"{v:.1f}", f"{v / 250 * 1000:.1f}"))
     with (out / "series_parallel.csv").open("w", newline="", encoding="utf-8") as fh:
-        csv.writer(fh).writerows([("config", "resistance_ohm", "current_at_12V_mA"),
-                                  ("single 250", "250", "48.0"),
-                                  ("series 100+150", "250", "48.0"),
-                                  ("parallel 500+500", "250", "48.0")])
+        w = csv.writer(fh)
+        w.writerow(("config", "resistance_ohm", "current_at_12V_mA"))
+        w.writerows([("single 250", "250", "48.0"),
+                     ("series 100+150", "250", "48.0"),
+                     ("parallel 500+500", "250", "48.0"),
+                     ("single 100", "100", "120.0"),
+                     ("series 100+100", "200", "60.0"),
+                     ("parallel 100+100", "50", "240.0"),
+                     ("single 470", "470", "25.5"),
+                     ("series 220+250", "470", "25.5")])
     (out / "glossary.txt").write_text(
         "Glossary (MARKER-GLOSSARY-TXT)\n"
         "voltage: potential difference in volts (V).\n"
