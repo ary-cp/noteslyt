@@ -1,0 +1,3 @@
+Symbols (MARKER-SYMBOLS-TXT)
+V voltage volts. I current amps. R resistance ohms.
+A in a circle: ammeter. V in a circle: voltmeter. Zigzag: resistor.

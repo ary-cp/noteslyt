@@ -4,6 +4,10 @@ __pycache__/
 **/__pycache__/
 data/
 .env
+.env-test
+# YouTube eval media is fetched, not committed (license + size).
+eval/dataset/**/*.mp4
+eval/dataset/**/*.m4a
 
 # Node
 frontend/node_modules/

@@ -1,0 +1,9 @@
+config,resistance_ohm,current_at_12V_mA
+single 250,250,48.0
+series 100+150,250,48.0
+parallel 500+500,250,48.0
+single 100,100,120.0
+series 100+100,200,60.0
+parallel 100+100,50,240.0
+single 470,470,25.5
+series 220+250,470,25.5

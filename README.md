@@ -36,6 +36,7 @@ NotesLyt turns study materials into a searchable, citation-aware workspace. Add 
 - [API and authentication](#api-and-authentication)
 - [Data, backups, and operations](#data-backups-and-operations)
 - [Verification](#verification)
+- [Evaluation](#evaluation-real-models-reproducible)
 - [Troubleshooting](#troubleshooting)
 
 ## Capabilities
@@ -302,6 +303,51 @@ The end-to-end smoke test can use the included mock model server. Follow the exa
 ```powershell
 uv run python scripts/smoke_test.py
 ```
+
+## Evaluation (real models, reproducible)
+
+RAG quality is measured on a pinned Ohm's-law corpus (2 YouTube lectures
++ 25 generated study files, 3 of each type — see `eval/dataset/SOURCES.md`)
+with `eval/testset.v1.json` (60 questions, tiers 30/50/100; tier 50 is the
+reference). Full method in `eval/README.md`; raw rows in
+`eval/results/latest.json`.
+
+```powershell
+Copy-Item .env-test.example .env-test   # fill real keys, mirror into root .env
+uv run python eval/dataset/gen_corpus.py --out eval/dataset/files
+uv run python eval/dataset/fetch_media.py --out eval/dataset/files
+uv run python eval/run_real.py --env-file .env-test --tier 50
+```
+
+Reference run (2026-10-14, `gemini-3.5-flash-lite` + local
+`embeddinggemma-2-GGUF`, seed 42, free tier paced at 3 it/min):
+
+| tier | faithfulness | relevancy | context P / R | refusal | skipped |
+| --- | --- | --- | --- | --- | --- |
+| 50 (50 items) | 0.952 | 0.861 | 0.36 / 0.62 | 25% | 0 |
+
+What the numbers mean, honestly reported:
+
+- **Faithfulness 0.952 (gate ≥ 0.8: PASS).** LLM-judged claim support, 1–11
+  claims per answer; only the keyword fallback ran nowhere except short
+  table answers. Two zeroes: `csv-head` (retrieval missed the header row
+  the answer needed) and `diagram-r` (the text-only judge cannot verify
+  vision answers — image chunks carry no OCR text, so image faithfulness
+  is systematically underestimated).
+- **Refusal 25% (gate 100%: FAIL).** All 8 off-material queries were
+  declined or `**Outside your sources:**`-labeled — none was passed off
+  as course fact — but 6/8 attached source citations (`[1]–[5]`) to the
+  decline/redirect sentence or the general paragraph, violating the
+  zero-citation contract. This is a citation-hygiene failure, not silent
+  hallucination; fix is to never cite refusal/Outside turns (prompt +
+  audit), already visible in `eval/results/latest.json` snippets.
+- **Context precision 0.36 / recall 0.62.** Single-locator expectations
+  understate a 3-witness corpus: answers are correct (faithfulness ~1.0)
+  but cite a different valid file than the expected one. Media items
+  (video/audio segments) score P/R 1.0 throughout.
+- **Reproducibility.** Same seed + pinned video IDs + recorded model/sha/
+  `corpus_sha` in every result file; `--resume` continues quota-killed
+  runs without losing scored rows.
 
 ## Troubleshooting
 
