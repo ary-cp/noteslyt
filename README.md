@@ -10,6 +10,13 @@
   Source-grounded chat · searchable documents · quizzes · exams · flashcards · local desktop app
 </p>
 
+<p align="center">
+  <strong>Just want to study?</strong> Download the installer from
+  <a href="https://github.com/ary-cp/noteslyt/releases">GitHub Releases</a> —
+  no Python, Node, Docker, or commands needed. Everything below is for running
+  from source.
+</p>
+
 ---
 
 NotesLyt turns study materials into a searchable, citation-aware workspace. Add documents and media to a project, ask questions against selected sources, and create study activities from the material. The application includes a FastAPI service and a React/TypeScript web client, with an optional Tauri desktop application for single-user local use.
@@ -17,6 +24,8 @@ NotesLyt turns study materials into a searchable, citation-aware workspace. Add 
 ## Contents
 
 - [Capabilities](#capabilities)
+- [What's new in 0.1.13](#whats-new-in-0113)
+- [Install without commands (desktop installer)](#install-without-commands-desktop-installer)
 - [Choose a deployment](#choose-a-deployment)
 - [Requirements](#requirements)
 - [Quick start: local SQLite](#quick-start-local-sqlite)
@@ -34,10 +43,54 @@ NotesLyt turns study materials into a searchable, citation-aware workspace. Add 
 - Organize sources, chats, and learning activity in projects.
 - Ask questions with source citations and project-scoped retrieval.
 - Parse PDF, DOCX, PPTX, XLSX, CSV, TSV, Markdown, text, audio, and video sources.
-- Generate quizzes, exams, flashcards, summaries, and learning reports.
+- Generate quizzes, timed mock exams, flashcards, summaries, and study guides.
+- Adaptive learner model: BKT mastery per topic, SM-2 spaced repetition, and an
+  IRT ability estimate, with a personalised report after every quiz, exam, and
+  conversation (see [Project Documentation](docs/PROJECT_DOCUMENTATION.md)).
+- Dedicated Learning Profile page: mastery across projects, weak/strong topics,
+  areas of improvement, and report history.
+- Strict exam mode: full-page paper, deferred grading (no correctness leaks),
+  free answer changes, no-copy lock, tab-switch time penalty, end-only reveal.
+- Personalisation settings: theme, accent color, chat defaults, auto-indexing,
+  and an LLM-maintained "how you learn" memo that feeds every tutor reply.
 - Configure chat, embedding, and transcription providers independently.
 - Run local embedding and transcription engines when configured; use compatible hosted APIs when preferred.
 - Use a local desktop application backed by on-device SQLite and Chroma, or run the web application with PostgreSQL and pgvector.
+
+## What's new in 0.1.13
+
+- **Personalisation tab**: Appearance, Sources, Shortcuts, and Learning profile
+  merged into one settings tab; accent color picker (presets + custom color).
+- **Learning Profile page** (`/learning-profile`): cross-project mastery, weak
+  vs strong topics, areas of improvement, IRT ability, and personalised reports.
+- **BKT + IRT learner model**: per-answer ability updates, LLM narratives on
+  every assessment, LLM-maintained learning-style memo in the tutor prompt.
+- **Strict mock exams**: separate page, deferred grading, rules gate, accent
+  timer, copy lock, −5:00 tab-switch penalty, answers revealed only at submit.
+- **Study guides take a topic dropdown** instead of free-text filter.
+- **Model picker fix**: admin settings refetch on key change and explain the
+  hidden saved key (notably Gemini's `/v1beta/openai` endpoint, which 404s
+  without its key).
+- **Robust generation**: quiz/exam generation degrades instead of failing when
+  the embedding endpoint is unreachable mid-job.
+- Full write-up in [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md)
+  and [docs/RELEASE_0.1.13.md](docs/RELEASE_0.1.13.md).
+
+## Install without commands (desktop installer)
+
+If you don't want to touch a terminal, database, or dependency:
+
+1. Open [github.com/ary-cp/noteslyt/releases](https://github.com/ary-cp/noteslyt/releases).
+2. Download the installer for your OS from the latest release (Windows: `.msi`
+   or `.exe`; other platforms as published) under `frontend/src-tauri/target/release/bundle/`
+   equivalents attached to the release.
+3. Run it, launch **NotesLyt**, create an account — the first account is admin —
+   and complete the setup wizard (paste your chat/embedding provider keys).
+
+The desktop app bundles the backend, uses local SQLite + Chroma storage, and
+needs no Python, uv, Node, Rust, Docker, or ffmpeg. Local AI engines download
+on first use only if you enable local modes. To keep your data on uninstall,
+back up the app-data directory first (see [Data, backups, and operations](#data-backups-and-operations)).
 
 ## Choose a deployment
 
@@ -47,6 +100,13 @@ NotesLyt turns study materials into a searchable, citation-aware workspace. Add 
 | Hosted or shared web service | PostgreSQL | pgvector | Multiple accounts using one centrally operated service |
 
 Both profiles keep uploaded originals on the server's local filesystem under `DATA_DIR/uploads`. In a hosted deployment, mount persistent storage for `DATA_DIR` and protect it like the database. SQLite and Chroma are convenient for a single local instance; use PostgreSQL and pgvector when serving multiple users from a shared server.
+
+**Running tutorial — pick one:**
+- *No terminal, just study:* [install the desktop app](#install-without-commands-desktop-installer) (SQLite inside, zero setup).
+- *From source, one user:* [Quick start: local SQLite](#quick-start-local-sqlite) — no database server; leave `DATABASE_URL` unset.
+- *From source, shared server:* [Use PostgreSQL](#use-postgresql-for-a-hosted-or-shared-server) — set `DATABASE_URL`, everything else is identical.
+
+The full architecture, grounding, and learner-model write-up lives in [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md).
 
 ## Requirements
 
@@ -105,7 +165,11 @@ Set `DATA_DIR` in `.env` to move these files to another writable location. Do no
 
 ## Use PostgreSQL for a hosted or shared server
 
-PostgreSQL mode requires PostgreSQL 17 with the pgvector extension available. A convenient local development instance can be started with Docker Desktop and the pgvector image:
+PostgreSQL mode requires PostgreSQL 17 with the pgvector extension available.
+
+**Tutorial:**
+
+1. Start a local database with Docker Desktop and the pgvector image:
 
 ```powershell
 docker run --name noteslyt-postgres --detach `
@@ -117,14 +181,20 @@ docker run --name noteslyt-postgres --detach `
   pgvector/pgvector:pg17
 ```
 
-Set the connection string in the root `.env` file. URL-encode special characters in the password when necessary:
+2. Set the connection string in the root `.env` file (URL-encode special characters in the password when necessary):
 
 ```dotenv
 DATABASE_URL=postgresql://noteslyt:replace-with-a-strong-password@127.0.0.1:5432/noteslyt
 DATA_DIR=./data
 ```
 
-Then start the API using the command in [Quick start](#quick-start-local-sqlite). The selected database backend is determined by `DATABASE_URL`: PostgreSQL uses pgvector; when it is absent, the app uses SQLite and Chroma. Startup applies pending migrations. The upload directory remains filesystem-based in both modes, so a shared server needs persistent storage for `DATA_DIR/uploads` as well as durable PostgreSQL backups.
+3. Start the API with the same command as SQLite:
+
+```powershell
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+The selected database backend is determined by `DATABASE_URL`: PostgreSQL uses pgvector; when it is absent, the app uses SQLite and Chroma. Startup applies pending migrations (check with `uv run python scripts/migrate.py --status`). The upload directory remains filesystem-based in both modes, so a shared server needs persistent storage for `DATA_DIR/uploads` as well as durable PostgreSQL backups.
 
 For an internet-facing deployment, run behind a TLS-terminating reverse proxy, restrict database and filesystem access, use strong secrets, configure appropriate CORS origins, and set resource limits and persistent volumes. Do not expose the development server directly to the public internet. Background ingestion and generation jobs run in the API process; plan for retries if that process restarts during a job.
 

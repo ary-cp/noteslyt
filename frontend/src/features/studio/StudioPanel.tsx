@@ -1,6 +1,7 @@
 import { buildSchedule } from "./studySchedule";
 import type * as React from "react";
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   ClipboardList,
   FileText,
@@ -70,6 +71,7 @@ export function StudioPanel({
   openRequest?: { tool: StudioTool; nonce: number } | null;
 }) {
   const { push } = useToast();
+  const navigate = useNavigate();
   const [topics, setTopics] = useState<TopicSummary[]>([]);
   const [learner, setLearner] = useState<LearnerOut | null>(null);
   const [graph, setGraph] = useState<TopicGraph | null>(null);
@@ -80,7 +82,6 @@ export function StudioPanel({
   const [topicId, setTopicId] = useState("");
   const [mapStyle, setMapStyle] = useState<"star" | "flow">("star");
   const [graphBusy, setGraphBusy] = useState(false);
-  const [focus, setFocus] = useState("");
   const [examDate, setExamDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 14);
@@ -88,6 +89,22 @@ export function StudioPanel({
   });
   const [minsPerDay, setMinsPerDay] = useState(30);
   const [viewing, setViewing] = useState<Artifact | null>(null);
+
+  // Mock exams run as a full page with deferred grading (nothing graded until
+  // submit, so the learning profile cannot leak correctness mid-exam).
+  // Everything else opens in the modal viewer.
+  const openArtifact = (job: StudioJob) => {
+    if (job.kind === "exam") {
+      const payload = (job.payload ?? {}) as { quiz_id?: string };
+      if (payload.quiz_id) {
+        navigate(`/project/${projectId}/exam/${payload.quiz_id}`, {
+          state: { quiz: job.payload },
+        });
+        return;
+      }
+    }
+    setViewing(jobArtifact(job));
+  };
 
   // Collapsed-rail shortcut: clicking a tool icon in the slim right rail
   // expands Studio and opens that tool's dialog.
@@ -206,17 +223,14 @@ export function StudioPanel({
         setJobs((prev) => [job, ...prev.filter((j) => j.id !== job.id)]);
         push("Flashcard generation started", { tone: "success" });
       } else if (genTool === "summary" || genTool === "guide" || genTool === "sheet") {
-        const filter = focus.trim().toLocaleLowerCase();
-        const documentTopics = filter ? scopedTopics.filter((t) => `${t.name} ${t.description ?? ""}`.toLocaleLowerCase().includes(filter)) : scopedTopics;
-        if (filter && documentTopics.length === 0) {
-          push("No matching topics", { detail: "Try a word from a topic name or description.", tone: "warning" });
-          return;
-        }
+        // Topic comes from the dropdown — always a real in-scope topic id.
+        const documentTopics = topicId ? scopedTopics.filter((t) => t.id === topicId) : scopedTopics;
+        const pickedName = topicId ? scopedTopics.find((t) => t.id === topicId)?.name : "";
         const names = selectedSources.map((s) => s.filename).join(", ");
         const md = [
           `# ${genTool === "guide" ? "Study guide" : genTool === "sheet" ? "Cheat sheet" : "Summary"}`,
           ``,
-          `_Topic overview from ${scopeLabel}${filter ? ` · topic filter: ${focus.trim()}` : ""}_`,
+          `_Topic overview from ${scopeLabel}${pickedName ? ` · topic: ${pickedName}` : ""}_`,
           ``,
           `## What this covers`,
           ``,
@@ -228,7 +242,7 @@ export function StudioPanel({
           ...(documentTopics.slice(0, 8).map((t, i) => `${i + 1}. **${t.name}** — ${t.description || `covered in ${t.sources.filter((s) => selectedIdSet.has(s.source_id)).map((s) => s.filename).join(", ") || "your sources"}`}`)),
           ...(scopedTopics.length === 0 ? [`1. Upload completes → key points appear here, each linked to its source.`] : []),
           ``,
-          ...(filter ? [] : learnFirstLine()),
+          ...(topicId ? [] : learnFirstLine()),
           `## Next step`,
           ``,
           `Generate a quiz from the same scope to check recall, or ask the chat to explain any point above.`,
@@ -375,7 +389,7 @@ export function StudioPanel({
                   <button
                     type="button"
                     disabled={job.status !== "ready"}
-                    onClick={() => setViewing(jobArtifact(job))}
+                    onClick={() => openArtifact(job)}
                     className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-[13px] enabled:cursor-pointer enabled:hover:bg-[var(--surface-secondary)] disabled:cursor-default"
                   >
                     <span className="text-[var(--text-secondary)]">{job.status === "queued" || job.status === "generating" ? <Loader2 size={16} className="animate-spin" /> : TOOLS.find((t) => t.id === job.kind)?.icon}</span>
@@ -406,6 +420,7 @@ export function StudioPanel({
         onClose={() => !busy && setGenTool(null)}
         title={genTool ? `Generate ${TOOLS.find((t) => t.id === genTool)?.title}` : ""}
         subtitle={`From ${scopeLabel}`}
+        width={600}
         footer={
           <>
             <Button variant="ghost" onClick={() => setGenTool(null)} disabled={busy}>Cancel</Button>
@@ -414,13 +429,13 @@ export function StudioPanel({
         }
       >
         <div className="grid gap-3.5">
-          {(genTool === "quiz" || genTool === "exam" || genTool === "flashcards") && (
-            <Field label="Topic" hint="Blank = automatic: a spread across your material for new learners, weakest areas first once you've practiced.">
+          {(genTool === "quiz" || genTool === "exam" || genTool === "flashcards" || genTool === "summary" || genTool === "guide" || genTool === "sheet") && (
+            <Field label="Topic" hint={genTool === "quiz" || genTool === "exam" || genTool === "flashcards" ? "Blank = automatic: a spread across your material for new learners, weakest areas first once you've practiced." : "Pick one topic to focus this document, or leave blank for the whole scope."}>
               <Dropdown
                 value={topicId}
                 onChange={setTopicId}
                 ariaLabel="Topic"
-                options={[{ value: "", label: genTool === "flashcards" ? "All selected sources" : "Mixed (weakest first)" }, ...scopedTopics.map((t) => ({ value: t.id, label: t.name }))]}
+                options={[{ value: "", label: genTool === "flashcards" ? "All selected sources" : genTool === "quiz" || genTool === "exam" ? "Mixed (weakest first)" : "All topics in scope" }, ...scopedTopics.map((t) => ({ value: t.id, label: t.name }))]}
               />
             </Field>
           )}
@@ -469,16 +484,6 @@ export function StudioPanel({
               )}
             </div>
           )}
-          {genTool !== "quiz" && genTool !== "exam" && genTool !== "flashcards" && genTool !== "mindmap" && genTool !== "slides" && genTool !== "schedule" && <>
-          <Field label="Topic filter (optional)" hint="Include topics whose name or description contains this text.">
-            <input
-              value={focus}
-              onChange={(e) => setFocus(e.target.value)}
-              placeholder="e.g. entropy"
-              className="h-9 w-full rounded-[7px] border border-[var(--border)] bg-[var(--input)] px-2.5 text-sm outline-none focus:border-[var(--accent)]"
-            />
-          </Field>
-          </>}
           {genTool === "schedule" && (
             <>
               <Field label="Exam date" hint="The plan runs from today to this date (max 30 days).">
@@ -596,11 +601,22 @@ function LearningProfileCard({ learner, onStartDiagnostic }: { learner: LearnerO
 /* ---------------- artifact viewer ---------------- */
 
 function ArtifactViewer({ artifact, onClose, onAnswered }: { artifact: Artifact | null; onClose: () => void; onAnswered: () => void }) {
+  const [finished, setFinished] = useState(false);
+  const artId = artifact?.id ?? "closed";
+  useEffect(() => { setFinished(false); }, [artId]);
   if (!artifact) return null;
+  const isTest = artifact.kind === "quiz" || artifact.kind === "exam";
   return (
-    <Modal open onClose={onClose} title={artifact.title} subtitle={`${timeAgo(artifact.createdAt)}`} width={720}>
-      {artifact.kind === "quiz" || artifact.kind === "exam" ? (
-        <QuizRunner quiz={artifact.payload as QuizOut} exam={artifact.kind === "exam"} onAnswered={onAnswered} />
+    <Modal
+      open
+      onClose={onClose}
+      title={artifact.title}
+      subtitle={`${timeAgo(artifact.createdAt)}${isTest && !finished ? " · in progress — backdrop clicks won't close this" : ""}`}
+      width={720}
+      dismissable={!isTest || finished}
+    >
+      {isTest ? (
+        <QuizRunner quiz={artifact.payload as QuizOut} exam={artifact.kind === "exam"} onAnswered={onAnswered} onDoneChange={setFinished} />
       ) : artifact.kind === "flashcards" ? (
         <Flashcards key={artifact.id} reviewKey={artifact.id} cards={(artifact.payload as { cards: { front: string; back: string }[] }).cards ?? []} requested={(artifact.payload as { requested?: number }).requested} />
       ) : artifact.kind === "mindmap" ? (
@@ -776,8 +792,9 @@ function Flashcards({ cards, requested, reviewKey }: { cards: { front: string; b
  * The one place weak topics are named (3c): score deltas per topic, likely
  * misconceptions from persisted rubric misses, and what to study next.
  * Old reports without the new keys render their score + review list only.
+ * Shared with the full-page ExamPage.
  */
-function QuizReport({ assessmentId }: { assessmentId: string }) {
+export function QuizReport({ assessmentId }: { assessmentId: string }) {
   const [report, setReport] = useState<AssessmentReportOut | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -850,7 +867,10 @@ function QuizReport({ assessmentId }: { assessmentId: string }) {
 
 /* ---------------- quiz / exam ---------------- */
 
-function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; onAnswered: () => void }) {
+const EXAM_SECONDS_PER_QUESTION = 120;
+const EXAM_TAB_PENALTY_S = 300;
+
+function QuizRunner({ quiz, exam, onAnswered, onDoneChange }: { quiz: QuizOut; exam: boolean; onAnswered: () => void; onDoneChange?: (done: boolean) => void }) {
   const { push } = useToast();
   const [i, setI] = useState(0);
   const [answers, setAnswers] = useState<Record<string, AnswerOut>>({});
@@ -870,14 +890,33 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
   const [text, setText] = useState("");
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
   const [done, setDone] = useState(false);
-  const [left, setLeft] = useState(exam ? quiz.questions.length * 120 : 0);
+  const [left, setLeft] = useState(exam ? quiz.questions.length * EXAM_SECONDS_PER_QUESTION : 0);
+  const [started, setStarted] = useState(!exam);
+  const [confirmEnd, setConfirmEnd] = useState(false);
+  const [violations, setViolations] = useState(0);
+
+  useEffect(() => { onDoneChange?.(done); }, [done, onDoneChange]);
 
   useEffect(() => {
-    if (!exam || done) return;
+    if (!exam || !started || done) return;
     const t = window.setInterval(() => setLeft((s) => Math.max(0, s - 1)), 1000);
     return () => window.clearInterval(t);
-  }, [exam, done]);
-  useEffect(() => { if (exam && left === 0) setDone(true); }, [exam, left]);
+  }, [exam, started, done]);
+  useEffect(() => { if (exam && started && left === 0) setDone(true); }, [exam, started, left]);
+
+  // Exam strictness: leaving the tab costs 5 minutes.
+  useEffect(() => {
+    if (!exam || !started || done) return;
+    const onVis = () => {
+      if (document.hidden) {
+        setLeft((s) => Math.max(0, s - EXAM_TAB_PENALTY_S));
+        setViolations((v) => v + 1);
+        push("Tab switch detected — 5:00 deducted", { detail: "Stay on this tab until you submit the exam.", tone: "warning" });
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [exam, started, done, push]);
 
   const q = quiz.questions[i];
   const correct = Object.values(answers).filter((a) => a.correct).length;
@@ -895,32 +934,72 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
       const res = await submitAnswer(quiz.quiz_id, q.id, given as number | string);
       setAnswers((prev) => ({ ...prev, [q.id]: res }));
       onAnswered();
-      if (!res.correct) push("Answer saved — review the explanation", { tone: "warning" });
-      else push("Correct", { tone: "success" });
+      // Exam mode stays silent: no per-question reveal — everything unlocks at the end.
+      if (!exam) {
+        if (!res.correct) push("Answer saved — review the explanation", { tone: "warning" });
+        else push("Correct", { tone: "success" });
+      }
     } catch (e) {
       push("Grading failed", { detail: e instanceof Error ? e.message : String(e), tone: "error" });
     } finally { setSubmitting(false); }
   };
+
+  const answeredCount = Object.keys(answers).length;
+
+  // Exam rules gate: the paper starts only from here, so the timer,
+  // no-copy lock and tab penalty all begin together.
+  if (exam && !started) {
+    const totalMin = Math.round((quiz.questions.length * EXAM_SECONDS_PER_QUESTION) / 60);
+    return (
+      <div className="grid gap-3">
+        <div className="rounded-[8px] border border-[var(--accent-border)] bg-[var(--accent-soft)]/40 p-4">
+          <p className="text-[15px] font-semibold">Mock exam · {quiz.questions.length} questions · {totalMin} minutes</p>
+          <p className="mt-1 text-[13px] text-[var(--text-secondary)]">Exam conditions apply once you start:</p>
+          <ul className="mt-2 grid gap-1.5 text-[13px] text-[var(--text-secondary)]">
+            <li>· This dialog stays open until you submit — backdrop clicks and Escape are disabled. The ✕ button ends the exam early.</li>
+            <li>· Copying and right-click are disabled on the paper.</li>
+            <li>· Switching tabs costs <span className="font-semibold text-[var(--text-primary)]">5:00</span> each time.</li>
+            <li>· Answers and feedback unlock <span className="font-semibold text-[var(--text-primary)]">only after you submit</span> — nothing is revealed question-by-question.</li>
+          </ul>
+        </div>
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="primary" onClick={() => setStarted(true)}>Start exam</Button>
+        </div>
+      </div>
+    );
+  }
 
   if (done) {
     const pct = Math.round((correct / quiz.questions.length) * 100);
     const assessmentId = Object.values(answers).find((a) => a.assessment_id)?.assessment_id ?? null;
     return (
       <div className="text-center">
-        <p className="text-[13px] text-[var(--text-muted)]">Score</p>
+        <p className="text-[13px] text-[var(--text-muted)]">{exam ? "Exam submitted" : "Score"}{exam && violations > 0 ? ` · ${violations} tab-switch penalt${violations > 1 ? "ies" : "y"}` : ""}</p>
         <p className="mt-1 text-[32px] font-semibold">{correct} / {quiz.questions.length}</p>
         <p className="text-[15px] text-[var(--text-secondary)]">{pct}%</p>
         {assessmentId && <QuizReport assessmentId={assessmentId} />}
         <div className="mt-4 grid gap-1.5 text-left">
-          {quiz.questions.map((qq, idx) => (
-            <div key={qq.id} className="flex items-center gap-2 rounded-[7px] border border-[var(--border)] px-2.5 py-2 text-[13px]">
-              <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold ${answers[qq.id]?.correct ? "bg-[var(--accent)] text-white" : answers[qq.id] ? "bg-[var(--danger)] text-white" : "bg-[var(--surface-secondary)] text-[var(--text-muted)]"}`}>
-                {idx + 1}
-              </span>
-              <div className="min-w-0 flex-1"><MarkdownBody text={qq.stem} /></div>
-              <span className="text-xs text-[var(--text-muted)]">{answers[qq.id] ? (answers[qq.id].correct ? "Correct" : "Review") : "Skipped"}</span>
-            </div>
-          ))}
+          {quiz.questions.map((qq, idx) => {
+            const a = answers[qq.id];
+            return (
+              <div key={qq.id} className="rounded-[7px] border border-[var(--border)] px-2.5 py-2 text-[13px]">
+                <div className="flex items-center gap-2">
+                  <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${a?.correct ? "bg-[var(--accent)] text-white" : a ? "bg-[var(--danger)] text-white" : "bg-[var(--surface-secondary)] text-[var(--text-muted)]"}`}>
+                    {idx + 1}
+                  </span>
+                  <div className="min-w-0 flex-1"><MarkdownBody text={qq.stem} /></div>
+                  <span className="shrink-0 text-xs text-[var(--text-muted)]">{a ? (a.correct ? "Correct" : "Review") : "Skipped"}</span>
+                </div>
+                {a && (
+                  <div className="mt-2 border-t border-[var(--border)] pt-2">
+                    {!a.correct && <MarkdownBody text={`**Expected answer:** ${a.expected ?? "See explanation"}`} />}
+                    <MarkdownBody text={[a.feedback, a.feedback.includes(a.explanation) ? "" : a.explanation].filter(Boolean).join("\n\n")} />
+                    <p className="mt-1 text-xs text-[var(--text-muted)]">{a.citation.source} · {a.citation.label}</p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
         <div className="mt-4">
           <Button variant="secondary" onClick={() => { setDone(false); setI(0); }}>Review answers</Button>
@@ -929,46 +1008,71 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
     );
   }
 
+  const fmtLeft = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
   return (
-    <div>
-      <div className="mb-3 flex items-center justify-between text-[13px] text-[var(--text-secondary)]">
-        <span>Question {i + 1} of {quiz.questions.length}</span>
-        {exam && <span className="font-mono">{Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")}</span>}
+    <div
+      onCopy={exam ? (e) => e.preventDefault() : undefined}
+      onCut={exam ? (e) => e.preventDefault() : undefined}
+      onContextMenu={exam ? (e) => e.preventDefault() : undefined}
+      className={exam ? "select-none" : undefined}
+    >
+      <div className="mb-3 flex items-center justify-between gap-2 text-[13px] text-[var(--text-secondary)]">
+        <span>Question {i + 1} of {quiz.questions.length}{exam ? ` · ${answeredCount} saved` : ""}</span>
         {exam && (
-          <button
-            type="button"
-            onClick={() => setFlagged((prev) => { const n = new Set(prev); if (n.has(q.id)) n.delete(q.id); else n.add(q.id); return n; })}
-            className={`cursor-pointer rounded px-2 py-0.5 text-xs ${flagged.has(q.id) ? "bg-[var(--warning-soft)] text-[var(--warning)]" : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"}`}
-          >
-            {flagged.has(q.id) ? "Flagged" : "Flag"}
-          </button>
+          <span aria-live="polite" title="Time remaining" className={`font-mono text-xl font-bold tabular-nums ${left < 300 ? "text-[var(--danger)]" : "text-[var(--accent)]"}`}>
+            {fmtLeft}
+          </span>
+        )}
+        {exam && (
+          <span className="flex items-center gap-2">
+            {violations > 0 && <span title="Tab-switch penalties" className="font-mono text-xs text-[var(--warning)]">−5:00 × {violations}</span>}
+            <button
+              type="button"
+              onClick={() => setFlagged((prev) => { const n = new Set(prev); if (n.has(q.id)) n.delete(q.id); else n.add(q.id); return n; })}
+              className={`cursor-pointer rounded px-2 py-0.5 text-xs ${flagged.has(q.id) ? "bg-[var(--warning-soft)] text-[var(--warning)]" : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"}`}
+            >
+              {flagged.has(q.id) ? "Flagged" : "Flag"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmEnd(true)}
+              className="cursor-pointer rounded border border-[var(--border-strong)] px-2 py-0.5 text-xs font-medium hover:bg-[var(--surface-secondary)]"
+            >
+              End exam
+            </button>
+          </span>
         )}
       </div>
       <MarkdownBody text={q.stem} />
       {q.qtype === "mcq" ? (
         <div className="mt-3 grid gap-2">
           {q.options.map((opt, idx) => {
-            const answered = !!answers[q.id];
-            const isPicked = !answered && picked === idx;
+            const saved = !!answers[q.id];
+            const savedPicked = saved && Number(answers[q.id].given) === idx;
+            const isPicked = !saved && picked === idx;
             return (
             <button
               key={idx}
               onClick={() => setPicked(idx)}
-              disabled={submitting || answered}
-              aria-pressed={(answered ? Number(answers[q.id].given) : picked) === idx}
+              disabled={submitting || saved}
+              aria-pressed={(saved ? Number(answers[q.id].given) : picked) === idx}
               className={`flex cursor-pointer items-center gap-2.5 rounded-[8px] border px-3 py-2.5 text-left text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
-                answers[q.id] && opt === answers[q.id].expected ? "border-[var(--accent-border)] bg-[var(--accent-soft)]/50" :
-                answers[q.id] && Number(answers[q.id].given) === idx ? "border-[var(--danger)] bg-[var(--danger-soft)]" :
-                isPicked ? "border-[var(--accent)] bg-[var(--accent-soft)] font-medium shadow-[0_0_0_1px_var(--accent)]" : "border-[var(--border)] hover:border-[var(--border-strong)]"
+                exam
+                  ? (savedPicked || isPicked
+                    ? "border-[var(--accent)] bg-[var(--accent-soft)] font-medium shadow-[0_0_0_1px_var(--accent)]"
+                    : "border-[var(--border)] hover:border-[var(--border-strong)]")
+                  : answers[q.id] && opt === answers[q.id].expected ? "border-[var(--accent-border)] bg-[var(--accent-soft)]/50" :
+                    answers[q.id] && Number(answers[q.id].given) === idx ? "border-[var(--danger)] bg-[var(--danger-soft)]" :
+                    isPicked ? "border-[var(--accent)] bg-[var(--accent-soft)] font-medium shadow-[0_0_0_1px_var(--accent)]" : "border-[var(--border)] hover:border-[var(--border-strong)]"
               }`}
             >
               <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] border font-mono text-xs ${
-                isPicked ? "border-[var(--accent)] bg-[var(--accent)] text-white" : "border-[var(--border)]"
+                (exam ? (savedPicked || isPicked) : isPicked) ? "border-[var(--accent)] bg-[var(--accent)] text-white" : "border-[var(--border)]"
               }`}>
                 {String.fromCharCode(65 + idx)}
               </span>
               <span className="min-w-0 flex-1"><MarkdownBody text={opt} /></span>
-              {isPicked && <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-[var(--accent)]" />}
+              {(isPicked || (exam && savedPicked)) && <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-[var(--accent)]" />}
             </button>
             );
           })}
@@ -983,7 +1087,7 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
           className="mt-3 w-full rounded-[8px] border border-[var(--border)] bg-[var(--input)] p-2.5 text-sm outline-none focus:border-[var(--accent)]"
         />
       )}
-      {answers[q.id] && (
+      {!exam && answers[q.id] && (
         <div className={`mt-3 rounded-[8px] border p-2.5 text-[13px] ${answers[q.id].correct ? "border-[var(--accent-border)] bg-[var(--accent-soft)]/40" : "border-[var(--danger)]/30 bg-[var(--danger-soft)]"}`}>
           <p className="mb-2 font-semibold">{answers[q.id].correct ? "Correct" : "Not quite"}</p>
           {!answers[q.id].correct && <MarkdownBody text={`**Expected answer:** ${answers[q.id].expected ?? "See explanation"}`} />}
@@ -996,10 +1100,12 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
         <div className="flex gap-2">
           {!answers[q.id] ? (
             <Button variant="primary" onClick={() => void submit()} loading={submitting} disabled={submitting || (q.options.length > 0 && picked === null) || (q.options.length === 0 && !text.trim())}>
-              Check
+              {exam ? "Save answer" : "Check"}
             </Button>
           ) : i + 1 < quiz.questions.length ? (
             <Button variant="primary" onClick={() => { setI((v) => v + 1); setPicked(null); setText(""); }}>Next</Button>
+          ) : exam ? (
+            <Button variant="primary" onClick={() => setConfirmEnd(true)}>Submit exam</Button>
           ) : (
             <Button variant="primary" onClick={() => setDone(true)}>See results</Button>
           )}
@@ -1012,12 +1118,33 @@ function QuizRunner({ quiz, exam, onAnswered }: { quiz: QuizOut; exam: boolean; 
               key={qq.id}
               disabled={submitting}
               onClick={() => { setI(idx); setPicked(null); setText(""); }}
-              className={`h-7 w-7 cursor-pointer rounded-[6px] border font-mono text-xs ${idx === i ? "border-[var(--accent)]" : "border-[var(--border)]"} ${answers[qq.id] ? (answers[qq.id].correct ? "bg-[var(--accent-soft)]" : "bg-[var(--danger-soft)]") : ""} ${flagged.has(qq.id) ? "ring-1 ring-[var(--warning)]" : ""}`}
+              aria-label={`Go to question ${idx + 1}${answers[qq.id] ? " (saved)" : ""}`}
+              className={`h-7 w-7 cursor-pointer rounded-[6px] border font-mono text-xs ${idx === i ? "border-[var(--accent)]" : "border-[var(--border)]"} ${answers[qq.id] ? "bg-[var(--accent-soft)]" : ""} ${flagged.has(qq.id) ? "ring-1 ring-[var(--warning)]" : ""}`}
             >
               {idx + 1}
             </button>
           ))}
         </div>
+      )}
+      {exam && (
+        <Modal
+          open={confirmEnd}
+          onClose={() => setConfirmEnd(false)}
+          title="Submit exam?"
+          width={420}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setConfirmEnd(false)}>Keep writing</Button>
+              <Button variant="primary" onClick={() => { setConfirmEnd(false); setDone(true); }}>
+                Submit ({answeredCount}/{quiz.questions.length} saved)
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm text-[var(--text-secondary)]">
+            Unanswered questions count as skipped. Answers, scores and feedback unlock after you submit.
+          </p>
+        </Modal>
       )}
     </div>
   );

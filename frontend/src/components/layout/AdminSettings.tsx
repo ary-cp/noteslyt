@@ -268,6 +268,7 @@ function ModelPicker({
 }: {
   baseUrl: string;
   apiKey: string;
+  apiKeyConfigured?: boolean;
   value: string;
   onChange: (v: string) => void;
   disabled?: boolean;
@@ -283,7 +284,8 @@ function ModelPicker({
   const fetch = async (base: string, key: string) => {
     const trimmed = base.trim();
     if (!trimmed || disabled) return;
-    lastFetched.current = trimmed;
+    // Key matters (Gemini 404s without it) — refetch when it changes.
+    lastFetched.current = `${trimmed}\n${key.trim() ? "key" : "nokey"}`;
     setFetching(true);
     setFetchError("");
     try {
@@ -301,7 +303,8 @@ function ModelPicker({
 
   useEffect(() => {
     const trimmed = baseUrl.trim();
-    if (!trimmed || disabled || (trimmed === lastFetched.current && options !== null)) return;
+    const fingerprint = `${trimmed}\n${apiKey.trim() ? "key" : "nokey"}`;
+    if (!trimmed || disabled || (fingerprint === lastFetched.current && options !== null)) return;
     const timer = window.setTimeout(() => void fetch(trimmed, apiKey), 800);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -675,6 +678,14 @@ export function AdminSettings({
     if (key === "transcription_model") return texts["transcription_api_key"] ?? "";
     return "";
   };
+  const modelApiKeyConfigured = (key: string): boolean => {
+    const secretKey =
+      key === "llm_model" ? "llm_api_key"
+      : key === "embedding_model" ? "embedding_api_key"
+      : key === "transcription_model" ? "transcription_api_key" : "";
+    if (!secretKey || !items) return false;
+    return items.find((i) => i.key === secretKey)?.configured ?? false;
+  };
   const setPresetKeys = (preset: (typeof EMBEDDING_PRESETS)[number]) => {
     setTexts((prev) => ({
       ...prev,
@@ -752,6 +763,7 @@ export function AdminSettings({
               cleared={!!cleared[item.key]}
               modelBaseUrl={modelBaseUrl(item.key)}
               modelApiKey={modelApiKey(item.key)}
+              modelApiKeyConfigured={modelApiKeyConfigured(item.key)}
               onText={(v) => {
                 setTexts((prev) => ({ ...prev, [item.key]: v }));
                 setCleared((prev) => ({ ...prev, [item.key]: false }));
@@ -793,7 +805,7 @@ export function AdminSettings({
 }
 
 function SettingRow({
-  item, text, boolValue, cleared, modelBaseUrl, modelApiKey, onText, onBool, onToggleClear,
+  item, text, boolValue, cleared, modelBaseUrl, modelApiKey, modelApiKeyConfigured, onText, onBool, onToggleClear,
 }: {
   item: SettingItem;
   text: string;
@@ -801,6 +813,7 @@ function SettingRow({
   cleared: boolean;
   modelBaseUrl: string;
   modelApiKey: string;
+  modelApiKeyConfigured?: boolean;
   onText: (v: string) => void;
   onBool: (v: boolean) => void;
   onToggleClear: () => void;
@@ -863,12 +876,18 @@ function SettingRow({
             <ModelPicker
               baseUrl={modelBaseUrl}
               apiKey={modelApiKey}
+              apiKeyConfigured={modelApiKeyConfigured}
               value={text}
               onChange={onText}
               disabled={item.locked}
               placeholder={MODEL_PLACEHOLDERS[item.key] ?? "Pick from the endpoint, or type any id"}
               ariaLabel={item.key}
             />
+            {!modelApiKey.trim() && modelApiKeyConfigured && (
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
+                A key is saved on the server (hidden). Re-enter it here to list models, or type the id manually.
+              </p>
+            )}
           </div>
           {!item.locked && ((item.source === "db" && !item.secret) || cleared) && (
             <Button variant="ghost" onClick={onToggleClear}>

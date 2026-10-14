@@ -38,6 +38,7 @@ _JSON_FIELDS: dict[str, set[str]] = {
     "AnswerRecord": {"missed", "matched"},
     "AssessmentRecord": {"quiz_ids", "report"},
     "TopicRecord": {"subtopics"},
+    "LearnerReportRecord": {"bkt", "irt", "strengths", "weaknesses"},
 }
 
 _sqlite_learner_locks: dict[str, threading.RLock] = {}
