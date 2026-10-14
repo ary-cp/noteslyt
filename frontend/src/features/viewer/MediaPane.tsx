@@ -133,7 +133,9 @@ export default function MediaPane({ title, active, url, video, time, stopAt, see
   return <div className="space-y-4">
     <div ref={player} className="media-player overflow-hidden rounded-xl border border-[var(--border)] bg-[#101216] p-3 text-white" tabIndex={0} aria-label="Media player" onKeyDown={(e) => {
       const target = e.target as HTMLElement;
-      if (e.altKey || e.ctrlKey || e.metaKey || target.closest("input,select,textarea,[contenteditable=true]")) return;
+      if (e.altKey || e.ctrlKey || e.metaKey || target.closest("input:not([type=range]),select,textarea,[contenteditable=true]")) return;
+      // Keep native slider adjustment, but don't lose player shortcuts after seeking.
+      if (target.closest('input[type=range]') && e.key.startsWith("Arrow")) return;
       if (e.key === " " && target.closest("button")) return;
       if (e.repeat) return;
       if (e.key === " " || e.key.toLowerCase() === "k") { e.preventDefault(); togglePlayback(); }

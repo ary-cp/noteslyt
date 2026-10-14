@@ -179,7 +179,7 @@ def main() -> int:
           and no["answer"] == "I can't find this in your uploaded material.")
     detail = c.get(f"/chats/{cid}", headers=auth).json()
     check("history persisted", detail["total"] == 4, str(detail["total"]))
-    check("auto-titled", detail["chat"]["title"].startswith("What is an eigenvector"),
+    check("auto-titled", "eigenvector" in detail["chat"]["title"].lower() and detail["chat"]["title"] != "New chat",
           detail["chat"]["title"])
     ch2 = c.post(f"/projects/{pid}/chats", json={"title": "Second"}, headers=auth).json()
     check("two chats listed",

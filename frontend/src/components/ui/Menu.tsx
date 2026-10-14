@@ -1,5 +1,5 @@
 import type * as React from "react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
 
@@ -34,7 +34,7 @@ export function Dropdown({
   const list = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
 
-  const openMenu = () => {
+  const positionMenu = useCallback(() => {
     const r = btn.current?.getBoundingClientRect();
     if (r) {
       // Open upward when there isn't room below (e.g. inside short modals).
@@ -45,6 +45,10 @@ export function Dropdown({
         width: Math.max(r.width, 160),
       });
     }
+  }, []);
+
+  const openMenu = () => {
+    positionMenu();
     setOpen(true);
     setActive(options.findIndex((o) => o.value === value));
   };
@@ -55,8 +59,11 @@ export function Dropdown({
       const t = e.target as Node;
       if (box.current && !box.current.contains(t) && list.current && !list.current.contains(t)) setOpen(false);
     };
-    // Ancestor scroll would stale a fixed position — just close instead.
-    const onScroll = () => setOpen(false);
+    // Follow the anchor when a modal scrolls; never dismiss on a scroll event.
+    const onScroll = (event: Event) => {
+      if (event.target instanceof Node && list.current?.contains(event.target)) return;
+      positionMenu();
+    };
     document.addEventListener("mousedown", onDoc);
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", onScroll);
@@ -65,7 +72,7 @@ export function Dropdown({
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", onScroll);
     };
-  }, [open]);
+  }, [open, positionMenu]);
 
   const current = options.find((o) => o.value === value);
 
@@ -75,8 +82,8 @@ export function Dropdown({
     } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       if (!open) {
-        setOpen(true);
-        setActive(0);
+        openMenu();
+        setActive(options.findIndex((o) => !o.disabled));
         return;
       }
       const enabled = options.map((o, i) => (!o.disabled ? i : -1)).filter((i) => i >= 0);
@@ -91,7 +98,7 @@ export function Dropdown({
         setOpen(false);
       } else if (!open) {
         e.preventDefault();
-        setOpen(true);
+        openMenu();
       }
     }
   };
@@ -116,7 +123,7 @@ export function Dropdown({
         <div
           ref={list}
           role="listbox"
-          className="anim-fade fixed overflow-y-auto rounded-[8px] border border-[var(--border)] bg-[var(--surface-raised)] p-1"
+          className="anim-fade fixed overflow-y-auto overscroll-contain rounded-[8px] border border-[var(--border)] bg-[var(--surface-raised)] p-1"
           style={{ top: pos.top, left: pos.left, width: pos.width, maxHeight: 224, boxShadow: "var(--shadow-pop)", zIndex: 80 }}
         >
           {options.map((o, i) => (

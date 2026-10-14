@@ -555,3 +555,6 @@ export const answerQuestion = (
 
 export const getLearner = (userId: string, documentId: string): Promise<LearnerResponse> =>
   request(`/learner/${encodeURIComponent(userId)}/${documentId}`);
+
+export const correctTranscriptSpellings = (id: string, replacements: Record<string, string>): Promise<SourceOut> =>
+  request(`/sources/${id}/transcript-spellings`, { method: "POST", body: JSON.stringify({ replacements }) });

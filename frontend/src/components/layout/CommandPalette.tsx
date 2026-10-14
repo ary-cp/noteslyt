@@ -2,9 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight, FileText, Folder, Hash, MessageSquare, Search, Sparkles } from "lucide-react";
-import { listChats, listProjects, listSources } from "../../lib/api";
-import type { ChatOut, ProjectListItem, SourceOut } from "../../lib/types";
-import { useDebounced } from "../../lib/utils";
+import { listChats, listProjects, listSources, listStudioJobs } from "../../lib/api";
+import type { ChatOut, ProjectListItem, SourceOut, StudioJob } from "../../lib/types";
 
 interface Props {
   open: boolean;
@@ -36,9 +35,10 @@ export function CommandPalette({ open, onClose, onAction, projectId, onOpenCreat
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [sources, setSources] = useState<SourceOut[]>([]);
   const [chats, setChats] = useState<ChatOut[]>([]);
+  const [jobs, setJobs] = useState<StudioJob[]>([]);
+  const [loadedProject, setLoadedProject] = useState<string>();
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const debounced = useDebounced(query, 150);
 
   useEffect(() => {
     if (!open) {
@@ -46,35 +46,32 @@ export function CommandPalette({ open, onClose, onAction, projectId, onOpenCreat
       setActive(0);
       return;
     }
+    let live = true;
     inputRef.current?.focus();
-    listProjects().then(setProjects).catch(() => undefined);
+    setSources([]); setChats([]); setJobs([]); setLoadedProject(undefined);
+    listProjects().then((rows) => { if (live) setProjects(rows); }).catch(() => undefined);
     if (projectId) {
-      listSources(projectId).then(setSources).catch(() => undefined);
-      listChats(projectId).then(setChats).catch(() => undefined);
+      setLoadedProject(projectId);
+      listSources(projectId).then((rows) => { if (live) setSources(rows); }).catch(() => undefined);
+      listChats(projectId).then((rows) => { if (live) setChats(rows); }).catch(() => undefined);
+      listStudioJobs(projectId).then((rows) => { if (live) setJobs(rows); }).catch(() => undefined);
     }
+    return () => { live = false; };
   }, [open, projectId]);
 
   const items: Item[] = useMemo(() => {
-    const q = debounced.trim().toLowerCase();
+    // Filtering is local: delaying it lets Enter run a stale command.
+    const q = query.trim().toLowerCase();
     const match = (s: string) => !q || s.toLowerCase().includes(q);
     const cmds: Item[] = COMMANDS.filter((c) => match(c.title)).map((c) => ({ kind: "command", id: c.id, title: c.title, sub: c.sub }));
     const projs: Item[] = projects.filter((p) => match(p.title)).slice(0, 5).map((p) => ({ kind: "project", id: p.id, title: p.title, sub: `${p.stats.sources} sources`, projectId: p.id }));
-    const srcs: Item[] = sources.filter((s) => match(s.filename)).slice(0, 5).map((s) => ({ kind: "source", id: s.id, title: s.filename, sub: s.source_type, projectId }));
-    const chs: Item[] = chats.filter((c) => match(c.title)).slice(0, 5).map((c) => ({ kind: "chat", id: c.id, title: c.title, sub: "chat", projectId }));
-    let arts: Item[] = [];
-    try {
-      const raw = localStorage.getItem(`noteslyt:artifacts:${projectId ?? ""}`);
-      if (raw && q) {
-        arts = (JSON.parse(raw) as { id: string; title: string }[])
-          .filter((a) => a.title.toLowerCase().includes(q))
-          .slice(0, 4)
-          .map((a) => ({ kind: "artifact", id: a.id, title: a.title, sub: "artifact", projectId }));
-      }
-    } catch {
-      /* ignore */
-    }
+    const inScope = !!projectId && projectId === loadedProject;
+    const srcs: Item[] = (inScope ? sources : []).filter((s) => match(s.filename)).slice(0, 5).map((s) => ({ kind: "source", id: s.id, title: s.filename, sub: s.source_type, projectId }));
+    const chs: Item[] = (inScope ? chats : []).filter((c) => match(c.title)).slice(0, 5).map((c) => ({ kind: "chat", id: c.id, title: c.title, sub: "chat", projectId }));
+    const arts: Item[] = (inScope && q ? jobs : []).filter((j) => j.status === "ready" && match(j.title)).slice(0, 4)
+      .map((j) => ({ kind: "artifact", id: j.id, title: j.title, sub: j.kind, projectId }));
     return [...cmds, ...projs, ...srcs, ...chs, ...arts].slice(0, 24);
-  }, [debounced, projects, sources, chats, projectId]);
+  }, [query, projects, sources, chats, jobs, loadedProject, projectId]);
 
   useEffect(() => setActive(0), [items.length]);
 
@@ -88,6 +85,7 @@ export function CommandPalette({ open, onClose, onAction, projectId, onOpenCreat
     if (it.kind === "project") navigate(`/project/${it.id}`);
     else if (it.kind === "chat" && it.projectId) navigate(`/project/${it.projectId}/chat/${it.id}`);
     else if (it.kind === "source" && it.projectId) navigate(`/project/${it.projectId}/source/${it.id}`);
+    else if (it.kind === "artifact" && it.projectId) navigate(`/project/${it.projectId}?artifact=${encodeURIComponent(it.id)}`);
   };
 
   if (!open) return null;
@@ -103,7 +101,7 @@ export function CommandPalette({ open, onClose, onAction, projectId, onOpenCreat
           <input
             ref={inputRef}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => { setQuery(e.target.value); setActive(0); }}
             onKeyDown={(e) => {
               if (e.key === "Escape") onClose();
               if (e.key === "ArrowDown") {

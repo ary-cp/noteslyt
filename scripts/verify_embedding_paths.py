@@ -46,6 +46,15 @@ def main():
                 assert argument.is_absolute() and (server.root / argument) == path
                 assert argument.is_file()
             print(f"PASS: {mode} resolve correctly from child working directory")
+        # The largest projector must never be selected as weights by autodetection.
+        settings.embedding_local_model_path = None
+        settings.embedding_local_mmproj_path = None
+        settings.embedding_local_model_file = "not-downloaded.gguf"
+        expected[1].write_bytes(b"projector" * 100)
+        extra_projector = root / "models/other-mmproj.gguf"
+        extra_projector.write_bytes(b"projector" * 200)
+        assert server.model_files()[0] == expected[0]
+        print("PASS: auto-detection excludes all projectors from weight candidates")
         settings.embedding_local_model_path = root / "missing.gguf"
         try:
             server.model_files()

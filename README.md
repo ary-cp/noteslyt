@@ -373,3 +373,18 @@ data/                Local runtime data (ignored by Git)
 ## License
 
 No license has been added to this repository yet. Add a `LICENSE` file before redistributing NotesLyt or accepting external contributions under an open-source license.
+
+
+### Transcript spelling corrections
+
+Open an audio/video source and choose **Correct a name or spelling**. Enter the
+current transcript spelling and a confirmed replacement. All matching whole words
+in that source are updated, then its search index is rebuilt. Original recordings
+and segment timestamps are retained. Existing chat messages keep their original
+answers; new answers use the corrected transcript.
+
+The API is `POST /sources/{id}/transcript-spellings` with
+`{"replacements": {"Myra": "Mira"}}`. Corrections are ownership-checked and stored
+beside that source, survive fresh parsing, and are deleted with the source.
+A complete saved transcript is required. Homophones need a confirmed spelling;
+audio alone cannot determine how someone spells their name.

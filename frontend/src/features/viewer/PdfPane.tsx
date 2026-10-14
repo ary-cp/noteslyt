@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { PageRail } from "./PageRail";
 import { Document, Page, pdfjs } from "react-pdf";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import type { PDFDocumentProxy } from "pdfjs-dist";
@@ -25,7 +26,7 @@ export default function PdfPane({ url, page: citedPage, seekKey, jumpTick }: {
   const searchInput = useRef<HTMLInputElement>(null);
   useEffect(() => { if (searchOpen) searchInput.current?.focus(); }, [searchOpen]);
   const [fullscreen, setFullscreen] = useState(false);
-  const [fit, setFit] = useState<"width" | "page">("width");
+  const [fit, setFit] = useState<"width" | "page">("page");
   const [aspect, setAspect] = useState(.75);
   const [height, setHeight] = useState(window.innerHeight);
   const [pageInput, setPageInput] = useState(String(citedPage ?? 1));
@@ -36,18 +37,18 @@ export default function PdfPane({ url, page: citedPage, seekKey, jumpTick }: {
   const [zoom, setZoom] = useState(1);
   const [zoomOpen, setZoomOpen] = useState(false);
   const [rotation, setRotation] = useState(0);
-  const [thumbnails, setThumbnails] = useState(false);
+  const [thumbnails, setThumbnails] = useState(true);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<number[]>([]);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
   const [rendered, setRendered] = useState<RenderSpec | null>(null);
-  const pageWidth = Math.round((fit === "page" ? Math.min(width, Math.max(100, height - (fullscreen ? 20 : 210)) * aspect) : width) * zoom);
+  const pageWidth = Math.round((fit === "page" ? Math.min(width, Math.max(100, height - 20) * aspect) : width) * zoom);
   const spec = { page, width: pageWidth, rotation, key: `${page}-${pageWidth}-${rotation}` };
   const requested = useRef(spec.key);
   requested.current = spec.key;
   const textCache = useRef(new Map<number, string>());
-  useEffect(() => { setPageInput(String(page)); }, [page]);
+  useEffect(() => { setPageInput(String(page)); if (viewport.current) viewport.current.scrollTop = 0; }, [page]);
   useEffect(() => {
     let live = true;
     void pdf?.getPage(page).then((p) => { const viewport = p.getViewport({ scale: 1, rotation }); if (live) setAspect(viewport.width / viewport.height); }).catch(() => undefined);
@@ -84,13 +85,13 @@ export default function PdfPane({ url, page: citedPage, seekKey, jumpTick }: {
       if (!entry.contentRect.width) return;
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
-        setWidth(Math.max(180, entry.contentRect.width - 20));
-        setHeight(document.fullscreenElement === container.current ? entry.contentRect.height : window.innerHeight);
+        setWidth(Math.max(80, entry.contentRect.width - 20));
+        setHeight(entry.contentRect.height);
       }, 100);
     });
     observer.observe(el);
     return () => { observer.disconnect(); window.clearTimeout(timer); };
-  }, []);
+  }, [pdf]);
   useEffect(() => {
     let live = true;
     const needle = query.trim().toLowerCase();
@@ -133,7 +134,6 @@ export default function PdfPane({ url, page: citedPage, seekKey, jumpTick }: {
     }
     return html + escapeHtml(str.slice(cursor));
   }
-  const previewPages = Array.from({ length: Math.min(9, pages) }, (_, n) => Math.max(1, Math.min(page - 4, pages - 8)) + n);
   return <div ref={container} className="pdf-reader min-w-0" onKeyDown={(e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") { e.preventDefault(); setSearchOpen(true); searchInput.current?.focus(); return; }
     if (e.key === "Escape" && searchOpen) { setSearchOpen(false); setQuery(""); }
@@ -172,12 +172,11 @@ export default function PdfPane({ url, page: citedPage, seekKey, jumpTick }: {
     {bookmarks.length > 0 && <nav aria-label="Bookmarked pages" className="mb-3 flex flex-wrap gap-1.5">{bookmarks.map((n) => <button type="button" key={n} onClick={() => go(n)} aria-label={`Bookmarked page ${n}`} className="rounded-full border border-[var(--border)] px-2 py-1 text-xs text-[var(--text-secondary)]">Page {n}</button>)}</nav>}
     {citedPage !== null && <button type="button" onClick={() => go(citedPage)} className="mb-2 text-xs text-[var(--accent)]">Cited page {citedPage} · Return to citation</button>}
     {error && <p role="alert" className="mb-2 text-xs text-[var(--danger)]">{error}</p>}
-    <div ref={viewport} className="pdf-viewport">
-    <Document file={url} onLoadSuccess={(doc) => { textCache.current.clear(); setRendered(null); setPdf(doc); setPage((n) => Math.min(n, doc.numPages)); setError(""); }}
+    <div className="pdf-viewport">
+    <Document className="document-layout" file={url} onLoadSuccess={(doc) => { textCache.current.clear(); setRendered(null); setPdf(doc); setPage((n) => Math.min(n, doc.numPages)); setError(""); }}
       onLoadError={(e) => setError(e.message)} loading={<p className="min-h-80 p-4 text-sm">Opening document…</p>} error={<p className="p-4 text-sm">Unable to render PDF. Download the source to view it.</p>}>
-      {thumbnails && <div className="mb-3 flex gap-2 overflow-x-auto rounded-lg bg-[var(--surface-secondary)] p-2" aria-label="Page thumbnails">
-        {previewPages.map((n) => <button type="button" key={n} aria-label={`Go to page ${n}`} aria-current={page === n ? "page" : undefined} onClick={() => go(n)} className={`shrink-0 rounded-md border-2 p-1 text-xs ${page === n ? "border-[var(--accent)]" : "border-transparent"}`}><Page pageNumber={n} width={70} renderTextLayer={false} renderAnnotationLayer={false} loading={<div className="h-24 w-[70px]" />} /><span>{n}</span></button>)}
-      </div>}
+      {thumbnails && <PageRail count={pages} selected={page} onSelect={go} preview={(n, onAspect) => <Page pageNumber={n} width={120} onLoadSuccess={p => { const view = p.getViewport({ scale: 1 }); onAspect(view.width / view.height); }} renderTextLayer={false} renderAnnotationLayer={false} loading={null} />} />}
+      <div ref={viewport} className="pdf-stage">
       <div className={`pdf-page-surface relative overflow-auto rounded-xl border bg-[#25282e] p-2 ${page === citedPage ? "border-[var(--accent)]" : "border-[var(--border)]"}`} aria-busy={rendered?.key !== spec.key}>
         {[...(rendered && rendered.key !== spec.key ? [rendered] : []), spec].map((item) => <div key={item.key} style={item.key === spec.key && rendered && rendered.key !== spec.key ? { position: "absolute", top: 8, left: 8, opacity: 0, pointerEvents: "none" } : undefined}>
           <Page pageNumber={item.page} width={item.width} rotate={item.rotation} customTextRenderer={renderText}
@@ -185,6 +184,7 @@ export default function PdfPane({ url, page: citedPage, seekKey, jumpTick }: {
             onRenderError={(e) => setError(e.message)} loading={<div className="min-h-80 p-4 text-sm text-white">Rendering page…</div>} />
         </div>)}
         {rendered && rendered.key !== spec.key && <span className="absolute right-3 top-3 rounded bg-black/75 px-2 py-1 text-xs text-white">Rendering…</span>}
+      </div>
       </div>
     </Document>
     </div>

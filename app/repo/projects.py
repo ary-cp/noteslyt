@@ -46,6 +46,15 @@ class ProjectRepo(Repo):
         )
         return to_records(ProjectRecord, rows)  # type: ignore[return-value]
 
+    def chat_counts_for_user(self, user_id: str) -> dict[str, int]:
+        rows = self._fetch_all(
+            "select c.project_id, count(*) as n from chats c "
+            "join projects p on p.id = c.project_id "
+            "where p.user_id = %s and c.user_id = %s group by c.project_id",
+            (user_id, user_id),
+        )
+        return {str(row["project_id"]): int(row["n"]) for row in rows}
+
     def update(self, project_id: str, user_id: str, **fields: Any) -> ProjectRecord | None:
         allowed = {"title", "subject", "description", "archived"}
         updates = {k: v for k, v in fields.items() if k in allowed}

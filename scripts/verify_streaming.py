@@ -56,12 +56,12 @@ def main():
     service._rewrite = lambda question, prior: (question, False)
     service._blocks = lambda *_: ('','')
     service._after_turn = Mock()
-    service._generate_title = Mock(return_value='Diagram Summary')
+    service._generate_title = Mock(side_effect=AssertionError('No title API call'))
     queued = []
     received = []
     def reply(messages, on_chunk=None):
         assert any(part.get('type') == 'image_url' for part in messages[-1]['content'])
-        for token in ['A diagram ', '[1].']: on_chunk(token)
+        assert on_chunk is None  # raw output is buffered until citation audit
         return 'A diagram [1].'
     service.llm = NS(chat=reply)
     root = Path(__file__).resolve().parents[1]/'data'
@@ -71,16 +71,16 @@ def main():
         service.storage = NS(open_for_read=lambda *_: image)
         result = service.send('user','chat','Explain this image', received.append,
                               source_ids=['image-source'], defer=lambda *a, **k: queued.append((a,k)))
-    assert received == ['A diagram ', '[1].']
+    assert received == ['A diagram [1].']
     assert result['grounded'] and result['citations'][0]['source_id'] == 'image-source'
-    assert result['chat_title'] == 'Diagram Summary'
+    assert result['chat_title'] == 'This Image'
     assert persisted[-1][1] == 'assistant'
     service._after_turn.assert_not_called()
-    service._generate_title.assert_called_once()
+    service._generate_title.assert_not_called()
     assert len(queued) == 1
     args, kwargs = queued[0]; args[0](*args[1:], **kwargs)
     service._after_turn.assert_called_once()
-    print('PASS: original image streams with audited citations before auxiliary work')
+    print('PASS: original image answer is audited before publication and auxiliary work')
     print('STREAMING VERIFIED')
 
 if __name__ == '__main__': main()

@@ -1,7 +1,8 @@
+import { SlideDeck } from "../viewer/SlideDeck";
 import { buildSchedule } from "./studySchedule";
 import type * as React from "react";
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ClipboardList,
   FileText,
@@ -19,6 +20,7 @@ import { createExam, createFlashcards, createQuiz, fetchLearner, getQuizAnswers,
 import type { AnswerOut, AssessmentReportOut, LearnerOut, QuizOut, SourceOut, StudioJob, TopicGraph, TopicSummary } from "../../lib/types";
 import { useToast } from "../../lib/toast";
 import { advanceReview, readReview, type ReviewGrade } from "./flashcardReview";
+import { examSecondsLeft, readExamClock, type ExamClock } from "./examClock";
 import { Button, IconButton } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/Feedback";
 import { Modal } from "../../components/ui/Modal";
@@ -72,6 +74,7 @@ export function StudioPanel({
 }) {
   const { push } = useToast();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [topics, setTopics] = useState<TopicSummary[]>([]);
   const [learner, setLearner] = useState<LearnerOut | null>(null);
   const [graph, setGraph] = useState<TopicGraph | null>(null);
@@ -105,6 +108,16 @@ export function StudioPanel({
     }
     setViewing(jobArtifact(job));
   };
+
+  useEffect(() => {
+    const requested = searchParams.get("artifact");
+    const job = jobs.find((item) => item.id === requested && item.status === "ready");
+    if (!job) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("artifact");
+    setSearchParams(next, { replace: true });
+    openArtifact(job);
+  }, [searchParams, jobs, setSearchParams]);
 
   // Collapsed-rail shortcut: clicking a tool icon in the slim right rail
   // expands Studio and opens that tool's dialog.
@@ -612,11 +625,11 @@ function ArtifactViewer({ artifact, onClose, onAnswered }: { artifact: Artifact 
       onClose={onClose}
       title={artifact.title}
       subtitle={`${timeAgo(artifact.createdAt)}${isTest && !finished ? " · in progress — backdrop clicks won't close this" : ""}`}
-      width={720}
+      width={artifact.kind === "slides" ? 1100 : 720}
       dismissable={!isTest || finished}
     >
       {isTest ? (
-        <QuizRunner quiz={artifact.payload as QuizOut} exam={artifact.kind === "exam"} onAnswered={onAnswered} onDoneChange={setFinished} />
+        <QuizRunner key={artifact.id} quiz={artifact.payload as QuizOut} exam={artifact.kind === "exam"} onAnswered={onAnswered} onDoneChange={setFinished} />
       ) : artifact.kind === "flashcards" ? (
         <Flashcards key={artifact.id} reviewKey={artifact.id} cards={(artifact.payload as { cards: { front: string; back: string }[] }).cards ?? []} requested={(artifact.payload as { requested?: number }).requested} />
       ) : artifact.kind === "mindmap" ? (
@@ -662,53 +675,8 @@ function MindMapView({ mermaid }: { mermaid: string }) {
 /* ---------------- slide deck ---------------- */
 
 function SlidesViewer({ slides }: { slides: { title: string; bullets: string[] }[] }) {
-  const [idx, setIdx] = useState(0);
-  const n = Math.max(1, slides.length);
-  const go = (dir: number) => setIdx((v) => Math.min(n - 1, Math.max(0, v + dir)));
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "ArrowRight" || e.key === " ") {
-        e.preventDefault();
-        go(1);
-      } else if (e.key === "ArrowLeft") {
-        go(-1);
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [n]);
-  const slide = slides[idx] ?? { title: "No slides", bullets: [] as string[] };
-  return (
-    <div>
-      <p className="mb-2 text-center font-mono text-xs text-[var(--text-muted)]">{Math.min(idx + 1, n)} / {n}</p>
-      <div className="min-h-[220px] rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-6">
-        <p className="text-lg font-semibold">{slide.title}</p>
-        <ul className="mt-3 grid gap-2">
-          {slide.bullets.map((b, i) => (
-            <li key={i} className="flex gap-2 text-[15px]">
-              <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
-              <span className="min-w-0 flex-1"><MarkdownBody text={b} /></span>
-            </li>
-          ))}
-        </ul>
-      </div>
-      <div className="mt-3 flex items-center justify-between">
-        <Button variant="ghost" onClick={() => go(-1)} disabled={idx === 0}>Back</Button>
-        <div className="flex gap-1">
-          {slides.map((_, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => setIdx(i)}
-              aria-label={`Go to slide ${i + 1}`}
-              className={`h-1.5 cursor-pointer rounded-full transition-colors ${i === idx ? "w-6 bg-[var(--accent)]" : "w-1.5 bg-[var(--border-strong)]"}`}
-            />
-          ))}
-        </div>
-        <Button variant="ghost" onClick={() => go(1)} disabled={idx >= n - 1}>Next</Button>
-      </div>
-    </div>
-  );
+  const pages = useMemo(() => slides.map(slide => ({ title: slide.title, markdown: slide.bullets.map(b => `- ${b}`).join("\n\n") })), [slides]);
+  return <div className="studio-slide-deck"><SlideDeck slides={pages} /></div>;
 }
 
 /* ---------------- flashcards ---------------- */
@@ -894,29 +862,67 @@ function QuizRunner({ quiz, exam, onAnswered, onDoneChange }: { quiz: QuizOut; e
   const [started, setStarted] = useState(!exam);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [violations, setViolations] = useState(0);
-
-  useEffect(() => { onDoneChange?.(done); }, [done, onDoneChange]);
+  const [clock, setClock] = useState<ExamClock | null>(null);
+  const clockKey = `noteslyt:exam-clock:${quiz.quiz_id}`;
+  const allAnswered = quiz.questions.length > 0 && quiz.questions.every((q) => !!answers[q.id]);
+  const examFinished = exam && (!!clock?.completed || allAnswered);
 
   useEffect(() => {
-    if (!exam || !started || done) return;
-    const t = window.setInterval(() => setLeft((s) => Math.max(0, s - 1)), 1000);
+    if (!exam || loadingAnswers || resumeError || clock) return;
+    let raw: string | null = null;
+    try { raw = localStorage.getItem(clockKey); } catch { /* In-memory timer still works. */ }
+    if (!raw && !started) return;
+    const saved = readExamClock(raw, quiz.questions.length);
+    setStarted(true);
+    if (allAnswered || examSecondsLeft(saved) === 0) saved.completed = true;
+    setClock(saved);
+    setLeft(examSecondsLeft(saved));
+    if (saved.completed) setDone(true);
+  }, [exam, loadingAnswers, resumeError, clock, clockKey, quiz.questions.length, allAnswered, started]);
+
+  useEffect(() => {
+    if (!clock) return;
+    try { localStorage.setItem(clockKey, JSON.stringify(clock)); } catch { /* In-memory timer still works. */ }
+  }, [clockKey, clock]);
+
+  useEffect(() => {
+    if (!exam || !clock || clock.completed) return;
+    if (allAnswered) {
+      setClock({ ...clock, completed: true });
+      setDone(true);
+      return;
+    }
+    const tick = () => {
+      const remaining = examSecondsLeft(clock);
+      setLeft(remaining);
+      if (remaining === 0) {
+        setClock({ ...clock, completed: true });
+        setDone(true);
+      }
+    };
+    tick();
+    const t = window.setInterval(tick, 1000);
     return () => window.clearInterval(t);
-  }, [exam, started, done]);
-  useEffect(() => { if (exam && started && left === 0) setDone(true); }, [exam, started, left]);
+  }, [exam, clock, allAnswered]);
 
-  // Exam strictness: leaving the tab costs 5 minutes.
+  useEffect(() => { onDoneChange?.(done || examFinished); }, [done, examFinished, onDoneChange]);
   useEffect(() => {
-    if (!exam || !started || done) return;
+    if (done && clock && !clock.completed) setClock({ ...clock, completed: true });
+  }, [done, clock]);
+
+  // Apply the new exam penalty to the persisted deadline, not a second timer.
+  useEffect(() => {
+    if (!exam || !started || done || examFinished || !clock) return;
     const onVis = () => {
       if (document.hidden) {
-        setLeft((s) => Math.max(0, s - EXAM_TAB_PENALTY_S));
-        setViolations((v) => v + 1);
+        setClock(current => current ? { ...current, deadline: Math.max(1, current.deadline - EXAM_TAB_PENALTY_S * 1000) } : current);
+        setViolations(v => v + 1);
         push("Tab switch detected — 5:00 deducted", { detail: "Stay on this tab until you submit the exam.", tone: "warning" });
       }
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
-  }, [exam, started, done, push]);
+  }, [exam, started, done, examFinished, clock, push]);
 
   const q = quiz.questions[i];
   const correct = Object.values(answers).filter((a) => a.correct).length;
@@ -926,7 +932,7 @@ function QuizRunner({ quiz, exam, onAnswered, onDoneChange }: { quiz: QuizOut; e
   if (!q) return <p className="text-sm text-[var(--text-muted)]">No questions generated.</p>;
 
   const submit = async () => {
-    if (submitting || answers[q.id]) return;
+    if (submitting || answers[q.id] || examFinished || (exam && clock && examSecondsLeft(clock) === 0)) return;
     const given = q.qtype === "mcq" ? (picked ?? "") : text.trim();
     if (given === "" || given === null) return;
     setSubmitting(true);
@@ -1020,7 +1026,7 @@ function QuizRunner({ quiz, exam, onAnswered, onDoneChange }: { quiz: QuizOut; e
         <span>Question {i + 1} of {quiz.questions.length}{exam ? ` · ${answeredCount} saved` : ""}</span>
         {exam && (
           <span aria-live="polite" title="Time remaining" className={`font-mono text-xl font-bold tabular-nums ${left < 300 ? "text-[var(--danger)]" : "text-[var(--accent)]"}`}>
-            {fmtLeft}
+            {examFinished ? "Completed" : fmtLeft}
           </span>
         )}
         {exam && (
@@ -1054,7 +1060,7 @@ function QuizRunner({ quiz, exam, onAnswered, onDoneChange }: { quiz: QuizOut; e
             <button
               key={idx}
               onClick={() => setPicked(idx)}
-              disabled={submitting || saved}
+              disabled={submitting || saved || examFinished}
               aria-pressed={(saved ? Number(answers[q.id].given) : picked) === idx}
               className={`flex cursor-pointer items-center gap-2.5 rounded-[8px] border px-3 py-2.5 text-left text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
                 exam
@@ -1080,7 +1086,7 @@ function QuizRunner({ quiz, exam, onAnswered, onDoneChange }: { quiz: QuizOut; e
       ) : (
         <textarea
           value={answers[q.id] ? String(answers[q.id].given) : text}
-          disabled={submitting || !!answers[q.id]}
+          disabled={submitting || !!answers[q.id] || examFinished}
           onChange={(e) => setText(e.target.value)}
           rows={3}
           placeholder="Type your answer…"
@@ -1098,10 +1104,13 @@ function QuizRunner({ quiz, exam, onAnswered, onDoneChange }: { quiz: QuizOut; e
       <div className="mt-4 flex items-center justify-between">
         <Button variant="ghost" onClick={() => { setI((v) => Math.max(0, v - 1)); setPicked(null); setText(""); }} disabled={i === 0 || submitting}>Back</Button>
         <div className="flex gap-2">
-          {!answers[q.id] ? (
+          {!answers[q.id] && !examFinished ? (
+            <>
+            {exam && i + 1 < quiz.questions.length && <Button variant="ghost" disabled={submitting} onClick={() => { setI((v) => v + 1); setPicked(null); setText(""); }}>Skip</Button>}
             <Button variant="primary" onClick={() => void submit()} loading={submitting} disabled={submitting || (q.options.length > 0 && picked === null) || (q.options.length === 0 && !text.trim())}>
               {exam ? "Save answer" : "Check"}
             </Button>
+            </>
           ) : i + 1 < quiz.questions.length ? (
             <Button variant="primary" onClick={() => { setI((v) => v + 1); setPicked(null); setText(""); }}>Next</Button>
           ) : exam ? (
@@ -1111,7 +1120,7 @@ function QuizRunner({ quiz, exam, onAnswered, onDoneChange }: { quiz: QuizOut; e
           )}
         </div>
       </div>
-      {exam && quiz.questions.length > 6 && (
+      {exam && quiz.questions.length > 1 && (
         <div className="mt-3 flex flex-wrap gap-1">
           {quiz.questions.map((qq, idx) => (
             <button
