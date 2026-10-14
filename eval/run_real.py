@@ -143,6 +143,16 @@ def main() -> int:
 
     esettings = settings_from_env(env)
     llm = LLMClient(esettings)
+    # Local embedding mode is managed inside the server lifespan, which a
+    # script process has no access to. Point the eval client at the same
+    # local server over HTTP (it speaks OpenAI-compatible /embeddings
+    # while the app is running) instead of the in-process manager.
+    if esettings.embedding_mode == "local":
+        esettings = esettings.model_copy(update={
+            "embedding_mode": "cloud",
+            "embedding_base_url": esettings.embedding_local_base_url,
+            "embedding_api_key": "local",
+        })
     embedder = build_embedder(esettings)
     c = httpx.Client(base_url=base, timeout=TIMEOUT_S)
 
