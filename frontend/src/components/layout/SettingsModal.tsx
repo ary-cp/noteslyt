@@ -17,7 +17,7 @@ import { getProfile, getProfileLevels, updateProfile } from "../../lib/api";
 import type { ProfileLevels, ProfileOut } from "../../lib/types";
 import { useAuth } from "../../lib/auth";
 import { useToast } from "../../lib/toast";
-import { useTheme, type ThemeMode } from "../../lib/theme";
+import { DEFAULT_ACCENT, useTheme, type ThemeMode } from "../../lib/theme";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/Button";
 import { Dropdown } from "../ui/Menu";
@@ -66,7 +66,7 @@ const STATIC_NAV: { header: string; items: StaticNav[] }[] = [
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { push } = useToast();
   const { user } = useAuth();
-  const { mode, setMode } = useTheme();
+  const { mode, setMode, accent, setAccent, resetAccent } = useTheme();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -147,7 +147,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     <>
       <div id="set-appearance">
         <h3 className="text-[15px] font-semibold">Appearance</h3>
-        <div className="mt-2">
+        <div className="mt-2 grid gap-3">
           <Field label="Theme">
             <RadioGroup
               value={mode}
@@ -159,6 +159,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 { value: "system", label: "System" },
               ]}
             />
+          </Field>
+          <Field label="Accent color" hint="Recolors buttons, highlights and progress everywhere.">
+            <AccentPicker accent={accent} onChange={setAccent} onReset={resetAccent} />
           </Field>
         </div>
       </div>
@@ -309,6 +312,51 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         </div>
       </div>
     </Modal>
+  );
+}
+
+function AccentPicker({ accent, onChange, onReset }: { accent: string; onChange: (hex: string) => void; onReset: () => void }) {
+  const presets = [DEFAULT_ACCENT, "#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#06b6d4", "#ef4444"];
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5">
+        {presets.map((c) => (
+          <button
+            key={c}
+            type="button"
+            onClick={() => onChange(c)}
+            aria-label={`Accent ${c}`}
+            aria-pressed={accent.toLowerCase() === c}
+            title={c}
+            className={`h-7 w-7 cursor-pointer rounded-full border-2 transition-transform hover:scale-110 ${accent.toLowerCase() === c ? "border-[var(--text-primary)]" : "border-transparent"}`}
+            style={{ backgroundColor: c }}
+          />
+        ))}
+      </div>
+      <label
+        title="Custom color"
+        className="relative h-7 w-7 cursor-pointer overflow-hidden rounded-full border border-dashed border-[var(--border-strong)]"
+        style={{ background: "conic-gradient(red, yellow, lime, aqua, blue, magenta, red)" }}
+      >
+        <span className="sr-only">Custom accent color</span>
+        <input
+          type="color"
+          value={/^#[0-9a-f]{6}$/i.test(accent) ? accent : DEFAULT_ACCENT}
+          onChange={(e) => onChange(e.target.value)}
+          aria-label="Custom accent color"
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+        />
+      </label>
+      {accent.toLowerCase() !== DEFAULT_ACCENT && (
+        <button
+          type="button"
+          onClick={onReset}
+          className="cursor-pointer rounded px-2 py-0.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+        >
+          Reset
+        </button>
+      )}
+    </div>
   );
 }
 

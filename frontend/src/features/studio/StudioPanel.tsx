@@ -82,7 +82,6 @@ export function StudioPanel({
   const [topicId, setTopicId] = useState("");
   const [mapStyle, setMapStyle] = useState<"star" | "flow">("star");
   const [graphBusy, setGraphBusy] = useState(false);
-  const [focus, setFocus] = useState("");
   const [examDate, setExamDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 14);
@@ -224,17 +223,14 @@ export function StudioPanel({
         setJobs((prev) => [job, ...prev.filter((j) => j.id !== job.id)]);
         push("Flashcard generation started", { tone: "success" });
       } else if (genTool === "summary" || genTool === "guide" || genTool === "sheet") {
-        const filter = focus.trim().toLocaleLowerCase();
-        const documentTopics = filter ? scopedTopics.filter((t) => `${t.name} ${t.description ?? ""}`.toLocaleLowerCase().includes(filter)) : scopedTopics;
-        if (filter && documentTopics.length === 0) {
-          push("No matching topics", { detail: "Try a word from a topic name or description.", tone: "warning" });
-          return;
-        }
+        // Topic comes from the dropdown — always a real in-scope topic id.
+        const documentTopics = topicId ? scopedTopics.filter((t) => t.id === topicId) : scopedTopics;
+        const pickedName = topicId ? scopedTopics.find((t) => t.id === topicId)?.name : "";
         const names = selectedSources.map((s) => s.filename).join(", ");
         const md = [
           `# ${genTool === "guide" ? "Study guide" : genTool === "sheet" ? "Cheat sheet" : "Summary"}`,
           ``,
-          `_Topic overview from ${scopeLabel}${filter ? ` · topic filter: ${focus.trim()}` : ""}_`,
+          `_Topic overview from ${scopeLabel}${pickedName ? ` · topic: ${pickedName}` : ""}_`,
           ``,
           `## What this covers`,
           ``,
@@ -246,7 +242,7 @@ export function StudioPanel({
           ...(documentTopics.slice(0, 8).map((t, i) => `${i + 1}. **${t.name}** — ${t.description || `covered in ${t.sources.filter((s) => selectedIdSet.has(s.source_id)).map((s) => s.filename).join(", ") || "your sources"}`}`)),
           ...(scopedTopics.length === 0 ? [`1. Upload completes → key points appear here, each linked to its source.`] : []),
           ``,
-          ...(filter ? [] : learnFirstLine()),
+          ...(topicId ? [] : learnFirstLine()),
           `## Next step`,
           ``,
           `Generate a quiz from the same scope to check recall, or ask the chat to explain any point above.`,
@@ -432,13 +428,13 @@ export function StudioPanel({
         }
       >
         <div className="grid gap-3.5">
-          {(genTool === "quiz" || genTool === "exam" || genTool === "flashcards") && (
-            <Field label="Topic" hint="Blank = automatic: a spread across your material for new learners, weakest areas first once you've practiced.">
+          {(genTool === "quiz" || genTool === "exam" || genTool === "flashcards" || genTool === "summary" || genTool === "guide" || genTool === "sheet") && (
+            <Field label="Topic" hint={genTool === "quiz" || genTool === "exam" || genTool === "flashcards" ? "Blank = automatic: a spread across your material for new learners, weakest areas first once you've practiced." : "Pick one topic to focus this document, or leave blank for the whole scope."}>
               <Dropdown
                 value={topicId}
                 onChange={setTopicId}
                 ariaLabel="Topic"
-                options={[{ value: "", label: genTool === "flashcards" ? "All selected sources" : "Mixed (weakest first)" }, ...scopedTopics.map((t) => ({ value: t.id, label: t.name }))]}
+                options={[{ value: "", label: genTool === "flashcards" ? "All selected sources" : genTool === "quiz" || genTool === "exam" ? "Mixed (weakest first)" : "All topics in scope" }, ...scopedTopics.map((t) => ({ value: t.id, label: t.name }))]}
               />
             </Field>
           )}
@@ -487,16 +483,6 @@ export function StudioPanel({
               )}
             </div>
           )}
-          {genTool !== "quiz" && genTool !== "exam" && genTool !== "flashcards" && genTool !== "mindmap" && genTool !== "slides" && genTool !== "schedule" && <>
-          <Field label="Topic filter (optional)" hint="Include topics whose name or description contains this text.">
-            <input
-              value={focus}
-              onChange={(e) => setFocus(e.target.value)}
-              placeholder="e.g. entropy"
-              className="h-9 w-full rounded-[7px] border border-[var(--border)] bg-[var(--input)] px-2.5 text-sm outline-none focus:border-[var(--accent)]"
-            />
-          </Field>
-          </>}
           {genTool === "schedule" && (
             <>
               <Field label="Exam date" hint="The plan runs from today to this date (max 30 days).">
