@@ -11,29 +11,61 @@
   "summary_md": "summary.md",
   "diagram_png": "circuit_diagram.png",
   "law_video": "ohms_law_video.mp4",
-  "demo_audio": "circuit_demo_audio.m4a"
+  "demo_audio": "circuit_demo_audio.m4a",
+  "practical_pdf": "practical.pdf",
+  "formulae_pdf": "formulae.pdf",
+  "worksheet_docx": "worksheet.docx",
+  "revision_docx": "revision.docx",
+  "practical_pptx": "practical.pptx",
+  "revision_pptx": "revision.pptx",
+  "problems_xlsx": "problems.xlsx",
+  "components_xlsx": "components.xlsx",
+  "rheostat_csv": "rheostat_run.csv",
+  "series_csv": "series_parallel.csv",
+  "safety_txt": "safety.txt",
+  "symbols_txt": "symbols.txt",
+  "revision_md": "revision.md",
+  "log_md": "experiment_log.md",
+  "triangle_png": "triangle.png",
+  "hose_png": "hose.png"
  },
  "projects": [
   {
+   "key": "circuits",
    "fixtures": [
     "law_video",
     "demo_audio",
     "circuits_pdf",
+    "practical_pdf",
+    "formulae_pdf",
     "lab_docx",
+    "worksheet_docx",
+    "revision_docx",
     "diagram_png",
+    "triangle_png",
+    "hose_png",
     "glossary_txt",
-    "summary_md"
-   ],
-   "key": "circuits"
+    "safety_txt",
+    "symbols_txt",
+    "summary_md",
+    "revision_md",
+    "log_md"
+   ]
   },
   {
+   "key": "lab",
    "fixtures": [
     "measure_xlsx",
+    "problems_xlsx",
+    "components_xlsx",
     "readings_csv",
+    "rheostat_csv",
+    "series_csv",
     "lesson_pptx",
+    "practical_pptx",
+    "revision_pptx",
     "circuits_pdf"
-   ],
-   "key": "lab"
+   ]
   }
  ],
  "items": [
