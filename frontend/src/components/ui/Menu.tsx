@@ -34,7 +34,7 @@ export function Dropdown({
   const list = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
 
-  const openMenu = () => {
+  const updatePos = () => {
     const r = btn.current?.getBoundingClientRect();
     if (r) {
       // Open upward when there isn't room below (e.g. inside short modals).
@@ -45,6 +45,10 @@ export function Dropdown({
         width: Math.max(r.width, 160),
       });
     }
+  };
+
+  const openMenu = () => {
+    updatePos();
     setOpen(true);
     setActive(options.findIndex((o) => o.value === value));
   };
@@ -55,15 +59,21 @@ export function Dropdown({
       const t = e.target as Node;
       if (box.current && !box.current.contains(t) && list.current && !list.current.contains(t)) setOpen(false);
     };
-    // Ancestor scroll would stale a fixed position — just close instead.
-    const onScroll = () => setOpen(false);
+    // Ancestor scroll used to close the menu, which made long model lists
+    // unusable (any wheel inside the list or the modal shut it). Instead keep
+    // it open and re-anchor to the button; scrolls originating inside the
+    // list itself need no work at all.
+    const onScroll = (e: Event) => {
+      if (list.current && list.current.contains(e.target as Node)) return;
+      updatePos();
+    };
     document.addEventListener("mousedown", onDoc);
     window.addEventListener("scroll", onScroll, true);
-    window.addEventListener("resize", onScroll);
+    window.addEventListener("resize", updatePos);
     return () => {
       document.removeEventListener("mousedown", onDoc);
       window.removeEventListener("scroll", onScroll, true);
-      window.removeEventListener("resize", onScroll);
+      window.removeEventListener("resize", updatePos);
     };
   }, [open]);
 
